@@ -1,0 +1,49 @@
+# Rust / Cargo build artifacts
+/target
+debug/
+**/*.rs.bk
+
+# Cargo lock for binaries is fine, but uncommit if this becomes a library
+# Cargo.lock
+
+# Compiler artifacts
+*.d
+*.rlib
+*.rmeta
+*.pdb
+
+# Profiling and coverage
+*.profraw
+*.profdata
+*.gcno
+*.gcda
+tarpaulin-report.html
+lcov.info
+
+# IDE / editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Certificate and key material
+*.pem
+*.crt
+*.cer
+*.der
+*.key
+*.p12
+*.pfx
+*.csr
+*.ca-bundle
+*.chain
+certs/
+certificates/
+private_keys/
