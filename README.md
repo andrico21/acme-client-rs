@@ -434,7 +434,7 @@ acme-client-rs generate-config > acme-client-rs.toml
 
 A ready-made example is also included in the repository as `acme-client-rs.toml.example`.
 
-The config file is optional. Priority order: **environment variables > CLI flags > config file > built-in defaults**.
+The config file is optional. Priority order: **CLI flags > config file > environment variables > built-in defaults**.
 
 Loading behavior:
 - `--config <PATH>` (or `ACME_CONFIG` env var): load from the specified path
@@ -1284,9 +1284,9 @@ These are set when calling `--on-challenge-ready` (once per domain authorization
 | Variable | Description |
 |---|---|
 | `ACME_DOMAIN` | The domain being validated |
-| `ACME_CHALLENGE_TYPE` | Challenge type (`http-01`, `dns-01`, `dns-persist-01`, or `tls-alpn-01`) |
-| `ACME_TOKEN` | The challenge token (empty for dns-persist-01) |
-| `ACME_KEY_AUTH` | The full key authorization string (`token.thumbprint`; empty for dns-persist-01) |
+| `ACME_CHALLENGE_TYPE` | Challenge type (`dns-01`, `dns-persist-01`, or `tls-alpn-01`). Not called for `http-01` (handled automatically). |
+| `ACME_TOKEN` | The challenge token (dns-01 and tls-alpn-01 only) |
+| `ACME_KEY_AUTH` | The full key authorization string (`token.thumbprint`; dns-01 and tls-alpn-01 only) |
 | `ACME_TXT_NAME` | DNS TXT record name (dns-01 and dns-persist-01 only) |
 | `ACME_TXT_VALUE` | DNS TXT record value (dns-01 and dns-persist-01 only) |
 
@@ -1303,4 +1303,4 @@ These are set when calling `--on-cert-issued` (once after certificate is saved):
 
 ## License
 
-Private - not for redistribution.
+Free to use, modify, and redistribute with attribution to the original author.

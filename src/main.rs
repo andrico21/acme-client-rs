@@ -86,7 +86,7 @@ Prints a fully commented TOML template to stdout. Redirect to a file to create y
   acme-client-rs generate-config > acme-client-rs.toml
 
 Then edit the file and uncomment the options you need. The config file is
-optional - CLI flags and environment variables always take priority.")]
+optional - CLI flags and config file values take priority over environment variables.")]
     GenerateConfig,
 
     /// Show effective configuration (merged from config file, environment, and CLI flags)
@@ -526,13 +526,13 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
 
     let cfg = &config.global;
 
-    // Global options: override only if CLI value came from the built-in default
-    if matches!(matches.value_source("directory"), Some(ValueSource::DefaultValue) | None) {
+    // Global options: config overrides env vars and defaults, but not explicit CLI flags
+    if matches!(matches.value_source("directory"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
         if let Some(ref v) = cfg.directory {
             cli.directory = v.clone();
         }
     }
-    if matches!(matches.value_source("account_key"), Some(ValueSource::DefaultValue) | None) {
+    if matches!(matches.value_source("account_key"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
         if let Some(ref v) = cfg.account_key {
             cli.account_key = v.clone();
         }
@@ -540,16 +540,16 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     if cli.account_url.is_none() {
         cli.account_url.clone_from(&cfg.account_url);
     }
-    if matches!(matches.value_source("output_format"), Some(ValueSource::DefaultValue) | None) {
+    if matches!(matches.value_source("output_format"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
         if let Some(ref v) = cfg.output_format {
             if v == "json" {
                 cli.output_format = OutputFormat::Json;
             }
         }
     }
-    if !cli.insecure {
-        if let Some(true) = cfg.insecure {
-            cli.insecure = true;
+    if matches!(matches.value_source("insecure"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+        if let Some(v) = cfg.insecure {
+            cli.insecure = v;
         }
     }
 
@@ -579,22 +579,22 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     {
         let cfg_run = &config.run;
         if let Some((_, sub_matches)) = matches.subcommand() {
-            if matches!(sub_matches.value_source("challenge_type"), Some(ValueSource::DefaultValue) | None) {
+            if matches!(sub_matches.value_source("challenge_type"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
                 if let Some(ref v) = cfg_run.challenge_type {
                     *challenge_type = v.clone();
                 }
             }
-            if matches!(sub_matches.value_source("http_port"), Some(ValueSource::DefaultValue) | None) {
+            if matches!(sub_matches.value_source("http_port"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
                 if let Some(v) = cfg_run.http_port {
                     *http_port = v;
                 }
             }
-            if matches!(sub_matches.value_source("cert_output"), Some(ValueSource::DefaultValue) | None) {
+            if matches!(sub_matches.value_source("cert_output"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
                 if let Some(ref v) = cfg_run.cert_output {
                     *cert_output = v.clone();
                 }
             }
-            if matches!(sub_matches.value_source("key_output"), Some(ValueSource::DefaultValue) | None) {
+            if matches!(sub_matches.value_source("key_output"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
                 if let Some(ref v) = cfg_run.key_output {
                     *key_output = v.clone();
                 }
@@ -826,6 +826,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
     let global_source = |id: &str, has_config_val: bool| -> &'static str {
         match matches.value_source(id) {
             Some(ValueSource::CommandLine) => "cli",
+            Some(ValueSource::EnvVariable) if has_config_val => "config",
             Some(ValueSource::EnvVariable) => "env",
             Some(ValueSource::DefaultValue) if has_config_val => "config",
             Some(ValueSource::DefaultValue) => "default",
@@ -2079,7 +2080,7 @@ async fn cmd_run(
                     );
                 }
                 if !json {
-                    println!("  Challenge response sent - waiting for validation…");
+                    println!("  Challenge response sent - waiting for validation...");
                 }
             }
             CHALLENGE_TYPE_DNS01 => {

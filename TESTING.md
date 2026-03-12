@@ -651,7 +651,7 @@ acme --insecure --account-key test-account.key --account-url <account-url> key-r
 
 **Expected:**
 - Exit code: 0
-- Output: `Key rollover successful`
+- Output: `Account key rolled over successfully` followed by `From now on, use the new key: new-account.key`
 - Subsequent requests must use `new-account.key`
 
 ---

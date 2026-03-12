@@ -123,8 +123,8 @@ impl Config {
 /// Return a fully commented TOML config template.
 pub fn generate_template() -> &'static str {
     r#"# acme-client-rs configuration file
-# All fields are optional. CLI flags and environment variables override these values.
-# Priority: environment variables > CLI flags > config file > built-in defaults.
+# All fields are optional. CLI flags override config file values.
+# Priority: CLI flags > config file > environment variables > built-in defaults.
 #
 # Place this file in the working directory as "acme-client-rs.toml" for auto-loading,
 # or specify a path with --config <PATH>.
