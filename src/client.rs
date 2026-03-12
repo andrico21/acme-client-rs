@@ -1,4 +1,4 @@
-//! ACME HTTP client — drives the full RFC 8555 protocol flow.
+//! ACME HTTP client - drives the full RFC 8555 protocol flow.
 //!
 //! Every mutating request is a signed JWS POST.  Nonces are cached from
 //! response headers and a single automatic retry is performed on `badNonce`.
@@ -13,7 +13,7 @@ use crate::jws::AccountKey;
 use crate::types::*;
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
-const USER_AGENT_VALUE: &str = "acme-client-rs/0.1.0";
+const USER_AGENT_VALUE: &str = concat!("acme-client-rs/", env!("CARGO_PKG_VERSION"));
 
 // ── Response wrapper ────────────────────────────────────────────────────────
 
@@ -73,9 +73,17 @@ pub struct AcmeClient {
 
 impl AcmeClient {
     /// Create a new client by fetching the ACME directory.
-    pub async fn new(directory_url: &str, account_key: AccountKey) -> Result<Self> {
+    ///
+    /// When `danger_accept_invalid_certs` is `true`, TLS certificate
+    /// verification is disabled.  **Only use for testing** (e.g. Pebble).
+    pub async fn new(
+        directory_url: &str,
+        account_key: AccountKey,
+        danger_accept_invalid_certs: bool,
+    ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT_VALUE)
+            .danger_accept_invalid_certs(danger_accept_invalid_certs)
             .build()
             .context("failed to build HTTP client")?;
 
@@ -85,6 +93,15 @@ impl AcmeClient {
             .send()
             .await
             .context("failed to fetch ACME directory")?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            bail!(
+                "ACME directory request failed (HTTP {status}): {body}",
+            );
+        }
+
         let directory: Directory = resp.json().await.context("failed to parse directory")?;
         debug!(?directory, "ACME directory loaded");
 
@@ -111,6 +128,7 @@ impl AcmeClient {
         &self.account_key
     }
 
+    #[allow(dead_code)]
     pub fn directory(&self) -> &Directory {
         &self.directory
     }
@@ -186,7 +204,7 @@ impl AcmeClient {
                     if err.error_type.as_deref()
                         == Some("urn:ietf:params:acme:error:badNonce")
                     {
-                        warn!("Received badNonce — retrying with fresh nonce");
+                        warn!("Received badNonce - retrying with fresh nonce");
                         continue;
                     }
                 }
@@ -204,15 +222,40 @@ impl AcmeClient {
     // ── Account operations (RFC 8555 §7.3) ──────────────────────────────
 
     /// Create (or look up) an ACME account.
+    ///
+    /// If `eab` is `Some((kid, hmac_key))`, an External Account Binding
+    /// (RFC 8555 §7.3.4) is included in the request.
     pub async fn create_account(
         &mut self,
         contact: Option<Vec<String>>,
         terms_of_service_agreed: bool,
+        eab: Option<(&str, &[u8])>,
     ) -> Result<Account> {
         info!("Creating/looking-up ACME account");
+
+        let eab_binding = if let Some((kid, hmac_key)) = eab {
+            let url = &self.directory.new_account;
+            Some(self.account_key.sign_eab(kid, hmac_key, url)?)
+        } else if self
+            .directory
+            .meta
+            .as_ref()
+            .and_then(|m| m.external_account_required)
+            .unwrap_or(false)
+        {
+            bail!(
+                "server requires External Account Binding \
+                 (externalAccountRequired: true) - \
+                 provide --eab-kid and --eab-hmac-key"
+            );
+        } else {
+            None
+        };
+
         let payload = serde_json::to_string(&NewAccountRequest {
             terms_of_service_agreed,
             contact,
+            external_account_binding: eab_binding,
         })?;
         let url = self.directory.new_account.clone();
         let resp = self.signed_request(&url, &payload).await?;
@@ -230,7 +273,7 @@ impl AcmeClient {
         let url = self
             .account_url
             .clone()
-            .context("account URL not set — create an account first")?;
+            .context("account URL not set - create an account first")?;
         info!("Deactivating account: {url}");
 
         let payload = serde_json::to_string(&DeactivateAccountRequest {
@@ -248,11 +291,35 @@ impl AcmeClient {
         &mut self,
         identifiers: Vec<Identifier>,
     ) -> Result<(Order, String)> {
-        info!("Creating new order");
+        self.new_order_inner(identifiers, None).await
+    }
+
+    /// Submit a replacement order (ARI, RFC 9702 §5).
+    ///
+    /// `replaces` is the ARI certID of the certificate being replaced.
+    pub async fn new_order_replacing(
+        &mut self,
+        identifiers: Vec<Identifier>,
+        replaces: String,
+    ) -> Result<(Order, String)> {
+        self.new_order_inner(identifiers, Some(replaces)).await
+    }
+
+    async fn new_order_inner(
+        &mut self,
+        identifiers: Vec<Identifier>,
+        replaces: Option<String>,
+    ) -> Result<(Order, String)> {
+        if replaces.is_some() {
+            info!("Creating replacement order (ARI)");
+        } else {
+            info!("Creating new order");
+        }
         let payload = serde_json::to_string(&NewOrderRequest {
             identifiers,
             not_before: None,
             not_after: None,
+            replaces,
         })?;
         let url = self.directory.new_order.clone();
         let resp = self.signed_request(&url, &payload).await?;
@@ -320,6 +387,60 @@ impl AcmeClient {
         String::from_utf8(resp.body).context("certificate response is not valid UTF-8")
     }
 
+    /// Roll over the account key (RFC 8555 §7.3.5).
+    ///
+    /// Replaces the current signing key with `new_key`.  The request is a
+    /// nested JWS: the outer JWS is signed by the **old** (current) key
+    /// and the inner JWS is signed by the **new** key.
+    pub async fn key_change(&mut self, new_key: &AccountKey) -> Result<()> {
+        let account_url = self
+            .account_url
+            .as_ref()
+            .context("account URL not set - create an account first")?
+            .clone();
+        let key_change_url = self.directory.key_change.clone();
+
+        info!("Rolling over account key (key-change)");
+
+        // Inner payload: { "account": "<account-url>", "oldKey": <old-JWK> }
+        let inner_payload = serde_json::to_string(&serde_json::json!({
+            "account": account_url,
+            "oldKey": self.account_key.jwk(),
+        }))?;
+
+        // Inner JWS signed by the NEW key (header has alg + jwk of new key)
+        let inner_jws = new_key.sign_key_change_inner(&inner_payload)?;
+
+        // Outer JWS: POST to keyChange URL, payload is the inner JWS string
+        let resp = self.signed_request(&key_change_url, &inner_jws).await?;
+        resp.ensure_success()?;
+
+        info!("Key rollover successful");
+        Ok(())
+    }
+
+    /// Pre-authorize an identifier (RFC 8555 §7.4.1).
+    ///
+    /// Sends a POST to the `newAuthz` endpoint before creating an order.
+    /// Returns `(authorization, authz_url)`.
+    pub async fn new_authorization(
+        &mut self,
+        identifier: Identifier,
+    ) -> Result<(Authorization, String)> {
+        let url = self
+            .directory
+            .new_authz
+            .clone()
+            .context("server does not support pre-authorization (no newAuthz in directory)")?;
+        info!("Pre-authorizing identifier: {} ({})", identifier.value, identifier.identifier_type);
+        let payload = serde_json::to_string(&NewAuthorizationRequest { identifier })?;
+        let resp = self.signed_request(&url, &payload).await?;
+        resp.ensure_success()?;
+        let authz_url = resp.location()?;
+        let authz: Authorization = resp.json()?;
+        Ok((authz, authz_url))
+    }
+
     /// Revoke a certificate (RFC 8555 §7.6).
     pub async fn revoke_certificate(
         &mut self,
@@ -336,4 +457,78 @@ impl AcmeClient {
         resp.ensure_success()?;
         Ok(())
     }
+
+    // ── ACME Renewal Information (RFC 9702) ─────────────────────────────
+
+    /// Fetch renewal information for a certificate (RFC 9702 §4).
+    ///
+    /// Returns the suggested renewal window and an optional `Retry-After`
+    /// value (in seconds) from the response header.
+    pub async fn get_renewal_info(
+        &mut self,
+        cert_der: &[u8],
+    ) -> Result<(RenewalInfo, Option<u64>)> {
+        let base_url = self
+            .directory
+            .renewal_info
+            .as_ref()
+            .context("server does not support ARI (no renewalInfo in directory)")?;
+
+        let cert_id = compute_cert_id(cert_der)?;
+        let url = format!("{base_url}/{cert_id}");
+        info!("Fetching ARI renewal info: {url}");
+
+        let resp = self.signed_request(&url, "").await?;
+        resp.ensure_success()?;
+
+        let retry_after = resp
+            .headers
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        let info: RenewalInfo = resp.json()?;
+        Ok((info, retry_after))
+    }
+
+    /// Check whether the server supports ARI (has `renewalInfo` in directory).
+    pub fn supports_ari(&self) -> bool {
+        self.directory.renewal_info.is_some()
+    }
+}
+
+// ── ARI certID computation (RFC 9702 §4.1) ─────────────────────────────────
+
+/// Compute the ARI certID: `base64url(AKI) "." base64url(Serial)`.
+///
+/// - AKI = raw bytes of the keyIdentifier from the Authority Key Identifier extension
+/// - Serial = DER encoding of the certificate's serial number (as a signed INTEGER)
+pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
+    use x509_parser::prelude::*;
+
+    let (_, cert) = X509Certificate::from_der(cert_der)
+        .map_err(|e| anyhow::anyhow!("failed to parse X.509 certificate: {e}"))?;
+
+    // Extract Authority Key Identifier (OID 2.5.29.35)
+    let aki_ext = cert
+        .extensions()
+        .iter()
+        .find(|ext| ext.oid == oid_registry::OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER)
+        .context("certificate has no Authority Key Identifier extension")?;
+
+    let aki = match aki_ext.parsed_extension() {
+        ParsedExtension::AuthorityKeyIdentifier(aki) => aki
+            .key_identifier
+            .as_ref()
+            .context("AKI extension has no keyIdentifier")?,
+        _ => anyhow::bail!("failed to parse Authority Key Identifier extension"),
+    };
+
+    // Serial number: encode as DER INTEGER
+    let serial = cert.raw_serial();
+
+    let aki_b64 = URL_SAFE_NO_PAD.encode(aki.0);
+    let serial_b64 = URL_SAFE_NO_PAD.encode(serial);
+
+    Ok(format!("{aki_b64}.{serial_b64}"))
 }

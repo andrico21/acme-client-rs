@@ -1,0 +1,159 @@
+# acme-client-rs configuration file
+# All fields are optional. CLI flags and environment variables override these values.
+# Priority: environment variables > CLI flags > config file > built-in defaults.
+#
+# Place this file in the working directory as "acme-client-rs.toml" for auto-loading,
+# or specify a path with --config <PATH>.
+
+# ── Global options ───────────────────────────────────────────────────────────
+# These apply to all subcommands.
+
+[global]
+
+# ACME server directory URL.
+# CLI: --directory / -d
+# Env: ACME_DIRECTORY_URL
+# Default: "https://localhost:14000/dir"
+# directory = "https://acme-v02.api.letsencrypt.org/directory"
+
+# Path to the account key (PKCS#8 PEM).
+# CLI: --account-key / -k
+# Env: ACME_ACCOUNT_KEY_FILE
+# Default: "account.key"
+# account_key = "/etc/acme/account.key"
+
+# Account URL (set after creating an account with the `account` subcommand).
+# CLI: --account-url / -a
+# Env: ACME_ACCOUNT_URL
+# account_url = "https://acme-v02.api.letsencrypt.org/acme/acct/123456789"
+
+# Output format: "text" (human-readable) or "json" (machine-readable).
+# CLI: --output-format
+# Default: "text"
+# output_format = "json"
+
+# Disable TLS certificate verification. Only use for testing with self-signed
+# CAs like Pebble - never in production.
+# CLI: --insecure
+# Env: ACME_INSECURE
+# Default: false
+# insecure = true
+
+# ── Run subcommand options ───────────────────────────────────────────────────
+# These apply when using `acme-client-rs run`.
+
+[run]
+
+# Domain names to include in the certificate.
+# CLI: positional arguments after `run`
+# domains = ["example.com", "www.example.com"]
+
+# Contact email address for the ACME account.
+# CLI: --contact
+# contact = "admin@example.com"
+
+# Challenge type: "http-01", "dns-01", "dns-persist-01", or "tls-alpn-01".
+# CLI: --challenge-type
+# Default: "http-01"
+# challenge_type = "http-01"
+
+# Port for the built-in HTTP-01 challenge server (standalone mode).
+# CLI: --http-port
+# Default: 80
+# http_port = 80
+
+# Write HTTP-01 challenge files to this directory instead of starting a server.
+# Useful when you have an existing web server (nginx, Apache, etc.).
+# CLI: --challenge-dir
+# challenge_dir = "/var/www/acme"
+
+# Path to a DNS-01/DNS-PERSIST-01 hook script.
+# The script is called with environment variables: ACME_ACTION, ACME_DOMAIN,
+# ACME_TXT_NAME, ACME_TXT_VALUE. For dns-01, ACME_ACTION is "create" or "cleanup".
+# For dns-persist-01, only "create" is called (records are persistent).
+# CLI: --dns-hook
+# dns_hook = "/usr/local/bin/dns-hook.sh"
+
+# Wait up to N seconds for DNS TXT record propagation (polls every 5 seconds).
+# Can be used with --dns-hook (fully automated) or alone (manual + auto-wait).
+# CLI: --dns-wait
+# dns_wait = 120
+
+# Path to save the issued certificate (PEM format, end-entity + intermediates).
+# CLI: --cert-output
+# Default: "certificate.pem"
+# cert_output = "/etc/ssl/certs/example.com.pem"
+
+# Path to save the private key (PKCS#8 PEM format).
+# CLI: --key-output
+# Default: "private.key"
+# key_output = "/etc/ssl/private/example.com.key"
+
+# Renewal mode: skip issuance if the existing certificate at cert_output has
+# more than N days remaining. Makes `run` idempotent for cron/scheduled tasks.
+# The command exits 0 whether it renewed or skipped.
+# CLI: --days
+# days = 30
+
+# Path to a file containing the password to encrypt the private key
+# (PKCS#8 + AES-256-CBC with scrypt KDF). First line is used, trailing newline stripped.
+# CLI: --key-password-file
+# key_password_file = "/etc/acme/key-password.txt"
+
+# Hook script run after each challenge is set up and ready for validation.
+# Environment variables: ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN, ACME_KEY_AUTH.
+# CLI: --on-challenge-ready
+# on_challenge_ready = "/usr/local/bin/reload-nginx.sh"
+
+# Hook script run after the certificate is issued and saved to disk.
+# Environment variables: ACME_DOMAINS, ACME_CERT_PATH, ACME_KEY_PATH, ACME_KEY_ENCRYPTED.
+# CLI: --on-cert-issued
+# on_cert_issued = "/usr/local/bin/deploy-cert.sh"
+
+# EAB Key ID from the CA (for CAs that require External Account Binding).
+# Must be set together with eab_hmac_key.
+# CLI: --eab-kid
+# eab_kid = "kid-from-ca"
+
+# EAB HMAC key (base64url-encoded, from the CA).
+# Must be set together with eab_kid.
+# CLI: --eab-hmac-key
+# eab_hmac_key = "base64url-encoded-hmac-key"
+
+# Pre-authorize identifiers via newAuthz before creating the order
+# (RFC 8555 Section 7.4.1). Not all servers support this.
+# CLI: --pre-authorize
+# Default: false
+# pre_authorize = true
+
+# Use ACME Renewal Information (RFC 9702) to decide when to renew.
+# Queries the CA's suggested renewal window. Falls back to `days` if unavailable.
+# CLI: --ari
+# Default: false
+# ari = true
+
+# Policy for dns-persist-01 records (e.g., "wildcard").
+# CLI: --persist-policy
+# persist_policy = "wildcard"
+
+# Unix timestamp for dns-persist-01 persistUntil parameter.
+# After this time, the record should not be used for new validations.
+# CLI: --persist-until
+# persist_until = 1767225600
+
+# ── Account subcommand options ───────────────────────────────────────────────
+# These apply when using `acme-client-rs account`.
+
+[account]
+
+# Contact email addresses.
+# CLI: --contact (repeatable)
+# contact = ["admin@example.com"]
+
+# EAB Key ID from the CA.
+# CLI: --eab-kid
+# eab_kid = "kid-from-ca"
+
+# EAB HMAC key (base64url-encoded, from the CA).
+# CLI: --eab-hmac-key
+# eab_hmac_key = "base64url-encoded-hmac-key"

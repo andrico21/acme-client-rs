@@ -1,6 +1,6 @@
 [package]
 name = "acme-client-rs"
-version = "0.1.0"
+version = "1.5.1"
 edition = "2024"
 
 [dependencies]
@@ -8,14 +8,35 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env"] }
 ecdsa = { version = "0.16", features = ["signing"] }
-p256 = { version = "0.13", features = ["pem"] }
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
+hmac = "0.12"
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+p384 = { version = "0.13", features = ["ecdsa", "pem"] }
+p521 = { version = "0.13", features = ["ecdsa", "pem"] }
 pem = "3"
+pkcs8 = { version = "0.10", features = ["encryption"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rcgen = "0.14"
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "webpki-roots", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "json"] }
+rsa = { version = "0.9", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+time = "0.3"
 tokio = { version = "1", features = ["full"] }
+toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+x509-parser = "0.18"
+
+# ── Release profile: smallest hardened binary ────────────────────────────────
+
+[profile.release]
+opt-level = "z"        # Optimize for size
+lto = true             # Full link-time optimization (cross-crate inlining + dead code elimination)
+codegen-units = 1      # Single codegen unit - best optimization, slower compile
+panic = "abort"        # No unwinding tables - smaller binary, immediate abort on panic
+strip = true           # Strip all symbols and debug info from the binary
+debug = 0              # No debug info generated at all (DWARF, PDB, etc.)
+debug-assertions = false
+overflow-checks = true # Catch integer overflow → panic → abort (defense in depth)
