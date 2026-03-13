@@ -19,7 +19,7 @@ Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release bi
 - Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF
 - Step-by-step manual flow (individual subcommands)
 - Six key algorithms: ES256 (default), ES384, ES512, RSA-2048, RSA-4096, Ed25519
-- Configurable via CLI flags or environment variables
+- Configurable via CLI flags, config file, or environment variables
 - `--insecure` flag for testing with self-signed CAs (e.g., Pebble)
 - Clean error messages (no stack traces for operational errors)
 - Structured JSON output (`--output-format json`) for machine consumption and CI/CD pipelines
@@ -31,7 +31,7 @@ Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release bi
 acme-client-rs generate-key
 
 # 2. Run the full flow against a server
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --http-port 80 your.domain.com
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 your.domain.com
 
 # 3. Renew - just re-run with --days (skips if not due yet)
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --challenge-dir /var/www/html --cert-output /etc/ssl/certs/your.domain.pem --key-output /etc/ssl/private/your.domain.key --days 30 your.domain.com
@@ -52,6 +52,23 @@ acme-client-rs generate-key --algorithm rsa2048
 acme-client-rs generate-key --algorithm rsa4096
 acme-client-rs generate-key --algorithm ed25519
 ```
+
+### Certificate Key Algorithm
+
+The certificate private key (used in the CSR) is separate from the account key. By default, ECDSA P-256 is used. You can change it with `--cert-key-algorithm`:
+
+```sh
+# Default: ECDSA P-256
+acme-client-rs run --cert-key-algorithm ec-p256 ...
+
+# ECDSA P-384
+acme-client-rs run --cert-key-algorithm ec-p384 ...
+
+# Ed25519
+acme-client-rs run --cert-key-algorithm ed25519 ...
+```
+
+Supported values: `ec-p256` (P-256/SHA-256, default), `ec-p384` (P-384/SHA-384), `ed25519`.
 
 ### DNS-01 Challenge
 
@@ -247,7 +264,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 ### Multi-SAN Certificates
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --http-port 80 example.com www.example.com api.example.com
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 example.com www.example.com api.example.com
 ```
 
 <details>
@@ -434,12 +451,16 @@ acme-client-rs generate-config > acme-client-rs.toml
 
 A ready-made example is also included in the repository as `acme-client-rs.toml.example`.
 
-The config file is optional. Priority order: **CLI flags > config file > environment variables > built-in defaults**.
+The config file is optional. Load it with `--config <PATH>` or `ACME_CONFIG` env var.
+
+**Priority without config file:** CLI flags > environment variables > built-in defaults.
+**Priority with config file:** CLI flags > config file > built-in defaults.
+
+When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exceptions: `ACME_INSECURE`, key passwords (`--key-password-file`), and EAB credentials (`--eab-kid`, `--eab-hmac-key`) are still read from the environment as a fallback for secrets that shouldn't be stored in config files.
 
 Loading behavior:
-- `--config <PATH>` (or `ACME_CONFIG` env var): load from the specified path
-- Without `--config`: auto-loads `acme-client-rs.toml` from the current directory if it exists
-- No config file: all defaults and CLI flags work as before
+- `--config <PATH>` (or `ACME_CONFIG` env var): load from the specified path (env vars ignored)
+- No config file: CLI flags and environment variables work normally
 
 Example config:
 
@@ -461,7 +482,7 @@ days = 30
 With this config in place, renewal becomes a single command:
 
 ```sh
-acme-client-rs run
+acme-client-rs --config acme-client-rs.toml run
 ```
 
 CLI flags override the config file, so you can still customize per invocation:
@@ -551,7 +572,7 @@ The `run` subcommand executes steps 1-9 automatically (and optionally step 11 wi
 acme-client-rs generate-key --account-key /etc/acme/account.key
 
 # Issue a certificate (the client binds port 80 for validation)
-acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --http-port 80 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
+acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
 ```
 
 ### Issue a Certificate (HTTP-01, with nginx)
@@ -962,7 +983,7 @@ trap cleanup ERR
 
 pre_hook
 
-acme-client-rs --directory "${ACME_DIR}" --account-key "${ACCOUNT_KEY}" run --contact "admin@${DOMAIN}" --challenge-type http-01 --http-port 80 --cert-output "${CERT}" --key-output "${KEY}" "${DOMAIN}"
+acme-client-rs --directory "${ACME_DIR}" --account-key "${ACCOUNT_KEY}" run --contact "admin@${DOMAIN}" --challenge-type http-01 --cert-output "${CERT}" --key-output "${KEY}" "${DOMAIN}"
 
 post_hook
 
@@ -998,7 +1019,6 @@ if (Test-Path $certPath) {
   run `
   --contact $contact `
   --challenge-type http-01 `
-  --http-port 80 `
   --cert-output $certPath `
   --key-output $keyPath `
   $domain
@@ -1151,11 +1171,11 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 
 | Option | Short | Env Var | Default | Description |
 |---|---|---|---|---|
-| `--config <PATH>` | | `ACME_CONFIG` | - | Path to TOML config file (auto-loads `acme-client-rs.toml` from current directory if present) |
+| `--config <PATH>` | | `ACME_CONFIG` | - | Path to TOML config file (env vars ignored when loaded, except secrets) |
 | `--directory <URL>` | `-d` | `ACME_DIRECTORY_URL` | `https://localhost:14000/dir` | ACME server directory URL |
 | `--account-key <PATH>` | `-k` | `ACME_ACCOUNT_KEY_FILE` | `account.key` | Path to the account key (PKCS#8 PEM) |
 | `--account-url <URL>` | `-a` | `ACME_ACCOUNT_URL` | - | Account URL (required after account creation) |
-| `--output-format <FMT>` | | - | `text` | Output format: `text` (human-readable) or `json` (structured) |
+| `--output-format <FMT>` | | `ACME_OUTPUT_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (structured) |
 | `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (for testing with self-signed CAs like Pebble) |
 
 Global options can be placed before or after the subcommand.
@@ -1206,6 +1226,7 @@ Global options can be placed before or after the subcommand.
 | `--pre-authorize` | `false` | Pre-authorize identifiers via newAuthz before creating the order (RFC 8555 Section 7.4.1) |
 | `--persist-policy <POLICY>` | - | Policy for dns-persist-01 records (e.g., `wildcard` for wildcard + subdomain scope) |
 | `--persist-until <TIMESTAMP>` | - | Unix timestamp for dns-persist-01 `persistUntil` parameter |
+| `--cert-key-algorithm <ALG>` | `ec-p256` | Certificate key algorithm for CSR: `ec-p256`, `ec-p384`, or `ed25519` |
 | `--ari` | `false` | **ARI renewal mode (RFC 9702):** query the server's suggested renewal window and skip issuance if the window has not opened. When renewing, the `replaces` field is included in the order to link the new cert to the old one. Falls back to `--days` if ARI is unavailable. |
 
 <details>
@@ -1260,10 +1281,15 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 
 | Variable | Description |
 |---|---|
+| `ACME_CONFIG` | Config file path (alternative to `--config`) |
 | `ACME_DIRECTORY_URL` | ACME directory URL (alternative to `--directory`) |
 | `ACME_ACCOUNT_KEY_FILE` | Account key path (alternative to `--account-key`) |
 | `ACME_ACCOUNT_URL` | Account URL (alternative to `--account-url`) |
+| `ACME_OUTPUT_FORMAT` | Output format: `text` or `json` (alternative to `--output-format`) |
 | `ACME_INSECURE` | Disable TLS certificate verification (alternative to `--insecure`) |
+| `ACME_KEY_PASSWORD_FILE` | Private key password file path (alternative to `--key-password-file`) |
+| `ACME_EAB_KID` | EAB Key ID (alternative to `--eab-kid`) |
+| `ACME_EAB_HMAC_KEY` | EAB HMAC key, base64url-encoded (alternative to `--eab-hmac-key`) |
 | `RUST_LOG` | Log level filter (e.g., `debug`, `info`, `warn`) |
 
 ### DNS Hook Environment Variables
@@ -1297,8 +1323,8 @@ These are set when calling `--on-cert-issued` (once after certificate is saved):
 | Variable | Description |
 |---|---|
 | `ACME_DOMAINS` | Comma-separated list of domains in the certificate |
-| `ACME_CERT_PATH` | Absolute path to the saved certificate file |
-| `ACME_KEY_PATH` | Absolute path to the saved private key file |
+| `ACME_CERT_PATH` | Path to the saved certificate file |
+| `ACME_KEY_PATH` | Path to the saved private key file |
 | `ACME_KEY_ENCRYPTED` | `true` if the key was encrypted, `false` otherwise |
 
 ## License

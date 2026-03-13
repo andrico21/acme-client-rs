@@ -19,7 +19,7 @@
 - Опциональное шифрование закрытого ключа (`--key-password` / `--key-password-file`) с использованием PKCS#8 + AES-256-CBC с KDF scrypt
 - Пошаговый ручной процесс (отдельные субкоманды)
 - Шесть алгоритмов ключей: ES256 (по умолчанию), ES384, ES512, RSA-2048, RSA-4096, Ed25519
-- Настройка через флаги командной строки или переменные окружения
+- Настройка через флаги командной строки, конфигурационный файл или переменные окружения
 - Флаг `--insecure` для тестирования с самоподписанными CA (например, Pebble)
 - Чистые сообщения об ошибках (без стектрейсов для операционных ошибок)
 - Структурированный JSON-вывод (`--output-format json`) для машинной обработки и CI/CD-пайплайнов
@@ -31,7 +31,7 @@
 acme-client-rs generate-key
 
 # 2. Запуск полного процесса с указанием сервера
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --http-port 80 your.domain.com
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 your.domain.com
 
 # 3. Продление - просто повторный запуск с --days (пропустит, если ещё не пора)
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --challenge-dir /var/www/html --cert-output /etc/ssl/certs/your.domain.pem --key-output /etc/ssl/private/your.domain.key --days 30 your.domain.com
@@ -52,6 +52,23 @@ acme-client-rs generate-key --algorithm rsa2048
 acme-client-rs generate-key --algorithm rsa4096
 acme-client-rs generate-key --algorithm ed25519
 ```
+
+### Алгоритм ключа сертификата
+
+Закрытый ключ сертификата (используемый в CSR) отделён от ключа аккаунта. По умолчанию используется ECDSA P-256. Изменить можно с помощью `--cert-key-algorithm`:
+
+```sh
+# По умолчанию: ECDSA P-256
+acme-client-rs run --cert-key-algorithm ec-p256 ...
+
+# ECDSA P-384
+acme-client-rs run --cert-key-algorithm ec-p384 ...
+
+# Ed25519
+acme-client-rs run --cert-key-algorithm ed25519 ...
+```
+
+Поддерживаемые значения: `ec-p256` (P-256/SHA-256, по умолчанию), `ec-p384` (P-384/SHA-384), `ed25519`.
 
 ### Вызов DNS-01
 
@@ -247,7 +264,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 ### Мультидоменные сертификаты (Multi-SAN)
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 --http-port 80 example.com www.example.com api.example.com
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 example.com www.example.com api.example.com
 ```
 
 <details>
@@ -434,12 +451,16 @@ acme-client-rs generate-config > acme-client-rs.toml
 
 Готовый пример также включён в репозиторий как `acme-client-rs.toml.example`.
 
-Конфигурационный файл опционален. Приоритет: **флаги CLI > конфигурационный файл > переменные окружения > встроенные значения по умолчанию**.
+Конфигурационный файл опционален. Загружайте его через `--config <PATH>` или переменную `ACME_CONFIG`.
+
+**Приоритет без конфигурационного файла:** флаги CLI > переменные окружения > встроенные значения по умолчанию.
+**Приоритет с конфигурационным файлом:** флаги CLI > конфигурационный файл > встроенные значения по умолчанию.
+
+При загрузке конфигурационного файла переменные окружения **игнорируются** -- конфигурационный файл является единственным источником данных. Исключения: `ACME_INSECURE`, пароли ключей (`--key-password-file`) и EAB-учётные данные (`--eab-kid`, `--eab-hmac-key`) по-прежнему читаются из окружения как запасной вариант для секретов, которые не должны храниться в файлах конфигурации.
 
 Поведение загрузки:
-- `--config <PATH>` (или переменная `ACME_CONFIG`): загрузка из указанного пути
-- Без `--config`: автоматическая загрузка `acme-client-rs.toml` из текущей директории, если файл существует
-- Без конфигурационного файла: все значения по умолчанию и флаги CLI работают как прежде
+- `--config <PATH>` (или переменная `ACME_CONFIG`): загрузка из указанного пути (переменные окружения игнорируются)
+- Без конфигурационного файла: флаги CLI и переменные окружения работают как обычно
 
 Пример конфигурации:
 
@@ -461,7 +482,7 @@ days = 30
 С такой конфигурацией продление сводится к одной команде:
 
 ```sh
-acme-client-rs run
+acme-client-rs --config acme-client-rs.toml run
 ```
 
 Флаги CLI перекрывают конфигурационный файл, поэтому можно настроить выполнение индивидуально:
@@ -551,7 +572,7 @@ acme-client-rs show-config --verbose
 acme-client-rs generate-key --account-key /etc/acme/account.key
 
 # Issue a certificate (the client binds port 80 for validation)
-acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --http-port 80 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
+acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
 ```
 
 ### Выпуск сертификата (HTTP-01, с nginx)
@@ -962,7 +983,7 @@ trap cleanup ERR
 
 pre_hook
 
-acme-client-rs --directory "${ACME_DIR}" --account-key "${ACCOUNT_KEY}" run --contact "admin@${DOMAIN}" --challenge-type http-01 --http-port 80 --cert-output "${CERT}" --key-output "${KEY}" "${DOMAIN}"
+acme-client-rs --directory "${ACME_DIR}" --account-key "${ACCOUNT_KEY}" run --contact "admin@${DOMAIN}" --challenge-type http-01 --cert-output "${CERT}" --key-output "${KEY}" "${DOMAIN}"
 
 post_hook
 
@@ -998,7 +1019,6 @@ if (Test-Path $certPath) {
   run `
   --contact $contact `
   --challenge-type http-01 `
-  --http-port 80 `
   --cert-output $certPath `
   --key-output $keyPath `
   $domain
@@ -1151,11 +1171,11 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 
 | Опция | Сокращение | Переменная окружения | По умолчанию | Описание |
 |---|---|---|---|---|
-| `--config <PATH>` | | `ACME_CONFIG` | - | Путь к TOML-файлу конфигурации (автоматически загружает `acme-client-rs.toml` из текущей директории, если присутствует) |
+| `--config <PATH>` | | `ACME_CONFIG` | - | Путь к TOML-файлу конфигурации (при загрузке переменные окружения игнорируются, кроме секретов) |
 | `--directory <URL>` | `-d` | `ACME_DIRECTORY_URL` | `https://localhost:14000/dir` | URL директории ACME-сервера |
 | `--account-key <PATH>` | `-k` | `ACME_ACCOUNT_KEY_FILE` | `account.key` | Путь к ключу аккаунта (PKCS#8 PEM) |
 | `--account-url <URL>` | `-a` | `ACME_ACCOUNT_URL` | - | URL аккаунта (требуется после создания аккаунта) |
-| `--output-format <FMT>` | | - | `text` | Формат вывода: `text` (для человека) или `json` (структурированный) |
+| `--output-format <FMT>` | | `ACME_OUTPUT_FORMAT` | `text` | Формат вывода: `text` (для человека) или `json` (структурированный) |
 | `--insecure` | | `ACME_INSECURE` | `false` | Отключить проверку TLS-сертификата (для тестирования с самоподписанными CA, такими как Pebble) |
 
 Глобальные опции можно указывать до или после субкоманды.
@@ -1206,6 +1226,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--pre-authorize` | `false` | Предварительная авторизация идентификаторов через newAuthz перед созданием заказа (RFC 8555 Section 7.4.1) |
 | `--persist-policy <POLICY>` | - | Политика для записей dns-persist-01 (например, `wildcard` для области wildcard + поддомены) |
 | `--persist-until <TIMESTAMP>` | - | Unix-метка времени для параметра `persistUntil` в dns-persist-01 |
+| `--cert-key-algorithm <ALG>` | `ec-p256` | Алгоритм ключа сертификата для CSR: `ec-p256`, `ec-p384` или `ed25519` |
 | `--ari` | `false` | **Режим продления ARI (RFC 9702):** запрос рекомендуемого окна продления от сервера и пропуск выпуска, если окно ещё не открылось. При продлении поле `replaces` включается в заказ для связывания нового сертификата со старым. Переход на `--days`, если ARI недоступна. |
 
 <details>
@@ -1260,10 +1281,15 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 
 | Переменная | Описание |
 |---|---|
+| `ACME_CONFIG` | Путь к файлу конфигурации (альтернатива `--config`) |
 | `ACME_DIRECTORY_URL` | URL директории ACME (альтернатива `--directory`) |
 | `ACME_ACCOUNT_KEY_FILE` | Путь к ключу аккаунта (альтернатива `--account-key`) |
 | `ACME_ACCOUNT_URL` | URL аккаунта (альтернатива `--account-url`) |
+| `ACME_OUTPUT_FORMAT` | Формат вывода: `text` или `json` (альтернатива `--output-format`) |
 | `ACME_INSECURE` | Отключить проверку TLS-сертификата (альтернатива `--insecure`) |
+| `ACME_KEY_PASSWORD_FILE` | Путь к файлу пароля закрытого ключа (альтернатива `--key-password-file`) |
+| `ACME_EAB_KID` | EAB Key ID (альтернатива `--eab-kid`) |
+| `ACME_EAB_HMAC_KEY` | EAB HMAC-ключ, base64url-кодировка (альтернатива `--eab-hmac-key`) |
 | `RUST_LOG` | Фильтр уровня логирования (например, `debug`, `info`, `warn`) |
 
 ### Переменные окружения DNS-хука
@@ -1297,8 +1323,8 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | Переменная | Описание |
 |---|---|
 | `ACME_DOMAINS` | Список доменов в сертификате через запятую |
-| `ACME_CERT_PATH` | Абсолютный путь к сохранённому файлу сертификата |
-| `ACME_KEY_PATH` | Абсолютный путь к сохранённому файлу закрытого ключа |
+| `ACME_CERT_PATH` | Путь к сохранённому файлу сертификата |
+| `ACME_KEY_PATH` | Путь к сохранённому файлу закрытого ключа |
 | `ACME_KEY_ENCRYPTED` | `true` если ключ зашифрован, `false` в противном случае |
 
 ## Лицензия

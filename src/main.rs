@@ -28,6 +28,30 @@ enum OutputFormat {
     Json,
 }
 
+/// Certificate key algorithm for CSR generation
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum CertKeyAlgorithm {
+    /// ECDSA P-256 with SHA-256 (default)
+    #[value(name = "ec-p256")]
+    EcP256,
+    /// ECDSA P-384 with SHA-384
+    #[value(name = "ec-p384")]
+    EcP384,
+    /// Ed25519
+    #[value(name = "ed25519")]
+    Ed25519,
+}
+
+impl std::fmt::Display for CertKeyAlgorithm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EcP256 => write!(f, "ec-p256"),
+            Self::EcP384 => write!(f, "ec-p384"),
+            Self::Ed25519 => write!(f, "ed25519"),
+        }
+    }
+}
+
 /// Simple ACME client for testing ACME flows (RFC 8555)
 #[derive(Parser)]
 #[command(name = "acme-client-rs", version, about, after_long_help = "\
@@ -49,7 +73,7 @@ Examples:
   export ACME_ACCOUNT_KEY_FILE=/etc/acme/account.key
   acme-client-rs run --contact you@example.com your.domain.com")]
 struct Cli {
-    /// Path to a TOML config file (auto-loads acme-client-rs.toml from current directory if present)
+    /// Path to a TOML config file
     #[arg(long, global = true, env = "ACME_CONFIG")]
     config: Option<PathBuf>,
 
@@ -66,7 +90,7 @@ struct Cli {
     account_url: Option<String>,
 
     /// Output format (text or json)
-    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text, env = "ACME_OUTPUT_FORMAT")]
     output_format: OutputFormat,
 
     /// Disable TLS certificate verification (for testing with self-signed CAs like Pebble)
@@ -85,11 +109,15 @@ Prints a fully commented TOML template to stdout. Redirect to a file to create y
 
   acme-client-rs generate-config > acme-client-rs.toml
 
-Then edit the file and uncomment the options you need. The config file is
-optional - CLI flags and config file values take priority over environment variables.")]
+Then edit the file and uncomment the options you need. Load it with
+--config <PATH> or the ACME_CONFIG environment variable.
+
+Priority without config file: CLI flags > environment variables > built-in defaults.
+Priority with config file: CLI flags > config file > built-in defaults
+(environment variables are ignored except for secrets like key passwords and EAB).")]
     GenerateConfig,
 
-    /// Show effective configuration (merged from config file, environment, and CLI flags)
+    /// Show effective configuration (resolved from CLI flags, config file, and/or environment)
     #[command(after_long_help = "\
 Shows the resolved configuration after merging all sources.
 Use --verbose to see the source of each value (cli, env, config, default).\n\
@@ -139,10 +167,10 @@ Examples:
         #[arg(long, default_value_t = true)]
         agree_tos: bool,
         /// EAB Key ID from the CA (for CAs that require External Account Binding)
-        #[arg(long, requires = "eab_hmac_key")]
+        #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
         eab_kid: Option<String>,
         /// EAB HMAC key (base64url-encoded, from the CA)
-        #[arg(long, requires = "eab_kid")]
+        #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
         eab_hmac_key: Option<String>,
     },
 
@@ -256,6 +284,9 @@ Examples:
         /// Order finalize URL
         #[arg(long)]
         finalize_url: String,
+        /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
+        #[arg(long, default_value = "ec-p256")]
+        cert_key_algorithm: CertKeyAlgorithm,
         /// Domain names for the CSR
         #[arg(required = true)]
         domains: Vec<String>,
@@ -447,7 +478,7 @@ Examples:
         #[arg(long, conflicts_with = "key_password_file")]
         key_password: Option<String>,
         /// Read the private key encryption password from a file (first line, trailing newline stripped)
-        #[arg(long, conflicts_with = "key_password")]
+        #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
         key_password_file: Option<PathBuf>,
         /// Run a script after each challenge is ready for validation
         #[arg(long)]
@@ -456,10 +487,10 @@ Examples:
         #[arg(long)]
         on_cert_issued: Option<PathBuf>,
         /// EAB Key ID from the CA (for CAs that require External Account Binding)
-        #[arg(long, requires = "eab_hmac_key")]
+        #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
         eab_kid: Option<String>,
         /// EAB HMAC key (base64url-encoded, from the CA)
-        #[arg(long, requires = "eab_kid")]
+        #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
         eab_hmac_key: Option<String>,
         /// Pre-authorize identifiers via newAuthz before creating the order
         #[arg(long)]
@@ -473,6 +504,9 @@ Examples:
         /// Unix timestamp for dns-persist-01 persistUntil parameter
         #[arg(long)]
         persist_until: Option<u64>,
+        /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
+        #[arg(long, default_value = "ec-p256")]
+        cert_key_algorithm: CertKeyAlgorithm,
     },
 }
 
@@ -491,67 +525,146 @@ async fn main() {
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     // Load config (skip for generate-config)
-    let loaded_config = if !matches!(cli.command, Commands::GenerateConfig) {
+    let (loaded_config, config_mode) = if !matches!(cli.command, Commands::GenerateConfig) {
         match load_config(&cli) {
-            Ok(c) => c,
+            Ok(pair) => pair,
             Err(err) => {
                 eprintln!("Error: {err:#}");
                 std::process::exit(1);
             }
         }
     } else {
-        None
+        (None, false)
     };
 
     if let Some(ref config) = loaded_config {
-        apply_config(&mut cli, &matches, config);
+        apply_config(&mut cli, &matches, config, config_mode);
+    } else if config_mode {
+        // config_mode was requested but the env/cli pointed nowhere — should not happen
+        // (load_config already errors), but guard anyway.
+    } else {
+        // No config file: CLI > env > defaults — clap already handled this.
+        // Just warn if the default config file exists in CWD.
+        if !matches!(cli.command, Commands::GenerateConfig) && config::Config::default_exists() {
+            info!(
+                "Found {} in current directory but no --config or ACME_CONFIG was specified. \
+                 Use --config {} or set ACME_CONFIG to load it.",
+                config::DEFAULT_CONFIG_FILE,
+                config::DEFAULT_CONFIG_FILE,
+            );
+        }
     }
 
-    if let Err(err) = run(cli, loaded_config.as_ref(), &matches).await {
+    if let Err(err) = run(cli, loaded_config.as_ref(), &matches, config_mode).await {
         eprintln!("Error: {err:#}");
         std::process::exit(1);
     }
 }
 
-fn load_config(cli: &Cli) -> Result<Option<config::Config>> {
+/// Load config file if requested. Returns `(config, config_mode)`.
+///
+/// `config_mode = true` means the user explicitly asked for a config file
+/// (via `--config` CLI flag or `ACME_CONFIG` env var) and env vars should be
+/// ignored for most fields.
+fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
     if let Some(ref path) = cli.config {
-        Ok(Some(config::Config::load(path)?))
+        Ok((Some(config::Config::load(path)?), true))
     } else {
-        config::Config::load_default()
+        Ok((None, false))
     }
 }
 
-fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Config) {
+fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Config, config_mode: bool) {
     use clap::parser::ValueSource;
 
     let cfg = &config.global;
 
-    // Global options: config overrides env vars and defaults, but not explicit CLI flags
-    if matches!(matches.value_source("directory"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+    // Helper: in config mode, only CLI overrides config. Env vars are ignored
+    // (except for allowed secrets — handled separately).
+    // Without config mode, config merges under both env and defaults.
+    let should_apply_config = |source: Option<ValueSource>| -> bool {
+        match source {
+            Some(ValueSource::CommandLine) => false, // CLI always wins
+            Some(ValueSource::EnvVariable) if config_mode => true, // config overrides env in config mode
+            Some(ValueSource::EnvVariable) => true,  // config also overrides env without config mode
+            Some(ValueSource::DefaultValue) => true,  // config overrides defaults
+            _ => true,
+        }
+    };
+
+    // In config mode, strip env values for global fields that are NOT in the
+    // allowed-from-env list. The "allowed from env in config mode" set is:
+    //   insecure (ACME_INSECURE)
+    // All others (directory, account_key, account_url, output_format) are
+    // config-only when config_mode is true.
+    if config_mode {
+        // For fields where clap resolved an env value, warn at debug level
+        // and let the config value (or default) take over.
+        for (id, env_name) in [
+            ("directory", "ACME_DIRECTORY_URL"),
+            ("account_key", "ACME_ACCOUNT_KEY_FILE"),
+            ("account_url", "ACME_ACCOUNT_URL"),
+            ("output_format", "ACME_OUTPUT_FORMAT"),
+        ] {
+            if matches.value_source(id) == Some(ValueSource::EnvVariable) {
+                tracing::debug!(
+                    "Config file mode: ignoring {env_name} env var (use --config values or pass --{} on CLI)",
+                    id.replace('_', "-"),
+                );
+            }
+        }
+    }
+
+    // Global: directory
+    if should_apply_config(matches.value_source("directory")) {
         if let Some(ref v) = cfg.directory {
             cli.directory = v.clone();
+        } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable) {
+            // Reset to default — env var is not allowed in config mode
+            cli.directory = "https://localhost:14000/dir".to_string();
         }
     }
-    if matches!(matches.value_source("account_key"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+
+    // Global: account_key
+    if should_apply_config(matches.value_source("account_key")) {
         if let Some(ref v) = cfg.account_key {
             cli.account_key = v.clone();
+        } else if config_mode && matches.value_source("account_key") == Some(ValueSource::EnvVariable) {
+            cli.account_key = PathBuf::from("account.key");
         }
     }
-    if cli.account_url.is_none() {
+
+    // Global: account_url
+    if should_apply_config(matches.value_source("account_url")) {
+        if let Some(ref v) = cfg.account_url {
+            cli.account_url = Some(v.clone());
+        } else if config_mode && matches.value_source("account_url") == Some(ValueSource::EnvVariable) {
+            cli.account_url = None;
+        }
+    } else if cli.account_url.is_none() {
         cli.account_url.clone_from(&cfg.account_url);
     }
-    if matches!(matches.value_source("output_format"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+
+    // Global: output_format
+    if should_apply_config(matches.value_source("output_format")) {
         if let Some(ref v) = cfg.output_format {
             if v == "json" {
                 cli.output_format = OutputFormat::Json;
             }
+        } else if config_mode && matches.value_source("output_format") == Some(ValueSource::EnvVariable) {
+            cli.output_format = OutputFormat::Text;
         }
     }
-    if matches!(matches.value_source("insecure"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+
+    // Global: insecure — ALLOWED from env even in config mode (secret/safety toggle)
+    if matches!(matches.value_source("insecure"), Some(ValueSource::DefaultValue) | None) {
         if let Some(v) = cfg.insecure {
             cli.insecure = v;
         }
     }
+    // In config mode, if env has ACME_INSECURE but config also sets it, config wins
+    // (already handled above: config is applied for DefaultValue).
+    // If env has it and config doesn't, env is allowed to survive for insecure.
 
     // Run subcommand options
     if let Commands::Run {
@@ -574,29 +687,37 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         ref mut ari,
         ref mut persist_policy,
         ref mut persist_until,
+        ref mut cert_key_algorithm,
         ..
     } = cli.command
     {
         let cfg_run = &config.run;
         if let Some((_, sub_matches)) = matches.subcommand() {
-            if matches!(sub_matches.value_source("challenge_type"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+            if should_apply_config(sub_matches.value_source("challenge_type")) {
                 if let Some(ref v) = cfg_run.challenge_type {
                     *challenge_type = v.clone();
                 }
             }
-            if matches!(sub_matches.value_source("http_port"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+            if should_apply_config(sub_matches.value_source("http_port")) {
                 if let Some(v) = cfg_run.http_port {
                     *http_port = v;
                 }
             }
-            if matches!(sub_matches.value_source("cert_output"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+            if should_apply_config(sub_matches.value_source("cert_output")) {
                 if let Some(ref v) = cfg_run.cert_output {
                     *cert_output = v.clone();
                 }
             }
-            if matches!(sub_matches.value_source("key_output"), Some(ValueSource::DefaultValue) | Some(ValueSource::EnvVariable) | None) {
+            if should_apply_config(sub_matches.value_source("key_output")) {
                 if let Some(ref v) = cfg_run.key_output {
                     *key_output = v.clone();
+                }
+            }
+            if should_apply_config(sub_matches.value_source("cert_key_algorithm")) {
+                if let Some(ref v) = cfg_run.cert_key_algorithm {
+                    if let Ok(a) = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true) {
+                        *cert_key_algorithm = a;
+                    }
                 }
             }
         }
@@ -606,6 +727,12 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
             if let Some(ref v) = cfg_run.domains {
                 *domains = v.clone();
             }
+        } else if config_mode && cfg_run.domains.as_ref().map_or(true, |d| d.is_empty()) {
+            // Domains from CLI but not in config — inform the user
+            info!(
+                "Using domains from CLI: {:?} (not set in config file)",
+                domains
+            );
         }
 
         // Option fields: simple merge (CLI wins if set)
@@ -614,15 +741,18 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         if dns_hook.is_none() { dns_hook.clone_from(&cfg_run.dns_hook); }
         if dns_wait.is_none() { *dns_wait = cfg_run.dns_wait; }
         if days.is_none() { *days = cfg_run.days; }
-        if key_password_file.is_none() { key_password_file.clone_from(&cfg_run.key_password_file); }
         if on_challenge_ready.is_none() { on_challenge_ready.clone_from(&cfg_run.on_challenge_ready); }
         if on_cert_issued.is_none() { on_cert_issued.clone_from(&cfg_run.on_cert_issued); }
-        if eab_kid.is_none() { eab_kid.clone_from(&cfg_run.eab_kid); }
-        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_run.eab_hmac_key); }
         if !*pre_authorize { if cfg_run.pre_authorize == Some(true) { *pre_authorize = true; } }
         if !*ari { if cfg_run.ari == Some(true) { *ari = true; } }
         if persist_policy.is_none() { persist_policy.clone_from(&cfg_run.persist_policy); }
         if persist_until.is_none() { *persist_until = cfg_run.persist_until; }
+
+        // Secrets ALLOWED from env even in config mode:
+        //   key_password_file, eab_kid, eab_hmac_key
+        if key_password_file.is_none() { key_password_file.clone_from(&cfg_run.key_password_file); }
+        if eab_kid.is_none() { eab_kid.clone_from(&cfg_run.eab_kid); }
+        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_run.eab_hmac_key); }
     }
 
     // Account subcommand options
@@ -639,16 +769,17 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
                 *contact = v.clone();
             }
         }
+        // Secrets — allowed from env in config mode
         if eab_kid.is_none() { eab_kid.clone_from(&cfg_acct.eab_kid); }
         if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_acct.eab_hmac_key); }
     }
 }
 
-async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches) -> Result<()> {
+async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, config_mode: bool) -> Result<()> {
     let fmt = cli.output_format;
     match &cli.command {
         Commands::GenerateConfig => cmd_generate_config(),
-        Commands::ShowConfig { verbose } => cmd_show_config(&cli, loaded_config, matches, *verbose),
+        Commands::ShowConfig { verbose } => cmd_show_config(&cli, loaded_config, matches, *verbose, config_mode),
         Commands::GenerateKey { algorithm } => cmd_generate_key(&cli.account_key, *algorithm, fmt),
         Commands::Account { contact, agree_tos, eab_kid, eab_hmac_key } => {
             cmd_account(&cli, contact.clone(), *agree_tos, eab_kid.as_deref(), eab_hmac_key.as_deref()).await
@@ -665,8 +796,9 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
         }
         Commands::Finalize {
             finalize_url,
+            cert_key_algorithm,
             domains,
-        } => cmd_finalize(&cli, finalize_url, domains).await,
+        } => cmd_finalize(&cli, finalize_url, domains, *cert_key_algorithm).await,
         Commands::PollOrder { url } => cmd_poll_order(&cli, url).await,
         Commands::DownloadCert { url, output } => {
             cmd_download_cert(&cli, url, output).await
@@ -703,6 +835,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             ari,
             persist_policy,
             persist_until,
+            cert_key_algorithm,
         } => {
             anyhow::ensure!(!domains.is_empty(), "at least one domain is required (pass on CLI or set [run].domains in config)");
             cmd_run(
@@ -727,6 +860,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 *ari,
                 persist_policy.as_deref(),
                 *persist_until,
+                *cert_key_algorithm,
             )
             .await
         }
@@ -767,7 +901,7 @@ async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     Ok(client)
 }
 
-fn generate_csr(domains: &[String]) -> Result<(Vec<u8>, String)> {
+fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, String)> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
     let mut params =
@@ -775,7 +909,11 @@ fn generate_csr(domains: &[String]) -> Result<(Vec<u8>, String)> {
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, domains[0].clone());
     params.distinguished_name = dn;
-    let key_pair = KeyPair::generate().context("failed to generate CSR key pair")?;
+    let key_pair = match alg {
+        CertKeyAlgorithm::EcP256 => KeyPair::generate(),
+        CertKeyAlgorithm::EcP384 => KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384),
+        CertKeyAlgorithm::Ed25519 => KeyPair::generate_for(&rcgen::PKCS_ED25519),
+    }.context("failed to generate CSR key pair")?;
     let key_pem = key_pair.serialize_pem();
     let csr = params
         .serialize_request(&key_pair)
@@ -808,25 +946,26 @@ fn cmd_generate_config() -> Result<()> {
     Ok(())
 }
 
-fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, verbose: bool) -> Result<()> {
+fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, verbose: bool, config_mode: bool) -> Result<()> {
     use clap::parser::ValueSource;
 
     let json = cli.output_format == OutputFormat::Json;
 
     let config_path = if let Some(ref p) = cli.config {
         Some(p.display().to_string())
-    } else if std::path::Path::new(config::DEFAULT_CONFIG_FILE).exists() {
-        Some(config::DEFAULT_CONFIG_FILE.to_string())
     } else {
         None
     };
     let has_config = loaded_config.is_some();
 
-    // Determine source of a global option
+    // In the new model, sources are simpler:
+    //   config_mode: CLI > config > default (env ignored except secrets)
+    //   no config:   CLI > env > default
     let global_source = |id: &str, has_config_val: bool| -> &'static str {
         match matches.value_source(id) {
             Some(ValueSource::CommandLine) => "cli",
-            Some(ValueSource::EnvVariable) if has_config_val => "config",
+            Some(ValueSource::EnvVariable) if config_mode && has_config_val => "config",
+            Some(ValueSource::EnvVariable) if config_mode => "default",
             Some(ValueSource::EnvVariable) => "env",
             Some(ValueSource::DefaultValue) if has_config_val => "config",
             Some(ValueSource::DefaultValue) => "default",
@@ -855,6 +994,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
         let mut obj = serde_json::json!({
             "command": "show-config",
             "config_file": config_path,
+            "config_mode": config_mode,
             "verbose": verbose,
         });
 
@@ -895,20 +1035,22 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "ari": { "value": r.ari.unwrap_or(false) },
                 "persist_policy": { "value": r.persist_policy },
                 "persist_until": { "value": r.persist_until },
+                "cert_key_algorithm": { "value": r.cert_key_algorithm.as_deref().unwrap_or("ec-p256") },
             });
             if verbose {
                 for key in ["domains", "contact", "challenge_type", "http_port", "challenge_dir",
                     "dns_hook", "dns_wait", "cert_output", "key_output", "days",
                     "key_password_file", "on_challenge_ready", "on_cert_issued",
                     "eab_kid", "eab_hmac_key", "pre_authorize", "ari",
-                    "persist_policy", "persist_until"]
+                    "persist_policy", "persist_until", "cert_key_algorithm"]
                 {
                     let has = !rv[key]["value"].is_null()
                         && rv[key]["value"] != serde_json::json!(false)
                         && rv[key]["value"] != serde_json::json!("http-01")
                         && rv[key]["value"] != serde_json::json!(80)
                         && rv[key]["value"] != serde_json::json!("certificate.pem")
-                        && rv[key]["value"] != serde_json::json!("private.key");
+                        && rv[key]["value"] != serde_json::json!("private.key")
+                        && rv[key]["value"] != serde_json::json!("ec-p256");
                     rv[key]["source"] = serde_json::json!(cfg_source(has));
                 }
             }
@@ -929,7 +1071,10 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
         }
         println!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        println!("# Effective configuration (merged from all sources)");
+        println!("# Effective configuration");
+        if config_mode {
+            println!("# Mode: config file (env vars ignored except secrets)");
+        }
         if verbose {
             println!("# Source annotations: (cli) (env) (config) (default)");
         }
@@ -977,6 +1122,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             println!("  ari                = {}{}", opt_bool(r.ari), src(cfg_source(r.ari.is_some())));
             println!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
             println!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
+            println!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
         } else if !has_config {
             println!();
             println!("[run]");
@@ -1204,9 +1350,9 @@ async fn cmd_show_dns_persist01(
     Ok(())
 }
 
-async fn cmd_finalize(cli: &Cli, finalize_url: &str, domains: &[String]) -> Result<()> {
+async fn cmd_finalize(cli: &Cli, finalize_url: &str, domains: &[String], cert_key_alg: CertKeyAlgorithm) -> Result<()> {
     let mut client = build_client(cli).await?;
-    let (csr_der, _key_pem) = generate_csr(domains)?;
+    let (csr_der, _key_pem) = generate_csr(domains, cert_key_alg)?;
     let order = client.finalize_order(finalize_url, &csr_der).await?;
     if cli.output_format == OutputFormat::Json {
         println!("{}", serde_json::json!({
@@ -1515,6 +1661,7 @@ async fn cmd_run(
     ari: bool,
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
+    cert_key_alg: CertKeyAlgorithm,
 ) -> Result<()> {
     // ── 0. Renewal check ────────────────────────────────────────────────
     let json = cli.output_format == OutputFormat::Json;
@@ -2364,7 +2511,7 @@ async fn cmd_run(
 
     // ── Finalize ────────────────────────────────────────────────────────
     info!("Step {}: Finalizing order", if pre_authorize { 5 } else { 4 });
-    let (csr_der, key_pem) = generate_csr(&domains)?;
+    let (csr_der, key_pem) = generate_csr(&domains, cert_key_alg)?;
     let finalize_url = order.finalize.clone();
     let mut order = client.finalize_order(&finalize_url, &csr_der).await?;
     if !json {

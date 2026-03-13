@@ -80,6 +80,8 @@ pub struct RunConfig {
     pub persist_until: Option<u64>,
     /// Domain names.
     pub domains: Option<Vec<String>>,
+    /// Certificate key algorithm: "ec-p256", "ec-p384", or "ed25519".
+    pub cert_key_algorithm: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -106,15 +108,9 @@ impl Config {
         Ok(config)
     }
 
-    /// Try to load the default config file from the current directory.
-    /// Returns `None` if the file does not exist (not an error).
-    pub fn load_default() -> Result<Option<Self>> {
-        let path = Path::new(DEFAULT_CONFIG_FILE);
-        if path.exists() {
-            Ok(Some(Self::load(path)?))
-        } else {
-            Ok(None)
-        }
+    /// Check whether the default config file exists in the current directory.
+    pub fn default_exists() -> bool {
+        Path::new(DEFAULT_CONFIG_FILE).exists()
     }
 }
 
@@ -123,11 +119,14 @@ impl Config {
 /// Return a fully commented TOML config template.
 pub fn generate_template() -> &'static str {
     r#"# acme-client-rs configuration file
-# All fields are optional. CLI flags override config file values.
-# Priority: CLI flags > config file > environment variables > built-in defaults.
+# All fields are optional. CLI flags always override config file values.
 #
-# Place this file in the working directory as "acme-client-rs.toml" for auto-loading,
-# or specify a path with --config <PATH>.
+# When a config file is loaded (--config or ACME_CONFIG), environment variables
+# are IGNORED except for secrets: key passwords, EAB credentials, and --insecure.
+# Priority with config: CLI flags > config file > built-in defaults.
+# Priority without config: CLI flags > environment variables > built-in defaults.
+#
+# Load this file with --config <PATH> or set ACME_CONFIG=<PATH>.
 
 # ── Global options ───────────────────────────────────────────────────────────
 # These apply to all subcommands.
@@ -153,6 +152,7 @@ pub fn generate_template() -> &'static str {
 
 # Output format: "text" (human-readable) or "json" (machine-readable).
 # CLI: --output-format
+# Env: ACME_OUTPUT_FORMAT
 # Default: "text"
 # output_format = "json"
 
@@ -222,10 +222,12 @@ pub fn generate_template() -> &'static str {
 # Path to a file containing the password to encrypt the private key
 # (PKCS#8 + AES-256-CBC with scrypt KDF). First line is used, trailing newline stripped.
 # CLI: --key-password-file
+# Env: ACME_KEY_PASSWORD_FILE
 # key_password_file = "/etc/acme/key-password.txt"
 
 # Hook script run after each challenge is set up and ready for validation.
-# Environment variables: ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN, ACME_KEY_AUTH.
+# Environment variables: ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN, ACME_KEY_AUTH,
+# ACME_TXT_NAME (dns-01/dns-persist-01), ACME_TXT_VALUE (dns-01/dns-persist-01).
 # CLI: --on-challenge-ready
 # on_challenge_ready = "/usr/local/bin/reload-nginx.sh"
 
@@ -237,11 +239,13 @@ pub fn generate_template() -> &'static str {
 # EAB Key ID from the CA (for CAs that require External Account Binding).
 # Must be set together with eab_hmac_key.
 # CLI: --eab-kid
+# Env: ACME_EAB_KID
 # eab_kid = "kid-from-ca"
 
 # EAB HMAC key (base64url-encoded, from the CA).
 # Must be set together with eab_kid.
 # CLI: --eab-hmac-key
+# Env: ACME_EAB_HMAC_KEY
 # eab_hmac_key = "base64url-encoded-hmac-key"
 
 # Pre-authorize identifiers via newAuthz before creating the order
@@ -265,6 +269,12 @@ pub fn generate_template() -> &'static str {
 # CLI: --persist-until
 # persist_until = 1767225600
 
+# Certificate key algorithm for CSR generation.
+# Supported values: "ec-p256" (ECDSA P-256), "ec-p384" (ECDSA P-384), "ed25519".
+# CLI: --cert-key-algorithm
+# Default: "ec-p256"
+# cert_key_algorithm = "ec-p256"
+
 # ── Account subcommand options ───────────────────────────────────────────────
 # These apply when using `acme-client-rs account`.
 
@@ -276,10 +286,12 @@ pub fn generate_template() -> &'static str {
 
 # EAB Key ID from the CA.
 # CLI: --eab-kid
+# Env: ACME_EAB_KID
 # eab_kid = "kid-from-ca"
 
 # EAB HMAC key (base64url-encoded, from the CA).
 # CLI: --eab-hmac-key
+# Env: ACME_EAB_HMAC_KEY
 # eab_hmac_key = "base64url-encoded-hmac-key"
 "#
 }

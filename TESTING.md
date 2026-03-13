@@ -61,7 +61,7 @@ acme generate-key --account-key test-account.key
 
 **Expected:**
 - Exit code: 0
-- Output: `es256 account key saved to test-account.key`
+- Output: `ES256 account key saved to test-account.key`
 - File `test-account.key` is created containing a PEM-encoded EC private key
 
 **Verify:**
@@ -243,7 +243,15 @@ acme --account-key test-account.key serve-http01 --token dummy --port 5002
 
 **Expected:**
 - Exit code: 1
-- Error message: `Error: failed to bind HTTP-01 server on port 5002: ...`
+- Error message:
+  ```
+  Error: port 5002 is already in use (reverse proxy or other server?)
+
+  Hint: use --challenge-dir <DIR> to write the challenge file
+  to a directory your existing web server already serves, e.g.:
+
+  acme-client-rs run example.com --challenge-dir /var/www/html
+  ```
 
 ---
 
@@ -849,10 +857,16 @@ acme --insecure --account-key test-account.key show-dns-persist01 --domain test.
 - Exit code: 0
 - Output:
   ```
-  === DNS-PERSIST-01 Record ===
-  Name:  _validation-persist.test.example.com
-  Type:  TXT
-  Value: letsencrypt.org; accounturi=https://localhost:14000/my-account/<id>
+
+  === DNS-PERSIST-01 Challenge ===
+  Create a DNS TXT record:
+    Name:  _validation-persist.test.example.com
+    Type:  TXT
+    Value: letsencrypt.org; accounturi=https://localhost:14000/my-account/<id>
+
+  This record is persistent - it can be reused for future issuances.
+  Unlike dns-01, it does not need to change per issuance.
+
   ```
 - Command exits immediately (display only, no interactive wait)
 
@@ -1060,6 +1074,65 @@ acme --config bad-field.toml show-config
 
 ---
 
+## TC-58: Finalize with ec-p384 Certificate Key
+
+**Goal:** Verify `--cert-key-algorithm ec-p384` generates a P-384 CSR key.
+
+```sh
+acme --insecure --account-key test-account.key --account-url <account-url> finalize --finalize-url <finalize-url> --cert-key-algorithm ec-p384 test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- Output: `Order status: valid` (or `processing`)
+- The issued certificate contains a P-384 public key
+
+---
+
+## TC-59: Finalize with ed25519 Certificate Key
+
+**Goal:** Verify `--cert-key-algorithm ed25519` generates an Ed25519 CSR key.
+
+```sh
+acme --insecure --account-key test-account.key --account-url <account-url> finalize --finalize-url <finalize-url> --cert-key-algorithm ed25519 test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- Output: `Order status: valid` (or `processing`)
+- The issued certificate contains an Ed25519 public key
+
+---
+
+## TC-60: Run with ec-p384 Certificate Key (e2e)
+
+**Goal:** Verify `run --cert-key-algorithm ec-p384` issues a certificate with a P-384 key.
+
+```sh
+acme --insecure --account-key test-account.key run --challenge-type http-01 --cert-output cert-p384.pem --key-output key-p384.key --cert-key-algorithm ec-p384 test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- Certificate issued successfully
+- `key-p384.key` contains a P-384 private key (PKCS#8 PEM)
+
+---
+
+## TC-61: Invalid Certificate Key Algorithm
+
+**Goal:** Verify an unsupported `--cert-key-algorithm` value is rejected.
+
+```sh
+acme --insecure --account-key test-account.key finalize --finalize-url <finalize-url> --cert-key-algorithm rsa-2048 test.example.com
+```
+
+**Expected:**
+- Exit code: 2 (clap argument error)
+- Error message mentions invalid value for `--cert-key-algorithm`
+
+---
+
 ## Summary Matrix
 
 | TC | Command | Challenge | Expectation |
@@ -1121,6 +1194,10 @@ acme --config bad-field.toml show-config
 | 55 | Config CLI override priority | - | CLI wins over config |
 | 56 | Config invalid TOML | - | Clear error |
 | 57 | Config unknown field | - | Rejected |
+| 58 | `finalize` + ec-p384 | - | P-384 CSR submitted |
+| 59 | `finalize` + ed25519 | - | Ed25519 CSR submitted |
+| 60 | `run` + ec-p384 (e2e) | HTTP-01 | P-384 cert issued |
+| 61 | Invalid cert key algo | - | Rejected by clap |
 
 ---
 
