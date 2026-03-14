@@ -1217,6 +1217,7 @@ Global options can be placed before or after the subcommand.
 | `--dns-hook <SCRIPT>` | - | Path to a DNS-01 hook script (called with `ACME_ACTION=create\|cleanup`) |
 | `--dns-wait <SECONDS>` | - | Wait up to N seconds for DNS TXT propagation (polls every 5s) |
 | `--dns-propagation-concurrency <N>` | `5` | Max concurrent DNS propagation checks when using `--dns-hook` with multiple domains |
+| `--challenge-timeout <SECONDS>` | `300` | Max seconds to wait for challenge validation after responding (polls every 2s) |
 | `--cert-output <PATH>` | `certificate.pem` | Save the certificate to this file |
 | `--key-output <PATH>` | `private.key` | Save the private key to this file |
 | `--days <N>` | - | **Renewal mode:** skip issuance if existing `--cert-output` has more than N days remaining. Use this to make `run` idempotent for cron/scheduled tasks. |

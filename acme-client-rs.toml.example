@@ -90,6 +90,12 @@
 # Default: 5
 # dns_propagation_concurrency = 5
 
+# Maximum seconds to wait for challenge validation after responding.
+# Applies to all challenge types. Polls every 2 seconds until valid or timeout.
+# CLI: --challenge-timeout
+# Default: 300
+# challenge_timeout = 300
+
 # Path to save the issued certificate (PEM format, end-entity + intermediates).
 # CLI: --cert-output
 # Default: "certificate.pem"

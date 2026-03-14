@@ -56,6 +56,8 @@ pub struct RunConfig {
     pub dns_wait: Option<u64>,
     /// Max concurrent DNS propagation checks.
     pub dns_propagation_concurrency: Option<usize>,
+    /// Max seconds to wait for challenge validation.
+    pub challenge_timeout: Option<u64>,
     /// Save the certificate to this file.
     pub cert_output: Option<PathBuf>,
     /// Save the private key to this file.
@@ -211,6 +213,12 @@ pub fn generate_template() -> &'static str {
 # CLI: --dns-propagation-concurrency
 # Default: 5
 # dns_propagation_concurrency = 5
+
+# Maximum seconds to wait for challenge validation after responding.
+# Applies to all challenge types. Polls every 2 seconds until valid or timeout.
+# CLI: --challenge-timeout
+# Default: 300
+# challenge_timeout = 300
 
 # Path to save the issued certificate (PEM format, end-entity + intermediates).
 # CLI: --cert-output

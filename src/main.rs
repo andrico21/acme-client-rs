@@ -468,6 +468,9 @@ Examples:
         /// Max concurrent DNS propagation checks (default: 5)
         #[arg(long, default_value = "5")]
         dns_propagation_concurrency: usize,
+        /// Max seconds to wait for challenge validation (default: 300)
+        #[arg(long, default_value_t = 300)]
+        challenge_timeout: u64,
         /// Save the certificate to this file
         #[arg(long, default_value = "certificate.pem")]
         cert_output: PathBuf,
@@ -680,6 +683,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         ref mut dns_hook,
         ref mut dns_wait,
         ref mut dns_propagation_concurrency,
+        ref mut challenge_timeout,
         ref mut cert_output,
         ref mut key_output,
         ref mut days,
@@ -747,6 +751,9 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         if dns_wait.is_none() { *dns_wait = cfg_run.dns_wait; }
         if *dns_propagation_concurrency == 5 {
             if let Some(v) = cfg_run.dns_propagation_concurrency { *dns_propagation_concurrency = v; }
+        }
+        if *challenge_timeout == 300 {
+            if let Some(v) = cfg_run.challenge_timeout { *challenge_timeout = v; }
         }
         if days.is_none() { *days = cfg_run.days; }
         if on_challenge_ready.is_none() { on_challenge_ready.clone_from(&cfg_run.on_challenge_ready); }
@@ -831,6 +838,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             dns_hook,
             dns_wait,
             dns_propagation_concurrency,
+            challenge_timeout,
             cert_output,
             key_output,
             days,
@@ -857,6 +865,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 dns_hook.as_deref(),
                 *dns_wait,
                 *dns_propagation_concurrency,
+                *challenge_timeout,
                 cert_output,
                 key_output,
                 *days,
@@ -1034,6 +1043,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "dns_hook": { "value": r.dns_hook.as_ref().map(|p| p.display().to_string()) },
                 "dns_wait": { "value": r.dns_wait },
                 "dns_propagation_concurrency": { "value": r.dns_propagation_concurrency },
+                "challenge_timeout": { "value": r.challenge_timeout.unwrap_or(300) },
                 "cert_output": { "value": r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()) },
                 "key_output": { "value": r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()) },
                 "days": { "value": r.days },
@@ -1122,6 +1132,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             println!("  dns_hook           = {}{}", opt_path(&r.dns_hook), src(cfg_source(r.dns_hook.is_some())));
             println!("  dns_wait           = {}{}", opt_u64(r.dns_wait), src(cfg_source(r.dns_wait.is_some())));
             println!("  dns_propagation_concurrency = {}{}", r.dns_propagation_concurrency.unwrap_or(5), src(cfg_source(r.dns_propagation_concurrency.is_some())));
+            println!("  challenge_timeout  = {}{}", r.challenge_timeout.unwrap_or(300), src(cfg_source(r.challenge_timeout.is_some())));
             println!("  cert_output        = {}{}", r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()), src(cfg_source(r.cert_output.is_some())));
             println!("  key_output         = {}{}", r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()), src(cfg_source(r.key_output.is_some())));
             println!("  days               = {}{}", opt_u32(r.days), src(cfg_source(r.days.is_some())));
@@ -1661,6 +1672,7 @@ async fn cmd_run(
     dns_hook: Option<&std::path::Path>,
     dns_wait: Option<u64>,
     dns_propagation_concurrency: usize,
+    challenge_timeout: u64,
     cert_output: &std::path::Path,
     key_output: &std::path::Path,
     days: Option<u32>,
@@ -2061,15 +2073,15 @@ async fn cmd_run(
                 other => anyhow::bail!("unsupported challenge type: {other}"),
             }
 
-            // Poll authorization until valid (max 5 minutes)
+            // Poll authorization until valid (max challenge_timeout)
             let poll_deadline =
-                std::time::Instant::now() + std::time::Duration::from_secs(300);
+                std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
             loop {
                 if std::time::Instant::now() > poll_deadline {
                     if let Some(handle) = serve_task.take() { handle.abort(); }
                     if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
                     anyhow::bail!(
-                        "pre-authorization for {} did not complete within 5 minutes",
+                        "pre-authorization for {} did not complete within {challenge_timeout}s",
                         domain_display
                     );
                 }
@@ -2354,7 +2366,7 @@ async fn cmd_run(
             // Phase 4: Poll all authorizations until valid (serial)
             for p in &pending {
                 let poll_deadline =
-                    std::time::Instant::now() + std::time::Duration::from_secs(300);
+                    std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
                 loop {
                     if std::time::Instant::now() > poll_deadline {
                         // Clean up remaining records
@@ -2367,7 +2379,7 @@ async fn cmd_run(
                                 .status();
                         }
                         anyhow::bail!(
-                            "authorization for {} did not complete within 5 minutes",
+                            "authorization for {} did not complete within {challenge_timeout}s",
                             p.domain
                         );
                     }
@@ -2714,9 +2726,9 @@ async fn cmd_run(
             other => anyhow::bail!("unsupported challenge type: {other}"),
         }
 
-        // Poll authorization until terminal (max 5 minutes)
+        // Poll authorization until terminal (max challenge_timeout)
         let poll_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(300);
+            std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
         loop {
             if std::time::Instant::now() > poll_deadline {
                 if let Some(handle) = serve_task.take() {
@@ -2726,7 +2738,7 @@ async fn cmd_run(
                     challenge::http01::cleanup_challenge_file(f);
                 }
                 anyhow::bail!(
-                    "authorization for {} did not complete within 5 minutes",
+                    "authorization for {} did not complete within {challenge_timeout}s",
                     authz.identifier.value
                 );
             }

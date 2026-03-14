@@ -1216,6 +1216,8 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--challenge-dir <PATH>` | - | Записывать файлы HTTP-01 вызовов сюда вместо запуска сервера |
 | `--dns-hook <SCRIPT>` | - | Путь к hook-скрипту DNS-01 (вызывается с `ACME_ACTION=create\|cleanup`) |
 | `--dns-wait <SECONDS>` | - | Ждать до N секунд распространения DNS TXT (опрос каждые 5 с) |
+| `--dns-propagation-concurrency <N>` | `5` | Максимум параллельных проверок распространения DNS при использовании `--dns-hook` с несколькими доменами |
+| `--challenge-timeout <SECONDS>` | `300` | Максимум секунд ожидания валидации challenge после отправки ответа (опрос каждые 2 с) |
 | `--cert-output <PATH>` | `certificate.pem` | Сохранить сертификат в этот файл |
 | `--key-output <PATH>` | `private.key` | Сохранить закрытый ключ в этот файл |
 | `--days <N>` | - | **Режим продления:** пропустить выпуск, если у существующего `--cert-output` осталось более N дней. Используйте для идемпотентности `run` в cron/планировщике. |
