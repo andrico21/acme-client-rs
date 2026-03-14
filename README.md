@@ -1,5 +1,7 @@
 # acme-client-rs
 
+[![Build](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
+
 A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9702](https://www.rfc-editor.org/rfc/rfc9702) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary with zero runtime dependencies.
 
 Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX), and structured JSON output for CI/CD integration.
