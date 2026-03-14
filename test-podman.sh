@@ -208,7 +208,7 @@ podman run -d \
   -e PEBBLE_VA_ALWAYS_VALID=1 \
   -e PEBBLE_WFE_NONCEREJECT=0 \
   "${PEBBLE_IMAGE}" \
-  pebble -config /test/config/pebble-config.json -strict
+  -strict
 log_info "Pebble ACME server started"
 
 # ═════════════════════════════════════════════════════════════════════════════
