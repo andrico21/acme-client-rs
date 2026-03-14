@@ -1346,6 +1346,56 @@ fi
 
 unset DNS_HOOK_LOG
 
+# ── TC-40d: Multi-domain DNS-01 hook cleanup on propagation timeout ─────────
+
+log_test "40d" "Multi-domain DNS-01 hook cleanup on propagation timeout (3 domains)"
+DNS_HOOK4_LOG="${WORK_DIR}/dns-hook4.log"
+export DNS_HOOK_LOG="${DNS_HOOK4_LOG}"
+
+DNS_HOOK4_KEY="${WORK_DIR}/dns-hook4.key"
+acme generate-key --account-key "${DNS_HOOK4_KEY}" >/dev/null 2>&1
+
+# Multi-SAN order with --dns-wait 1 — propagation will fail for all 3 domains
+# The parallel path must clean up ALL created records before bailing
+set +e
+OUTPUT=$(acme --account-key "${DNS_HOOK4_KEY}" run \
+  --contact dns-hook4@example.com \
+  --challenge-type dns-01 \
+  --dns-hook "${DNS_HOOK}" \
+  --dns-wait 1 \
+  "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
+RC=$?
+set -e
+
+if [[ -f "${DNS_HOOK4_LOG}" ]]; then
+  CREATE_COUNT=$(grep -c "action=create" "${DNS_HOOK4_LOG}" || true)
+  CLEANUP_COUNT=$(grep -c "action=cleanup" "${DNS_HOOK4_LOG}" || true)
+  echo "  Hook calls: create=${CREATE_COUNT} cleanup=${CLEANUP_COUNT}"
+  echo "  Exit code: ${RC} (expected non-zero — propagation timeout)"
+  cat "${DNS_HOOK4_LOG}" | sed 's/^/    /'
+
+  if [[ ${CREATE_COUNT} -ge 3 ]]; then
+    pass "DNS hook create called for all 3 domains (${CREATE_COUNT} time(s))"
+  else
+    fail "40d" "Expected at least 3 create calls, got ${CREATE_COUNT}"
+  fi
+  if [[ ${CLEANUP_COUNT} -ge 3 ]]; then
+    pass "DNS hook cleanup called for all 3 domains on error (${CLEANUP_COUNT} time(s))"
+  else
+    fail "40d" "Expected at least 3 cleanup calls on error, got ${CLEANUP_COUNT}"
+  fi
+  if [[ ${RC} -ne 0 ]]; then
+    pass "Command failed as expected (propagation timeout)"
+  else
+    fail "40d" "Expected non-zero exit code but got 0"
+  fi
+else
+  fail "40d" "Hook log not created at all (exit code ${RC})"
+  echo "  Output: ${OUTPUT}"
+fi
+
+unset DNS_HOOK_LOG
+
 # ═════════════════════════════════════════════════════════════════════════════
 # SECTION 15: Cert/Key Output Path Tests
 # ═════════════════════════════════════════════════════════════════════════════
