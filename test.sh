@@ -1154,25 +1154,17 @@ DNS01_PRIVKEY="${WORK_DIR}/dns01-e2e-private.key"
 
 acme generate-key --account-key "${DNS01_KEY}" >/dev/null 2>&1
 
-echo ""
-echo -e "${YELLOW}══════════════════════════════════════════════════════════════${NC}"
-echo -e "${YELLOW}  DNS-01 test requires manual TXT record setup.${NC}"
-echo -e "${YELLOW}  The ACME client will display the required TXT record.${NC}"
-echo -e "${YELLOW}  Add it in DNS, then press Enter in the client prompt.${NC}"
-echo -e "${YELLOW}══════════════════════════════════════════════════════════════${NC}"
-echo ""
-echo -e "${BOLD}Running DNS-01 flow for: ${SINGLE_DOMAIN}${NC}"
-echo -e "The client will pause and show the TXT record to create."
-echo -e "Add the record, then press Enter when prompted by the client."
-echo ""
+echo -e "  ${GREEN}✓${NC} Pebble auto-validates DNS-01 — piping Enter to confirm prompt"
 
-OUTPUT=$(acme --account-key "${DNS01_KEY}" run \
+set +e
+OUTPUT=$(echo "" | acme --account-key "${DNS01_KEY}" run \
   --contact dns01@example.com \
   --challenge-type dns-01 \
   --cert-output "${DNS01_CERT}" \
   --key-output "${DNS01_PRIVKEY}" \
   "${SINGLE_DOMAIN}" 2>&1)
 RC=$?
+set -e
 
 if [[ ${RC} -eq 0 ]] && [[ -f "${DNS01_CERT}" ]]; then
   if grep -q "BEGIN CERTIFICATE" "${DNS01_CERT}"; then
@@ -1207,16 +1199,7 @@ DNS_HOOK_PRIVKEY="${WORK_DIR}/dns-hook-private.key"
 
 acme generate-key --account-key "${DNS_HOOK_KEY}" >/dev/null 2>&1
 
-echo ""
-echo -e "${YELLOW}══════════════════════════════════════════════════════════════${NC}"
-echo -e "${YELLOW}  DNS-01 hook test: the hook script will log create/cleanup.${NC}"
-echo -e "${YELLOW}  The ACME server must validate the DNS-01 challenge.${NC}"
-echo -e "${YELLOW}  The hook does NOT actually create DNS records.${NC}"
-echo -e "${YELLOW}  If the server requires real DNS validation, this test${NC}"
-echo -e "${YELLOW}  will fail - that is expected without auto-validation.${NC}"
-echo -e "${YELLOW}══════════════════════════════════════════════════════════════${NC}"
-echo ""
-
+set +e
 OUTPUT=$(acme --account-key "${DNS_HOOK_KEY}" run \
   --contact dns-hook@example.com \
   --challenge-type dns-01 \
@@ -1224,8 +1207,9 @@ OUTPUT=$(acme --account-key "${DNS_HOOK_KEY}" run \
   --dns-wait 5 \
   --cert-output "${DNS_HOOK_CERT}" \
   --key-output "${DNS_HOOK_PRIVKEY}" \
-  "${SINGLE_DOMAIN}" 2>&1 || true)
+  "${SINGLE_DOMAIN}" 2>&1)
 RC=$?
+set -e
 
 if [[ -f "${DNS_HOOK_LOG}" ]]; then
   if grep -q "action=create" "${DNS_HOOK_LOG}"; then
