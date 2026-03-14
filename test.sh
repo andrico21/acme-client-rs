@@ -376,23 +376,22 @@ CHALLENGE_DIR="${WORK_DIR}/challenge-dir"
 mkdir -p "${CHALLENGE_DIR}"
 CHDIR_TOKEN="test-token-filedir"
 
-# challenge-dir + serve-http01 writes the file and waits for Enter
-# We pipe a newline to stdin to unblock it
-echo "" | acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
-  --challenge-dir "${CHALLENGE_DIR}" 2>&1 || true
+# Run in background — it writes the file then waits for Enter
+acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
+  --challenge-dir "${CHALLENGE_DIR}" </dev/null &
+CHDIR_PID=$!
+sleep 2
 
 CHALLENGE_FILE="${CHALLENGE_DIR}/.well-known/acme-challenge/${CHDIR_TOKEN}"
-if [[ -f "${CHALLENGE_FILE}" ]] || ls "${CHALLENGE_DIR}"/*"${CHDIR_TOKEN}"* 2>/dev/null; then
+if [[ -f "${CHALLENGE_FILE}" ]]; then
   pass "Challenge file written to challenge-dir"
 else
-  # The file may be just the token name in the dir
-  if ls "${CHALLENGE_DIR}/${CHDIR_TOKEN}" 2>/dev/null; then
-    pass "Challenge file written as ${CHDIR_TOKEN}"
-  else
-    fail "10b" "Challenge file not found in ${CHALLENGE_DIR}"
-    echo "  Contents: $(ls -la "${CHALLENGE_DIR}/")"
-  fi
+  fail "10b" "Challenge file not found in ${CHALLENGE_DIR}"
+  echo "  Contents: $(find "${CHALLENGE_DIR}" -type f 2>/dev/null)"
 fi
+
+kill ${CHDIR_PID} 2>/dev/null || true
+wait ${CHDIR_PID} 2>/dev/null || true
 
 # ── TC-11: Serve HTTP-01 - Port Already In Use ─────────────────────────────
 
@@ -404,8 +403,10 @@ python3 -m http.server ${BUSY_PORT} --bind 127.0.0.1 &>/dev/null &
 PYTHON_PID=$!
 sleep 1
 
-OUTPUT=$(acme_rc --account-key "${ACCT_KEY}" serve-http01 --token dummy --port ${BUSY_PORT} 2>&1 || true)
+set +e
+OUTPUT=$(acme_rc --account-key "${ACCT_KEY}" serve-http01 --token dummy --port ${BUSY_PORT} 2>&1)
 RC=$?
+set -e
 kill ${PYTHON_PID} 2>/dev/null || true
 wait ${PYTHON_PID} 2>/dev/null || true
 
@@ -508,7 +509,7 @@ if [[ -n "${MANUAL_FINALIZE_URL:-}" ]]; then
     finalize --finalize-url "${MANUAL_FINALIZE_URL}" "${SINGLE_DOMAIN}" 2>&1)
   if echo "${OUTPUT}" | grep -q "Order status:"; then
     pass "Finalize completed - $(echo "${OUTPUT}" | grep 'Order status' | head -1)"
-    MANUAL_CERT_URL=$(echo "${OUTPUT}" | grep "^Certificate URL:" | head -1 | sed 's/^Certificate URL:[[:space:]]*//')
+    MANUAL_CERT_URL=$(echo "${OUTPUT}" | grep "^Certificate URL:" | head -1 | sed 's/^Certificate URL:[[:space:]]*//' || true)
   else
     fail "13" "Finalize failed"
     echo "  Output: ${OUTPUT}"

@@ -7,7 +7,8 @@
 #
 # Usage:
 #   chmod +x test-podman.sh
-#   ./test-podman.sh
+#   ./test-podman.sh              # full build + test
+#   ./test-podman.sh --no-build   # skip build, reuse existing binary
 #
 # What this script does:
 #   1. Builds acme-client-rs inside a container (static musl binary)
@@ -20,6 +21,15 @@
 # no docker-compose, nothing except podman is required on the host.
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
+
+# ── CLI flags ─────────────────────────────────────────────────────────────────
+
+SKIP_BUILD=false
+for arg in "$@"; do
+  case "${arg}" in
+    --no-build) SKIP_BUILD=true ;;
+  esac
+done
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 
@@ -146,10 +156,13 @@ log_info "sha256sum: $(sha256sum --version | head -1)"
 
 log_step "Step 1: Build acme-client-rs (containerized)"
 
-mkdir -p "${PROJECT_DIR}/target/release"
+if [[ "${SKIP_BUILD}" == "true" ]] && [[ -x "${PROJECT_DIR}/target/release/acme-client-rs" ]]; then
+  log_info "--no-build: reusing existing binary"
+else
+  mkdir -p "${PROJECT_DIR}/target/release"
 
-# Use a Containerfile inline via heredoc
-podman build -t acme-client-rs-builder -f - "${PROJECT_DIR}" <<'CONTAINERFILE'
+  # Use a Containerfile inline via heredoc
+  podman build -t acme-client-rs-builder -f - "${PROJECT_DIR}" <<'CONTAINERFILE'
 FROM docker.io/library/rust:alpine AS builder
 RUN apk add --no-cache build-base pkgconf openssl-dev openssl-libs-static perl make
 WORKDIR /src
@@ -159,12 +172,13 @@ RUN cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-
     && strip target/release/acme-client-rs
 CONTAINERFILE
 
-# Extract the binary from the builder image
-CONTAINER_ID=$(podman create acme-client-rs-builder)
-podman cp "${CONTAINER_ID}:/src/target/release/acme-client-rs" "${PROJECT_DIR}/target/release/acme-client-rs"
-podman rm "${CONTAINER_ID}" >/dev/null
-chmod +x "${PROJECT_DIR}/target/release/acme-client-rs"
-BINARY_BUILT=true
+  # Extract the binary from the builder image
+  CONTAINER_ID=$(podman create acme-client-rs-builder)
+  podman cp "${CONTAINER_ID}:/src/target/release/acme-client-rs" "${PROJECT_DIR}/target/release/acme-client-rs"
+  podman rm "${CONTAINER_ID}" >/dev/null
+  chmod +x "${PROJECT_DIR}/target/release/acme-client-rs"
+  BINARY_BUILT=true
+fi
 
 log_info "Binary built: $(file "${PROJECT_DIR}/target/release/acme-client-rs")"
 
