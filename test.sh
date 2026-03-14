@@ -1307,7 +1307,7 @@ fi
 
 log_test "50" "generate-key --output-format json"
 JSON_KEY="${WORK_DIR}/json-genkey.key"
-OUTPUT=$(acme --output-format json generate-key --account-key "${JSON_KEY}" 2>&1 | grep -v '^\d\{4\}-')
+OUTPUT=$(acme --output-format json generate-key --account-key "${JSON_KEY}" 2>/dev/null)
 if echo "${OUTPUT}" | grep -q '"command"'; then
   pass "JSON output contains 'command' field"
   if ${HAS_PYTHON3}; then
@@ -1336,7 +1336,7 @@ fi
 # ── TC-51: account --output-format json ─────────────────────────────────────
 
 log_test "51" "account --output-format json"
-OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" account --contact json@example.com 2>&1 | grep -vE '^[0-9]{4}-')
+OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" account --contact json@example.com 2>/dev/null)
 if echo "${OUTPUT}" | grep -q '"command"'; then
   pass "JSON output from account command"
   if ${HAS_PYTHON3}; then
@@ -1369,7 +1369,7 @@ log_test "52" "order --output-format json"
 JSON_ACCT_URL="${JSON_ACCT_URL:-}"
 if [[ -n "${JSON_ACCT_URL}" ]]; then
   OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" --account-url "${JSON_ACCT_URL}" \
-    order "${SINGLE_DOMAIN}" 2>&1 | grep -v '^\d\{4\}-')
+    order "${SINGLE_DOMAIN}" 2>/dev/null)
   if echo "${OUTPUT}" | grep -q '"command"'; then
     pass "JSON output from order command"
     if ${HAS_PYTHON3}; then
@@ -1402,7 +1402,7 @@ fi
 
 log_test "53" "show-dns01 --output-format json"
 OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" show-dns01 \
-  --domain "${SINGLE_DOMAIN}" --token "test-json-token" 2>&1 | grep -v '^\d\{4\}-')
+  --domain "${SINGLE_DOMAIN}" --token "test-json-token" 2>/dev/null)
 if echo "${OUTPUT}" | grep -q '"command"'; then
   pass "JSON output from show-dns01"
   if ${HAS_PYTHON3}; then
@@ -1439,7 +1439,7 @@ OUTPUT=$(acme --output-format json --account-key "${JSON_E2E_KEY}" run \
   --http-port 5002 \
   --cert-output "${JSON_E2E_CERT}" \
   --key-output "${JSON_E2E_PRIVKEY}" \
-  "${SINGLE_DOMAIN}" 2>&1 | grep -vE '^[0-9]{4}-')
+  "${SINGLE_DOMAIN}" 2>/dev/null)
 RC=$?
 
 if [[ ${RC} -eq 0 ]] && [[ -f "${JSON_E2E_CERT}" ]]; then
@@ -1483,7 +1483,7 @@ if [[ -f "${JSON_E2E_CERT}" ]]; then
     --cert-output "${JSON_E2E_CERT}" \
     --key-output "${JSON_E2E_PRIVKEY}" \
     --days 1 \
-    "${SINGLE_DOMAIN}" 2>&1 | grep -vE '^[0-9]{4}-')
+    "${SINGLE_DOMAIN}" 2>/dev/null)
   if echo "${OUTPUT}" | grep -q '"action":"skip"'; then
     pass "JSON renewal skip output contains action=skip"
     if ${HAS_PYTHON3}; then
