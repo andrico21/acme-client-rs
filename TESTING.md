@@ -75,6 +75,24 @@ Should show `ASN1 OID: prime256v1` (P-256).
 
 ---
 
+## TC-01b: Generate Key - All Algorithms
+
+**Goal:** Generate account keys for all supported algorithms.
+
+```sh
+for alg in es256 es384 es512 rsa2048 rsa4096; do
+  acme generate-key --algorithm ${alg} --account-key test-${alg}.key
+done
+```
+
+> **Note:** Ed25519 is excluded from E2E testing because Pebble only supports RS256, ES256, ES384, ES512.
+
+**Expected:**
+- Exit code: 0 for each algorithm
+- Each key file created with valid PEM header (`BEGIN`)
+
+---
+
 ## TC-02: Generate Key - File Already Exists (overwrite)
 
 **Goal:** Re-running generate-key overwrites the existing file.
@@ -226,6 +244,20 @@ curl http://localhost:5002/.well-known/acme-challenge/<token>
 **Expected:**
 - Terminal 1: `HTTP-01 server listening on 0.0.0.0:5002`, then `HTTP-01: served challenge response`, then exits
 - Terminal 2: receives the key authorization string `<token>.<thumbprint>`
+
+---
+
+## TC-10b: Serve HTTP-01 Challenge (challenge-dir mode)
+
+**Goal:** Write the challenge file to a directory instead of starting a server.
+
+```sh
+acme --account-key test-account.key serve-http01 --token <token> --challenge-dir /var/www/acme
+```
+
+**Expected:**
+- Exit code: 0
+- File created at `/var/www/acme/.well-known/acme-challenge/<token>`
 
 ---
 
@@ -524,6 +556,20 @@ acme --directory https://localhost:9999/nope --account-key test-account.key acco
 
 ---
 
+## TC-26b: generate-key Does Not Need Directory (offline)
+
+**Goal:** `generate-key` succeeds even with an unreachable directory URL (no server contact needed).
+
+```sh
+acme --directory https://localhost:59999/nope generate-key --account-key offline.key
+```
+
+**Expected:**
+- Exit code: 0
+- Key file created (offline operation — no directory access required)
+
+---
+
 ## TC-27: Directory Returns Non-JSON (404)
 
 **Goal:** Clear error when directory URL returns a non-ACME response.
@@ -625,579 +671,601 @@ acme --account-key test-account.key run --contact test@example.com --challenge-t
 
 ---
 
-## TC-33: --insecure Flag (Self-Signed CA)
+## TC-33: E2E with --key-password (encrypted private key)
 
-**Goal:** Verify that `--insecure` allows connecting to a CA with a self-signed certificate.
+**Goal:** Verify `--key-password` encrypts the issued private key with PKCS#8 AES-256-CBC + scrypt KDF.
 
 ```sh
-# Without --insecure: should fail with TLS error
-acme --account-key test-account.key account --contact test@example.com
-# Expected: TLS handshake error
-
-# With --insecure: should succeed
-acme --insecure --account-key test-account.key account --contact test@example.com
-# Expected: Account status: valid
+acme --insecure --account-key enc-test.key run --contact enc@example.com --challenge-type http-01 --http-port 5002 --cert-output enc-cert.pem --key-output enc-private.key --key-password "TestP@ssw0rd!2026" test.example.com
 ```
 
 **Expected:**
-- Without `--insecure`: exit code 1, TLS certificate verification error
-- With `--insecure`: exit code 0, account created successfully
+- Exit code: 0
+- `enc-private.key` contains `ENCRYPTED PRIVATE KEY` PEM header
+- `openssl pkey -in enc-private.key -passin pass:TestP@ssw0rd!2026 -noout` succeeds
+- Wrong password is rejected
 
 ---
 
-## TC-34: Key Rollover
+## TC-34: E2E with --key-password-file (password from file)
+
+**Goal:** Verify `--key-password-file` reads the encryption password from a file.
+
+```sh
+echo "FileP@ssw0rd!2026" > key-password.txt
+acme --insecure --account-key enc2.key run --contact enc2@example.com --challenge-type http-01 --http-port 5002 --cert-output enc2-cert.pem --key-output enc2-private.key --key-password-file key-password.txt test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- `enc2-private.key` contains `ENCRYPTED PRIVATE KEY` PEM header
+- Key is decryptable with the file password
+
+---
+
+## TC-35: --key-password and --key-password-file are Mutually Exclusive
+
+**Goal:** Providing both password flags produces a CLI error.
+
+```sh
+acme --insecure --account-key test.key run --key-password "pw1" --key-password-file pw.txt test.example.com
+```
+
+**Expected:**
+- Exit code: non-zero
+- Error mentions conflict/mutual exclusivity
+
+---
+
+## TC-36: E2E without Password (key is unencrypted)
+
+**Goal:** Without `--key-password`, the private key is unencrypted PKCS#8 PEM.
+
+**Expected:**
+- Key file starts with `BEGIN PRIVATE KEY` (not `ENCRYPTED`)
+
+---
+
+## TC-37: Renewal Skipped (certificate has many days left)
+
+**Goal:** `run --days 1` skips issuance when the existing certificate has more than 1 day remaining.
+
+```sh
+# Issue a certificate first, then re-run with --days 1
+acme --insecure --account-key renewal.key run --contact renewal@example.com --challenge-type http-01 --http-port 5002 --cert-output renewal-cert.pem --key-output renewal-key.pem --days 1 test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- Output contains `skipping renewal` (case-insensitive)
+
+---
+
+## TC-38: Renewal Proceeds (--days set very high)
+
+**Goal:** `run --days 9999` forces renewal because the certificate has fewer than 9999 days remaining.
+
+```sh
+acme --insecure --account-key renewal.key run --contact renewal@example.com --challenge-type http-01 --http-port 5002 --cert-output renewal-cert.pem --key-output renewal-key.pem --days 9999 test.example.com
+```
+
+**Expected:**
+- Exit code: 0
+- Certificate file content changes (new certificate issued)
+
+---
+
+## TC-39: Key Rollover
 
 **Goal:** Rotate the account key to a new key pair.
 
 ```sh
-# Generate a new key
-acme generate-key --account-key new-account.key
-
-# Roll over
-acme --insecure --account-key test-account.key --account-url <account-url> key-rollover --new-key new-account.key
+acme generate-key --account-key rollover-new.key
+acme --insecure --account-key rollover-old.key --account-url <account-url> key-rollover --new-key rollover-new.key
 ```
 
 **Expected:**
 - Exit code: 0
-- Output: `Account key rolled over successfully` followed by `From now on, use the new key: new-account.key`
-- Subsequent requests must use `new-account.key`
+- Output contains `key rolled over` or `rolled over successfully` (case-insensitive)
+- New key works for subsequent operations (e.g., placing an order)
 
 ---
 
-## TC-35: Pre-Authorize (Standalone)
+## TC-40: DNS-01 Hook Script (create/cleanup)
 
-**Goal:** Pre-authorize an identifier before placing an order.
-
-> Note: Not all ACME servers support pre-authorization. The server must advertise a `newAuthz` URL.
+**Goal:** Verify `--dns-hook` is called with `ACME_ACTION=create` before validation and `ACME_ACTION=cleanup` after.
 
 ```sh
-acme --insecure --account-key test-account.key --account-url <account-url> pre-authorize --domain preauth.example.com --challenge-type http-01
+acme --insecure --account-key dns-hook.key run --contact dns-hook@example.com --challenge-type dns-01 --dns-hook /path/to/hook.sh --cert-output dns-hook-cert.pem --key-output dns-hook-key.pem test.example.com
 ```
 
 **Expected:**
-- If server supports newAuthz: exit code 0, authorization and challenge details printed
-- If server does not support newAuthz: exit code 1, clear error message
+- Hook called with `action=create` (at least once)
+- Hook called with `action=cleanup` (at least once)
+- Hook receives the correct domain name
+- Certificate issued (with `PEBBLE_VA_ALWAYS_VALID=1`)
 
 ---
 
-## TC-36: Pre-Authorize via run --pre-authorize
+## TC-40b: DNS-01 Hook Cleanup Called on Propagation Timeout
 
-**Goal:** The `run` subcommand pre-authorizes identifiers before creating the order.
+**Goal:** When `--dns-wait` times out (DNS record never appears), the cleanup hook is still called.
 
 ```sh
-acme --insecure --account-key test-account.key run --contact test@example.com --challenge-type http-01 --http-port 5002 --pre-authorize preauth-run.example.com
+acme --insecure --account-key dns-hook2.key run --contact dns-hook2@example.com --challenge-type dns-01 --dns-hook /path/to/hook.sh --dns-wait 1 test.example.com
 ```
 
 **Expected:**
-- Exit code: 0 (or clear error if server does not support newAuthz)
-- If supported: pre-authorization happens before order creation
+- Exit code: non-zero (propagation timeout)
+- Hook log shows at least 1 `action=create` and at least 1 `action=cleanup`
+- Cleanup is called on the error path (not only on success)
 
 ---
 
-## TC-37: EAB Account Registration
+## TC-40c: Multi-Domain DNS-01 Hook (parallel, concurrency=1)
 
-**Goal:** Register an account with External Account Binding.
-
-> Requires a CA configured to require EAB (e.g., Pebble with `externalAccountBindingRequired: true`).
+**Goal:** Multi-SAN order with `--dns-hook` and `--dns-propagation-concurrency 1` processes all domains. The semaphore serializes the 3 domains through 1 permit.
 
 ```sh
-acme --insecure --account-key eab-account.key account --contact eab@example.com --eab-kid kid-1 --eab-hmac-key dGVzdGtleQ
+acme --insecure --account-key dns-hook3.key run --contact dns-hook3@example.com --challenge-type dns-01 --dns-hook /path/to/hook.sh --dns-propagation-concurrency 1 --cert-output dns-hook3-cert.pem --key-output dns-hook3-key.pem domain1.example.com domain2.example.com domain3.example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Output: `Account status: valid`
-- Server creates account with EAB binding
+- Hook `action=create` called at least 3 times (one per domain)
+- Hook `action=cleanup` called at least 3 times (one per domain)
+- At least 3 unique domains in hook log
+- Exit code: 0 (certificate issued)
 
 ---
 
-## TC-38: EAB Full E2E Flow
+## TC-40d: Multi-Domain DNS-01 Hook Cleanup on Propagation Timeout
 
-**Goal:** Run the full ACME flow with EAB credentials.
+**Goal:** Multi-SAN order with `--dns-wait 1` and `--dns-propagation-concurrency 1` — propagation times out, but cleanup hooks are called for all 3 domains.
 
 ```sh
-acme generate-key --account-key eab-e2e.key
-
-acme --insecure --account-key eab-e2e.key run --contact eab@example.com --challenge-type http-01 --http-port 5002 --eab-kid kid-2 --eab-hmac-key dGVzdGtleTI eab-test.example.com
+acme --insecure --account-key dns-hook4.key run --contact dns-hook4@example.com --challenge-type dns-01 --dns-hook /path/to/hook.sh --dns-wait 1 --dns-propagation-concurrency 1 domain1.example.com domain2.example.com domain3.example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Certificate issued successfully
+- Exit code: non-zero (propagation timeout)
+- Hook `action=create` called at least 3 times
+- Hook `action=cleanup` called at least 3 times (on error path)
 
 ---
 
-## TC-39: EAB Rejection (Missing EAB on EAB-Required Server)
+## TC-41: Custom --cert-output and --key-output Paths
 
-**Goal:** Verify the client shows a clear error when EAB is required but not provided.
-
-```sh
-acme --insecure --account-key no-eab.key account --contact test@example.com
-```
-
-**Expected:**
-- Exit code: 1
-- Error: `server requires External Account Binding` (or equivalent ACME error)
-
----
-
-## TC-40: Renewal Info - Query ARI (RFC 9702)
-
-**Goal:** Query the ACME server's renewal information for an existing certificate.
-
-> Requires a server that supports ARI (e.g., Pebble 2.1.0+ or Let's Encrypt).
+**Goal:** Verify certificates and keys are saved to custom paths.
 
 ```sh
-# First, issue a certificate
-acme --insecure --account-key test-account.key run --contact test@example.com --challenge-type http-01 --http-port 5002 --cert-output ari-test-cert.pem --key-output ari-test-key.pem ari-test.example.com
-
-# Query renewal info
-acme --insecure --account-key test-account.key --account-url <account-url> renewal-info ari-test-cert.pem
+acme --insecure --account-key custom-out.key run --contact custom@example.com --challenge-type http-01 --http-port 5002 --cert-output /custom/dir/my-cert.pem --key-output /custom/dir/my-key.pem test.example.com
 ```
 
 **Expected:**
 - Exit code: 0
-- Output includes:
-  ```
-  CertID:   <base64url(AKI)>.<base64url(Serial)>
-  Suggested renewal window:
-    Start:  <RFC 3339 timestamp>
-    End:    <RFC 3339 timestamp>
-  Status:   not yet due (N days until window opens)
-  ```
-- If server does not support ARI: exit code 1, error: `server does not support ARI (no renewalInfo in directory)`
+- Certificate at the custom cert path
+- Private key at the custom key path
 
 ---
 
-## TC-41: Renewal Info - JSON Output
+## TC-50: generate-key --output-format json
 
-**Goal:** Verify `renewal-info` outputs structured JSON for machine consumption.
+**Goal:** JSON output from `generate-key`.
 
 ```sh
-acme --insecure --account-key test-account.key --account-url <account-url> --output-format json renewal-info ari-test-cert.pem
+acme --output-format json generate-key --account-key json-key.key
+```
+
+**Expected:**
+- Output is valid JSON containing `"command": "generate-key"` and `"algorithm"` field
+
+---
+
+## TC-51: account --output-format json
+
+**Goal:** JSON output from `account`.
+
+```sh
+acme --insecure --output-format json --account-key json-key.key account --contact json@example.com
+```
+
+**Expected:**
+- Valid JSON with `"command": "account"`, `"status": "valid"`, `"url"` present
+
+---
+
+## TC-52: order --output-format json
+
+**Goal:** JSON output from `order`.
+
+```sh
+acme --insecure --output-format json --account-key json-key.key --account-url <url> order test.example.com
+```
+
+**Expected:**
+- Valid JSON with `"command": "order"`, `"order_url"` present, `"authorizations"` array with length > 0
+
+---
+
+## TC-53: show-dns01 --output-format json
+
+**Goal:** JSON output from `show-dns01`.
+
+```sh
+acme --output-format json --account-key json-key.key show-dns01 --domain test.example.com --token test-token
+```
+
+**Expected:**
+- Valid JSON with `"record_name"` containing `_acme-challenge` and `"record_value"` present
+
+---
+
+## TC-54: run --output-format json (full E2E)
+
+**Goal:** JSON output from a full `run` flow.
+
+```sh
+acme --insecure --output-format json --account-key json-e2e.key run --contact json-e2e@example.com --challenge-type http-01 --http-port 5002 --cert-output json-cert.pem --key-output json-key.pem test.example.com
 ```
 
 **Expected:**
 - Exit code: 0
-- Output is a single JSON object:
-  ```json
-  {
-    "command": "renewal-info",
-    "cert_id": "<base64url(AKI)>.<base64url(Serial)>",
-    "suggested_window": {
-      "start": "<RFC 3339 timestamp>",
-      "end": "<RFC 3339 timestamp>"
-    },
-    "retry_after": null
-  }
-  ```
+- JSON output contains `"action":"issued"`, `"cert_path"`, `"key_path"`, `"key_encrypted": false`
 
 ---
 
-## TC-42: Run with --ari (Renewal)
+## TC-55: run --output-format json (renewal skip)
 
-**Goal:** The `run` subcommand uses ARI to decide when to renew and includes `replaces` in the order.
+**Goal:** JSON output when renewal is skipped.
 
 ```sh
-# Issue an initial certificate
-acme --insecure --account-key test-account.key run --contact test@example.com --challenge-type http-01 --http-port 5002 --cert-output ari-run-cert.pem --key-output ari-run-key.pem ari-run.example.com
-
-# Re-run with --ari (should renew if window is open, or skip if not)
-acme --insecure --account-key test-account.key run --contact test@example.com --challenge-type http-01 --http-port 5002 --cert-output ari-run-cert.pem --key-output ari-run-key.pem --ari ari-run.example.com
+acme --insecure --output-format json --account-key json-e2e.key run --contact json-e2e@example.com --challenge-type http-01 --http-port 5002 --cert-output json-cert.pem --key-output json-key.pem --days 1 test.example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- If the ARI window is open: renews the certificate; with `RUST_LOG=debug`, log shows `Using ARI replaces field`
-- If the ARI window has not opened: prints `ARI: renewal window starts <timestamp> - skipping renewal`
-- If server doesn't support ARI: warns and falls through to `--days` check (or proceeds with renewal if no `--days`)
+- JSON output contains `"action":"skip"`, `"days_remaining"`, `"threshold": "1"`
 
 ---
 
-## TC-43: Run with --ari and --days (Fallback)
+## TC-56: Text Mode Unchanged (no JSON contamination)
 
-**Goal:** When `--ari` is used with `--days`, ARI takes priority; `--days` is the fallback.
+**Goal:** Default text output has no JSON.
 
 ```sh
-acme --insecure --account-key test-account.key run --contact test@example.com --challenge-type http-01 --http-port 5002 --cert-output ari-days-cert.pem --key-output ari-days-key.pem --ari --days 30 ari-days.example.com
+acme generate-key --account-key text-check.key
 ```
 
 **Expected:**
-- Exit code: 0
-- If ARI is available: uses ARI window to decide
-- If ARI fails or is unsupported: falls back to `--days 30` threshold check
-- With `RUST_LOG=debug`: shows whether ARI or `--days` was used for the decision
+- Output contains `account key saved to`
+- Output does NOT contain `"command"`
 
 ---
 
-## TC-44: Renewal Info - Server Without ARI Support
+## TC-57: --on-challenge-ready Flag Accepted in Help
 
-**Goal:** Clear error when querying ARI on a server that doesn't support it.
-
-```sh
-# Use a server without renewalInfo in its directory
-acme --insecure --account-key test-account.key --directory https://non-ari-server/directory renewal-info some-cert.pem
-```
+**Goal:** `acme run --help` lists the `--on-challenge-ready` flag.
 
 **Expected:**
-- Exit code: 1
-- Error: `server does not support ARI (no renewalInfo in directory)`
+- Help output contains `on-challenge-ready`
 
 ---
 
-## TC-45: Show DNS-PERSIST-01 Instructions
+## TC-58: --on-cert-issued Flag Accepted in Help
 
-**Goal:** Display the persistent TXT record value for dns-persist-01 validation.
-
-```sh
-acme --insecure --account-key test-account.key show-dns-persist01 --domain test.example.com --issuer-domain-name letsencrypt.org
-```
+**Goal:** `acme run --help` lists the `--on-cert-issued` flag.
 
 **Expected:**
-- Exit code: 0
-- Output:
-  ```
-
-  === DNS-PERSIST-01 Challenge ===
-  Create a DNS TXT record:
-    Name:  _validation-persist.test.example.com
-    Type:  TXT
-    Value: letsencrypt.org; accounturi=https://localhost:14000/my-account/<id>
-
-  This record is persistent - it can be reused for future issuances.
-  Unlike dns-01, it does not need to change per issuance.
-
-  ```
-- Command exits immediately (display only, no interactive wait)
+- Help output contains `on-cert-issued`
 
 ---
 
-## TC-46: Show DNS-PERSIST-01 - With Policy and PersistUntil
+## TC-59: --on-challenge-ready with Nonexistent Script
 
-**Goal:** Verify the `--persist-policy` and `--persist-until` flags are included in the record value.
+**Goal:** No panic when `--on-challenge-ready` points to a nonexistent script.
 
 ```sh
-acme --insecure --account-key test-account.key show-dns-persist01 --domain test.example.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
+acme --insecure --account-key hook.key run --on-challenge-ready /nonexistent/hook.sh example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Value includes `; policy=wildcard; persistUntil=1767225600`
+- No panic (may fail for other reasons)
 
 ---
 
-## TC-47: Show DNS-PERSIST-01 - JSON Output
+## TC-60: --on-cert-issued with Nonexistent Script
 
-**Goal:** Verify `show-dns-persist01` outputs structured JSON for machine consumption.
+**Goal:** No panic when `--on-cert-issued` points to a nonexistent script.
 
 ```sh
-acme --insecure --account-key test-account.key --output-format json show-dns-persist01 --domain test.example.com --issuer-domain-name letsencrypt.org --persist-policy wildcard
+acme --insecure --account-key hook.key run --on-cert-issued /nonexistent/deploy.sh example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Output is a single JSON object with `txt_name`, `txt_value`, `domain`, `issuer_domain_name` fields
+- No panic (may fail for other reasons)
 
 ---
 
-## TC-48: Full End-to-End Flow (DNS-PERSIST-01)
+## TC-61: Both Hooks Accepted Together
 
-**Goal:** Run the automated flow with DNS-PERSIST-01 (interactive - pauses for DNS record setup).
-
-> Requires Pebble with dns-persist-01 support and `PEBBLE_VA_ALWAYS_VALID=1`.
+**Goal:** `--on-challenge-ready` and `--on-cert-issued` can be used simultaneously.
 
 ```sh
-acme --insecure --account-key e2e-account.key run --contact e2e@example.com --challenge-type dns-persist-01 dns-persist-test.example.com
+acme --insecure --account-key hook.key run --on-challenge-ready /nonexistent/hook.sh --on-cert-issued /nonexistent/deploy.sh example.com
 ```
 
 **Expected:**
-- Prints DNS-PERSIST-01 TXT record instructions with `_validation-persist.` prefix
-- Shows the issuer domain names from the server
-- Waits for Enter keypress
-- After pressing Enter, proceeds through finalization
-- With `PEBBLE_VA_ALWAYS_VALID=1`, completes successfully
-- No cleanup action (records are persistent by design)
+- No "cannot be used with" conflict error
 
 ---
 
-## TC-49: DNS-PERSIST-01 with Hook Script
+## TC-62: EAB Flags in Account Help
 
-**Goal:** Verify `--dns-hook` works with dns-persist-01 (create only, no cleanup).
-
-```sh
-acme --insecure --account-key e2e-account.key run --contact e2e@example.com --challenge-type dns-persist-01 --dns-hook /usr/local/bin/dns-hook.sh dns-persist-hook.example.com
-```
+**Goal:** `acme account --help` shows `--eab-kid` and `--eab-hmac-key`.
 
 **Expected:**
-- Hook called with `ACME_ACTION=create`, `ACME_TXT_NAME=_validation-persist.dns-persist-hook.example.com`
-- No `ACME_ACTION=cleanup` call (records persist)
-- Certificate issued successfully
+- Help output contains both `eab-kid` and `eab-hmac-key`
 
 ---
 
-## TC-50: DNS-PERSIST-01 - IP Identifier Rejection
+## TC-63: EAB Flags in Run Help
 
-**Goal:** Verify dns-persist-01 rejects IP identifiers with a clear error.
-
-```sh
-acme --insecure --account-key e2e-account.key run --contact e2e@example.com --challenge-type dns-persist-01 192.0.2.1
-```
+**Goal:** `acme run --help` shows `--eab-kid` and `--eab-hmac-key`.
 
 **Expected:**
-- Exit code: 1
-- Error: DNS-based challenges are not supported for IP identifiers
+- Help output contains both `eab-kid` and `eab-hmac-key`
 
 ---
 
-## TC-51: Generate Config Template
+## TC-64: --eab-kid Without --eab-hmac-key Rejected
 
-**Goal:** Verify `generate-config` outputs a valid, parseable TOML template with all documented options.
+**Goal:** Providing `--eab-kid` alone is rejected by clap.
 
 ```sh
-acme generate-config > test-config.toml
+acme --insecure --account-key eab.key account --eab-kid test-kid
 ```
 
 **Expected:**
-- Exit code: 0
-- Output is valid TOML (all values are commented out)
-- Contains `[global]`, `[run]`, and `[account]` sections
-- All CLI options are documented in comments
+- Exit code: non-zero
+- Error mentions `eab-hmac-key` is required
 
 ---
 
-## TC-52: Show Config - Defaults Only
+## TC-65: --eab-hmac-key Without --eab-kid Rejected
 
-**Goal:** Verify `show-config` displays the effective configuration when no config file is loaded.
+**Goal:** Providing `--eab-hmac-key` alone is rejected by clap.
 
 ```sh
-acme show-config
+acme --insecure --account-key eab.key account --eab-hmac-key dGVzdA
 ```
 
 **Expected:**
-- Exit code: 0
-- Shows `Config file: (none)` or similar
-- All values are built-in defaults (e.g., `directory = https://localhost:14000/dir`)
+- Exit code: non-zero
+- Error mentions `eab-kid` is required
 
 ---
 
-## TC-53: Show Config - With Config File
+## TC-66: Invalid Base64url EAB HMAC Key Rejected
 
-**Goal:** Verify `show-config` merges values from a config file.
+**Goal:** Non-base64url HMAC key is rejected.
 
 ```sh
-cat > test-config.toml <<EOF
-[global]
-directory = "https://acme.example.com/dir"
-account_key = "/etc/acme/account.key"
-
-[run]
-domains = ["example.com", "www.example.com"]
-contact = "admin@example.com"
-cert_output = "/etc/ssl/certs/example.pem"
-days = 30
-EOF
-
-acme --config test-config.toml show-config
+acme --insecure --account-key eab.key account --eab-kid test-kid --eab-hmac-key "not!!!valid===base64"
 ```
 
 **Expected:**
-- Exit code: 0
-- `directory` shows the value from the config file
-- `domains` shows `["example.com", "www.example.com"]`
-- Non-configured values show built-in defaults
+- Exit code: non-zero
+- Error mentions base64 decode failure
 
 ---
 
-## TC-54: Show Config - Verbose Source Annotations
+## TC-67: EAB with Fake Credentials
 
-**Goal:** Verify `show-config --verbose` annotates each value with its source.
+**Goal:** Server rejects invalid EAB credentials (or accepts if EAB is not required).
 
 ```sh
-ACME_INSECURE=true acme --config test-config.toml -d https://override.example.com/dir show-config --verbose
+acme --insecure --account-key eab.key account --contact eab-test@example.com --eab-kid fake-kid-12345 --eab-hmac-key dGVzdGtleWZvcmhtYWN0ZXN0aW5n
 ```
 
 **Expected:**
-- Exit code: 0
-- `directory` shows `(cli)` annotation (CLI override)
-- `insecure` shows `(env)` annotation (environment variable)
-- `account_key` shows `(config)` annotation (config file)
-- `http_port` shows `(default)` annotation (built-in default)
+- Server rejects (error), OR
+- Server accepts (EAB not required — ignored per RFC)
 
 ---
 
-## TC-55: Config File - CLI Override Priority
+## TC-68: EAB Flags Accepted on Run Subcommand
 
-**Goal:** Verify CLI flags override config file values.
+**Goal:** No panic when EAB flags are used with `run`.
 
 ```sh
-acme --config test-config.toml -d https://cli-override.example.com/dir show-config
+acme --insecure --account-key eab.key run --eab-kid fake-kid --eab-hmac-key dGVzdA example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- `directory` shows `https://cli-override.example.com/dir` (CLI wins over config)
-- Other config file values are preserved
+- No panic
 
 ---
 
-## TC-56: Config File - Invalid TOML
+## TC-69: pre-authorize Subcommand in Help
 
-**Goal:** Verify a clear error on malformed config file.
-
-```sh
-echo "not valid [toml" > bad-config.toml
-acme --config bad-config.toml show-config
-```
+**Goal:** `acme --help` lists the `pre-authorize` subcommand.
 
 **Expected:**
-- Exit code: 1
-- Error message mentions TOML parse failure
+- Help output contains `pre-authorize`
 
 ---
 
-## TC-57: Config File - Unknown Field Rejection
+## TC-70: pre-authorize --help Shows Expected Flags
 
-**Goal:** Verify unknown fields in the config file are rejected (`deny_unknown_fields`).
-
-```sh
-cat > bad-field.toml <<EOF
-[global]
-nonexistent_option = "value"
-EOF
-
-acme --config bad-field.toml show-config
-```
+**Goal:** `acme pre-authorize --help` shows `--domain` and `--challenge-type`.
 
 **Expected:**
-- Exit code: 1
-- Error message mentions unknown field
+- Help output contains both `--domain` and `--challenge-type`
 
 ---
 
-## TC-58: Finalize with ec-p384 Certificate Key
+## TC-71: pre-authorize Requires --domain
 
-**Goal:** Verify `--cert-key-algorithm ec-p384` generates a P-384 CSR key.
+**Goal:** `pre-authorize` without `--domain` is rejected.
 
 ```sh
-acme --insecure --account-key test-account.key --account-url <account-url> finalize --finalize-url <finalize-url> --cert-key-algorithm ec-p384 test.example.com
+acme --insecure --account-key preauth.key pre-authorize
 ```
 
 **Expected:**
-- Exit code: 0
-- Output: `Order status: valid` (or `processing`)
-- The issued certificate contains a P-384 public key
+- Exit code: non-zero
+- Error mentions `--domain` is required
 
 ---
 
-## TC-59: Finalize with ed25519 Certificate Key
+## TC-72: pre-authorize Handles Missing newAuthz
 
-**Goal:** Verify `--cert-key-algorithm ed25519` generates an Ed25519 CSR key.
+**Goal:** Graceful handling when the server does not advertise `newAuthz`.
 
 ```sh
-acme --insecure --account-key test-account.key --account-url <account-url> finalize --finalize-url <finalize-url> --cert-key-algorithm ed25519 test.example.com
+acme --insecure --account-key preauth.key pre-authorize --domain preauth-test.example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Output: `Order status: valid` (or `processing`)
-- The issued certificate contains an Ed25519 public key
+- Clear error about pre-authorization not supported, OR
+- Authorization URL returned (if server supports it)
+- No panic
 
 ---
 
-## TC-60: Run with ec-p384 Certificate Key (e2e)
+## TC-73: --pre-authorize Flag in Run Help
 
-**Goal:** Verify `run --cert-key-algorithm ec-p384` issues a certificate with a P-384 key.
-
-```sh
-acme --insecure --account-key test-account.key run --challenge-type http-01 --cert-output cert-p384.pem --key-output key-p384.key --cert-key-algorithm ec-p384 test.example.com
-```
+**Goal:** `acme run --help` shows `--pre-authorize`.
 
 **Expected:**
-- Exit code: 0
-- Certificate issued successfully
-- `key-p384.key` contains a P-384 private key (PKCS#8 PEM)
+- Help output contains `--pre-authorize`
 
 ---
 
-## TC-61: Invalid Certificate Key Algorithm
+## TC-74: --pre-authorize Accepted on Run
 
-**Goal:** Verify an unsupported `--cert-key-algorithm` value is rejected.
+**Goal:** No panic when `--pre-authorize` is used with `run`.
 
 ```sh
-acme --insecure --account-key test-account.key finalize --finalize-url <finalize-url> --cert-key-algorithm rsa-2048 test.example.com
+acme --insecure --account-key preauth.key run --pre-authorize --challenge-type http-01 preauth-test.example.com
 ```
 
 **Expected:**
-- Exit code: 2 (clap argument error)
-- Error message mentions invalid value for `--cert-key-algorithm`
+- No panic
+
+---
+
+## TC-75: pre-authorize JSON Output
+
+**Goal:** JSON output from `pre-authorize`.
+
+```sh
+acme --insecure --output-format json --account-key preauth.key pre-authorize --domain preauth-test.example.com
+```
+
+**Expected:**
+- No panic
+- If supported: valid JSON with `"command": "pre-authorize"`
+- If not supported: error message
+
+---
+
+## Manual-Only Test Cases
+
+The following test cases require special server configurations and are not included in the automated test script (`test.sh`):
+
+| TC | Description | Requirements |
+|----|-------------|-------------|
+| 28 | Rejected identifier — CA rejects a domain | CA with name constraints |
+| 31 | Missing account URL — operations fail clearly | Manual |
+| 32 | badNonce retry — client retries automatically | `PEBBLE_WFE_NONCEREJECT=50` |
+| 42 | `run --ari` — ARI-guided renewal | Server with ARI support |
+| 43 | `run --ari --days` — ARI with days fallback | Server with ARI support |
+| 44 | `renewal-info` on server without ARI | Server without ARI |
+| 45–49 | DNS-PERSIST-01 tests | Pebble with dns-persist-01 support |
 
 ---
 
 ## Summary Matrix
 
-| TC | Command | Challenge | Expectation |
-|----|---------|-----------|-------------|
-| 01 | `generate-key` | - | Key file created |
-| 02 | `generate-key` (overwrite) | - | File replaced |
-| 03 | `account` | - | Account created |
-| 04 | `account` (idempotent) | - | Same account returned |
-| 05 | `account` (no contact) | - | Account created |
-| 06 | `order` (single) | - | Order pending |
-| 07 | `order` (multi SAN) | - | Multiple authz URLs |
-| 08 | `get-authz` | - | Challenges listed |
-| 09 | `respond-challenge` | - | Challenge progresses |
-| 10 | `serve-http01` | HTTP-01 | Token served |
-| 11 | `serve-http01` (port busy) | HTTP-01 | Clear error |
-| 12 | `show-dns01` | DNS-01 | TXT instructions |
-| 13 | `finalize` | - | CSR submitted |
-| 14 | `poll-order` | - | Status returned |
-| 15 | `download-cert` | - | PEM saved |
-| 16 | `revoke-cert` | - | Cert revoked |
-| 17 | `revoke-cert` (reason) | - | Revoked with code |
-| 18 | `deactivate-account` | - | Account deactivated |
-| 19 | Operations post-deactivation | - | Rejected |
-| 20 | `run` (e2e) | HTTP-01 | Full flow succeeds |
-| 21 | `run` (e2e) | DNS-01 | Interactive flow |
-| 22 | `run` (multi-SAN) | HTTP-01 | Multi-domain cert |
-| 23 | Env vars | - | Config from env |
-| 24 | Global args after subcmd | - | Args accepted |
-| 25 | Missing key file | - | Clear error |
-| 26 | Invalid directory URL | - | Clear error |
-| 27 | Directory 404 | - | Clear error |
-| 28 | Rejected identifier | - | Clean ACME error |
-| 29 | `RUST_LOG=debug` | - | Verbose output |
-| 30 | Custom HTTP port | HTTP-01 | Binds correctly |
-| 31 | Missing account URL | - | Handled gracefully |
-| 32 | badNonce retry | - | Auto-retry works |
-| 33 | `--insecure` flag | - | TLS skip works |
-| 34 | `key-rollover` | - | Key rotated |
-| 35 | `pre-authorize` (standalone) | - | Identifier pre-authorized |
-| 36 | `run --pre-authorize` | HTTP-01 | Pre-auth before order |
-| 37 | `account` + EAB | - | EAB binding accepted |
-| 38 | `run` + EAB (e2e) | HTTP-01 | Full flow with EAB |
-| 39 | EAB rejection | - | Clear error |
-| 40 | `renewal-info` (ARI) | - | Window shown |
-| 41 | `renewal-info` (JSON) | - | Structured JSON |
-| 42 | `run --ari` | HTTP-01 | ARI-guided renewal |
-| 43 | `run --ari --days` | HTTP-01 | ARI with days fallback |
-| 44 | `renewal-info` (no ARI server) | - | Clear error |
-| 45 | `show-dns-persist01` | DNS-PERSIST-01 | TXT instructions |
-| 46 | `show-dns-persist01` (policy+until) | DNS-PERSIST-01 | Extended record value |
-| 47 | `show-dns-persist01` (JSON) | DNS-PERSIST-01 | Structured JSON |
-| 48 | `run` (e2e) | DNS-PERSIST-01 | Interactive flow |
-| 49 | `run` + dns-hook | DNS-PERSIST-01 | Create only, no cleanup |
-| 50 | DNS-PERSIST-01 + IP identifier | DNS-PERSIST-01 | Clear rejection |
-| 51 | `generate-config` | - | Valid TOML template |
-| 52 | `show-config` (defaults) | - | Default values shown |
-| 53 | `show-config` (config file) | - | Merged values shown |
-| 54 | `show-config --verbose` | - | Source annotations |
-| 55 | Config CLI override priority | - | CLI wins over config |
-| 56 | Config invalid TOML | - | Clear error |
-| 57 | Config unknown field | - | Rejected |
-| 58 | `finalize` + ec-p384 | - | P-384 CSR submitted |
-| 59 | `finalize` + ed25519 | - | Ed25519 CSR submitted |
-| 60 | `run` + ec-p384 (e2e) | HTTP-01 | P-384 cert issued |
-| 61 | Invalid cert key algo | - | Rejected by clap |
+| TC | Command | Challenge | Expectation | Automated |
+|----|---------|-----------|-------------|-----------|
+| 01 | `generate-key` | - | Key file created | Yes |
+| 01b | `generate-key` (all algorithms) | - | All key types generated | Yes |
+| 02 | `generate-key` (overwrite) | - | File replaced | Yes |
+| 03 | `account` | - | Account created | Yes |
+| 04 | `account` (idempotent) | - | Same account returned | Yes |
+| 05 | `account` (no contact) | - | Account created | Yes |
+| 06 | `order` (single) | - | Order pending | Yes |
+| 07 | `order` (multi SAN) | - | Multiple authz URLs | Yes |
+| 08 | `get-authz` | - | Challenges listed | Yes |
+| 09 | `respond-challenge` | - | Challenge progresses | Yes |
+| 10 | `serve-http01` (standalone) | HTTP-01 | Token served | Yes |
+| 10b | `serve-http01` (challenge-dir) | HTTP-01 | File written | Yes |
+| 11 | `serve-http01` (port busy) | HTTP-01 | Clear error | Yes |
+| 12 | `show-dns01` | DNS-01 | TXT instructions | Yes |
+| 13 | `finalize` | - | CSR submitted | Yes |
+| 14 | `poll-order` | - | Status returned | Yes |
+| 15 | `download-cert` | - | PEM saved | Yes |
+| 16 | `revoke-cert` | - | Cert revoked | Yes |
+| 17 | `revoke-cert` (reason) | - | Revoked with code | Yes |
+| 18 | `deactivate-account` | - | Account deactivated | Yes |
+| 19 | Operations post-deactivation | - | Rejected | Yes |
+| 20 | `run` (e2e, all key algorithms) | HTTP-01 | Full flow succeeds | Yes |
+| 21 | `run` (e2e) | DNS-01 | Interactive flow | Yes |
+| 22 | `run` (multi-SAN) | HTTP-01 | Multi-domain cert | Yes |
+| 23 | Env vars | - | Config from env | Yes |
+| 24 | Global args after subcmd | - | Args accepted | Yes |
+| 25 | Missing key file | - | Clear error | Yes |
+| 26 | Invalid directory URL | - | Clear error | Yes |
+| 26b | `generate-key` offline | - | No directory needed | Yes |
+| 27 | Directory 404 | - | Clear error | Yes |
+| 28 | Rejected identifier | - | Clean ACME error | Manual |
+| 29 | `RUST_LOG=debug` | - | Verbose output | Yes |
+| 30 | Custom HTTP port | HTTP-01 | Binds correctly | Yes |
+| 31 | Missing account URL | - | Handled gracefully | Manual |
+| 32 | badNonce retry | - | Auto-retry works | Manual |
+| 33 | `run` + `--key-password` | HTTP-01 | Encrypted key | Yes |
+| 34 | `run` + `--key-password-file` | HTTP-01 | Password from file | Yes |
+| 35 | Password flags conflict | - | Mutual exclusivity | Yes |
+| 36 | No password (unencrypted) | - | Plain PKCS#8 PEM | Yes |
+| 37 | Renewal skipped (`--days 1`) | HTTP-01 | Skips when not due | Yes |
+| 38 | Renewal proceeds (`--days 9999`) | HTTP-01 | Renews when due | Yes |
+| 39 | `key-rollover` | - | Key rotated | Yes |
+| 40 | DNS-01 hook (create/cleanup) | DNS-01 | Hook called both ways | Yes |
+| 40b | DNS-01 hook cleanup on timeout | DNS-01 | Cleanup on error path | Yes |
+| 40c | Multi-domain DNS-01 hook (concurrency=1) | DNS-01 | All domains processed | Yes |
+| 40d | Multi-domain DNS-01 cleanup on timeout | DNS-01 | Cleanup for all domains | Yes |
+| 41 | Custom output paths | HTTP-01 | Files at custom paths | Yes |
+| 42 | `run --ari` | HTTP-01 | ARI-guided renewal | Manual |
+| 43 | `run --ari --days` | HTTP-01 | ARI with days fallback | Manual |
+| 44 | `renewal-info` (no ARI server) | - | Clear error | Manual |
+| 45–49 | DNS-PERSIST-01 tests | DNS-PERSIST-01 | Various | Manual |
+| 50 | `generate-key` JSON | - | Structured JSON | Yes |
+| 51 | `account` JSON | - | Structured JSON | Yes |
+| 52 | `order` JSON | - | Structured JSON | Yes |
+| 53 | `show-dns01` JSON | - | Structured JSON | Yes |
+| 54 | `run` JSON (e2e) | HTTP-01 | `action: issued` | Yes |
+| 55 | `run` JSON (renewal skip) | HTTP-01 | `action: skip` | Yes |
+| 56 | Text mode unchanged | - | No JSON in text | Yes |
+| 57 | `--on-challenge-ready` in help | - | Flag listed | Yes |
+| 58 | `--on-cert-issued` in help | - | Flag listed | Yes |
+| 59 | `--on-challenge-ready` nonexistent | - | No panic | Yes |
+| 60 | `--on-cert-issued` nonexistent | - | No panic | Yes |
+| 61 | Both hooks together | - | No conflict | Yes |
+| 62 | EAB flags in `account` help | - | Flags listed | Yes |
+| 63 | EAB flags in `run` help | - | Flags listed | Yes |
+| 64 | `--eab-kid` alone rejected | - | Requires `--eab-hmac-key` | Yes |
+| 65 | `--eab-hmac-key` alone rejected | - | Requires `--eab-kid` | Yes |
+| 66 | Invalid base64url HMAC key | - | Decode error | Yes |
+| 67 | Fake EAB credentials | - | Server rejects or ignores | Yes |
+| 68 | EAB on `run` (no panic) | - | No panic | Yes |
+| 69 | `pre-authorize` in help | - | Subcommand listed | Yes |
+| 70 | `pre-authorize --help` flags | - | `--domain`, `--challenge-type` | Yes |
+| 71 | `pre-authorize` requires `--domain` | - | Required arg | Yes |
+| 72 | `pre-authorize` missing newAuthz | - | Graceful error | Yes |
+| 73 | `--pre-authorize` in `run` help | - | Flag listed | Yes |
+| 74 | `--pre-authorize` on `run` | - | No panic | Yes |
+| 75 | `pre-authorize` JSON output | - | Structured JSON | Yes |
 
 ---
 

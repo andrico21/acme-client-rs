@@ -83,6 +83,13 @@
 # CLI: --dns-wait
 # dns_wait = 120
 
+# Maximum number of concurrent DNS propagation checks when using --dns-hook
+# with multiple domains. Each domain's TXT record is polled in parallel,
+# capped at this limit to avoid overwhelming DNS servers.
+# CLI: --dns-propagation-concurrency
+# Default: 5
+# dns_propagation_concurrency = 5
+
 # Path to save the issued certificate (PEM format, end-entity + intermediates).
 # CLI: --cert-output
 # Default: "certificate.pem"
