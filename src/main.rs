@@ -465,6 +465,9 @@ Examples:
         /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
         #[arg(long)]
         dns_wait: Option<u64>,
+        /// Max concurrent DNS propagation checks (default: 5)
+        #[arg(long, default_value = "5")]
+        dns_propagation_concurrency: usize,
         /// Save the certificate to this file
         #[arg(long, default_value = "certificate.pem")]
         cert_output: PathBuf,
@@ -676,6 +679,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         ref mut challenge_dir,
         ref mut dns_hook,
         ref mut dns_wait,
+        ref mut dns_propagation_concurrency,
         ref mut cert_output,
         ref mut key_output,
         ref mut days,
@@ -741,6 +745,9 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         if challenge_dir.is_none() { challenge_dir.clone_from(&cfg_run.challenge_dir); }
         if dns_hook.is_none() { dns_hook.clone_from(&cfg_run.dns_hook); }
         if dns_wait.is_none() { *dns_wait = cfg_run.dns_wait; }
+        if *dns_propagation_concurrency == 5 {
+            if let Some(v) = cfg_run.dns_propagation_concurrency { *dns_propagation_concurrency = v; }
+        }
         if days.is_none() { *days = cfg_run.days; }
         if on_challenge_ready.is_none() { on_challenge_ready.clone_from(&cfg_run.on_challenge_ready); }
         if on_cert_issued.is_none() { on_cert_issued.clone_from(&cfg_run.on_cert_issued); }
@@ -823,6 +830,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             challenge_dir,
             dns_hook,
             dns_wait,
+            dns_propagation_concurrency,
             cert_output,
             key_output,
             days,
@@ -848,6 +856,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 challenge_dir.as_deref(),
                 dns_hook.as_deref(),
                 *dns_wait,
+                *dns_propagation_concurrency,
                 cert_output,
                 key_output,
                 *days,
@@ -1024,6 +1033,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "challenge_dir": { "value": r.challenge_dir.as_ref().map(|p| p.display().to_string()) },
                 "dns_hook": { "value": r.dns_hook.as_ref().map(|p| p.display().to_string()) },
                 "dns_wait": { "value": r.dns_wait },
+                "dns_propagation_concurrency": { "value": r.dns_propagation_concurrency },
                 "cert_output": { "value": r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()) },
                 "key_output": { "value": r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()) },
                 "days": { "value": r.days },
@@ -1111,6 +1121,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             println!("  challenge_dir      = {}{}", opt_path(&r.challenge_dir), src(cfg_source(r.challenge_dir.is_some())));
             println!("  dns_hook           = {}{}", opt_path(&r.dns_hook), src(cfg_source(r.dns_hook.is_some())));
             println!("  dns_wait           = {}{}", opt_u64(r.dns_wait), src(cfg_source(r.dns_wait.is_some())));
+            println!("  dns_propagation_concurrency = {}{}", r.dns_propagation_concurrency.unwrap_or(5), src(cfg_source(r.dns_propagation_concurrency.is_some())));
             println!("  cert_output        = {}{}", r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()), src(cfg_source(r.cert_output.is_some())));
             println!("  key_output         = {}{}", r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()), src(cfg_source(r.key_output.is_some())));
             println!("  days               = {}{}", opt_u32(r.days), src(cfg_source(r.days.is_some())));
@@ -1649,6 +1660,7 @@ async fn cmd_run(
     challenge_dir: Option<&std::path::Path>,
     dns_hook: Option<&std::path::Path>,
     dns_wait: Option<u64>,
+    dns_propagation_concurrency: usize,
     cert_output: &std::path::Path,
     key_output: &std::path::Path,
     days: Option<u32>,
@@ -2253,12 +2265,18 @@ async fn cmd_run(
                     info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
                 }
 
+                let semaphore = std::sync::Arc::new(
+                    tokio::sync::Semaphore::new(dns_propagation_concurrency),
+                );
                 let mut set = tokio::task::JoinSet::new();
                 for p in &pending {
                     let name = p.txt_name.clone();
                     let value = p.txt_value.clone();
                     let domain = p.domain.clone();
+                    let sem = semaphore.clone();
                     set.spawn(async move {
+                        let _permit = sem.acquire().await
+                            .expect("semaphore closed unexpectedly");
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout_secs);
                         while std::time::Instant::now() < deadline {

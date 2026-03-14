@@ -54,6 +54,8 @@ pub struct RunConfig {
     pub dns_hook: Option<PathBuf>,
     /// Wait up to N seconds for DNS TXT propagation.
     pub dns_wait: Option<u64>,
+    /// Max concurrent DNS propagation checks.
+    pub dns_propagation_concurrency: Option<usize>,
     /// Save the certificate to this file.
     pub cert_output: Option<PathBuf>,
     /// Save the private key to this file.
@@ -202,6 +204,13 @@ pub fn generate_template() -> &'static str {
 # Can be used with --dns-hook (fully automated) or alone (manual + auto-wait).
 # CLI: --dns-wait
 # dns_wait = 120
+
+# Maximum number of concurrent DNS propagation checks when using --dns-hook
+# with multiple domains. Each domain's TXT record is polled in parallel,
+# capped at this limit to avoid overwhelming DNS servers.
+# CLI: --dns-propagation-concurrency
+# Default: 5
+# dns_propagation_concurrency = 5
 
 # Path to save the issued certificate (PEM format, end-entity + intermediates).
 # CLI: --cert-output
