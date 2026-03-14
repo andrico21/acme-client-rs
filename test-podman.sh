@@ -151,11 +151,11 @@ mkdir -p "${PROJECT_DIR}/target/release"
 # Use a Containerfile inline via heredoc
 podman build -t acme-client-rs-builder -f - "${PROJECT_DIR}" <<'CONTAINERFILE'
 FROM docker.io/library/rust:alpine AS builder
-RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static perl make
+RUN apk add --no-cache build-base pkgconf openssl-dev openssl-libs-static perl make
 WORKDIR /src
 COPY . .
 ENV OPENSSL_STATIC=1
-ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
+ENV RUSTFLAGS="-C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
 RUN cargo build --release && strip target/release/acme-client-rs
 CONTAINERFILE
 
