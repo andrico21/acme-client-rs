@@ -49,12 +49,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Build
+        env:
+          RUSTFLAGS: "-C control-flow-guard=yes -C link-args=/DYNAMICBASE -C link-args=/HIGHENTROPYVA -C link-args=/NXCOMPAT -C link-args=/CETCOMPAT"
         run: cargo build --verbose
 
       - name: Run tests
+        env:
+          RUSTFLAGS: "-C control-flow-guard=yes -C link-args=/DYNAMICBASE -C link-args=/HIGHENTROPYVA -C link-args=/NXCOMPAT -C link-args=/CETCOMPAT"
         run: cargo test --verbose
-
-  integration-test:
     name: Integration Test (Pebble)
     runs-on: ubuntu-latest
     needs: build-linux
