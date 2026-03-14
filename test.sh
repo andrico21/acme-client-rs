@@ -1210,7 +1210,6 @@ OUTPUT=$(acme --account-key "${DNS_HOOK_KEY}" run \
   --contact dns-hook@example.com \
   --challenge-type dns-01 \
   --dns-hook "${DNS_HOOK}" \
-  --dns-wait 5 \
   --cert-output "${DNS_HOOK_CERT}" \
   --key-output "${DNS_HOOK_PRIVKEY}" \
   "${SINGLE_DOMAIN}" 2>&1)
@@ -1220,15 +1219,23 @@ set -e
 if [[ -f "${DNS_HOOK_LOG}" ]]; then
   if grep -q "action=create" "${DNS_HOOK_LOG}"; then
     pass "DNS hook was called with action=create"
+  else
+    fail "40" "DNS hook was NOT called with action=create"
   fi
   if grep -q "action=cleanup" "${DNS_HOOK_LOG}"; then
     pass "DNS hook was called with action=cleanup"
+  else
+    fail "40" "DNS hook cleanup was NOT called after cert issuance"
   fi
   if grep -q "${SINGLE_DOMAIN}" "${DNS_HOOK_LOG}"; then
     pass "DNS hook received the correct domain"
+  else
+    fail "40" "DNS hook did not receive domain ${SINGLE_DOMAIN}"
   fi
-  echo "  Hook log:"
+  echo "  Hook log ($(wc -l < "${DNS_HOOK_LOG}") lines):"
   cat "${DNS_HOOK_LOG}" | sed 's/^/    /'
+  echo "  Command exit code: ${RC}"
+  echo "  Cert issued: $(test -f "${DNS_HOOK_CERT}" && echo yes || echo no)"
 else
   if [[ ${RC} -eq 0 ]]; then
     fail "40" "Hook log not found but command succeeded"
@@ -1236,6 +1243,46 @@ else
     skip "DNS-01 hook test: server requires real DNS validation (hook was a no-op)"
     echo "  Output: ${OUTPUT}"
   fi
+fi
+
+unset DNS_HOOK_LOG
+
+# ── TC-40b: DNS-01 hook cleanup on propagation timeout ──────────────────────
+
+log_test "40b" "DNS-01 hook cleanup called on propagation timeout"
+DNS_HOOK2_LOG="${WORK_DIR}/dns-hook2.log"
+export DNS_HOOK_LOG="${DNS_HOOK2_LOG}"
+
+DNS_HOOK2_KEY="${WORK_DIR}/dns-hook2.key"
+acme generate-key --account-key "${DNS_HOOK2_KEY}" >/dev/null 2>&1
+
+# Use --dns-wait 1 so propagation check fails fast (mock hook creates no real TXT)
+set +e
+OUTPUT=$(acme --account-key "${DNS_HOOK2_KEY}" run \
+  --contact dns-hook2@example.com \
+  --challenge-type dns-01 \
+  --dns-hook "${DNS_HOOK}" \
+  --dns-wait 1 \
+  "${SINGLE_DOMAIN}" 2>&1)
+RC=$?
+set -e
+
+# The run should fail (no real DNS), but cleanup hook MUST still be called
+if [[ -f "${DNS_HOOK2_LOG}" ]]; then
+  CREATE_COUNT=$(grep -c "action=create" "${DNS_HOOK2_LOG}" || true)
+  CLEANUP_COUNT=$(grep -c "action=cleanup" "${DNS_HOOK2_LOG}" || true)
+  echo "  Hook calls: create=${CREATE_COUNT} cleanup=${CLEANUP_COUNT}"
+  echo "  Exit code: ${RC} (expected non-zero — propagation timeout)"
+  cat "${DNS_HOOK2_LOG}" | sed 's/^/    /'
+
+  if [[ ${CLEANUP_COUNT} -gt 0 ]]; then
+    pass "DNS hook cleanup called on error path (${CLEANUP_COUNT} time(s))"
+  else
+    fail "40b" "DNS hook cleanup never called on error (create=${CREATE_COUNT}, cleanup=0)"
+  fi
+else
+  fail "40b" "Hook log not created at all (exit code ${RC})"
+  echo "  Output: ${OUTPUT}"
 fi
 
 unset DNS_HOOK_LOG

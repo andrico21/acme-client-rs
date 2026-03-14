@@ -1914,6 +1914,14 @@ async fn cmd_run(
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
                         if !found {
+                            if let Some(hook) = dns_hook {
+                                let _ = std::process::Command::new(hook)
+                                    .env("ACME_DOMAIN", &authz.identifier.value)
+                                    .env("ACME_TXT_NAME", &txt_name)
+                                    .env("ACME_TXT_VALUE", &txt_value)
+                                    .env("ACME_ACTION", "cleanup")
+                                    .status();
+                            }
                             anyhow::bail!(
                                 "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                             );
@@ -1985,6 +1993,14 @@ async fn cmd_run(
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
                         if !found {
+                            if let Some(hook) = dns_hook {
+                                let _ = std::process::Command::new(hook)
+                                    .env("ACME_DOMAIN", &authz.identifier.value)
+                                    .env("ACME_TXT_NAME", &txt_name)
+                                    .env("ACME_TXT_VALUE", &txt_value)
+                                    .env("ACME_ACTION", "cleanup")
+                                    .status();
+                            }
                             anyhow::bail!(
                                 "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                             );
@@ -2279,6 +2295,14 @@ async fn cmd_run(
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     if !found {
+                        if let Some(hook) = dns_hook {
+                            let _ = std::process::Command::new(hook)
+                                .env("ACME_DOMAIN", &authz.identifier.value)
+                                .env("ACME_TXT_NAME", &txt_name)
+                                .env("ACME_TXT_VALUE", &txt_value)
+                                .env("ACME_ACTION", "cleanup")
+                                .status();
+                        }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                         );
@@ -2359,6 +2383,14 @@ async fn cmd_run(
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     if !found {
+                        if let Some(hook) = dns_hook {
+                            let _ = std::process::Command::new(hook)
+                                .env("ACME_DOMAIN", &authz.identifier.value)
+                                .env("ACME_TXT_NAME", &txt_name)
+                                .env("ACME_TXT_VALUE", &txt_value)
+                                .env("ACME_ACTION", "cleanup")
+                                .status();
+                        }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                         );
