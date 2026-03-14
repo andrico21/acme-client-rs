@@ -377,8 +377,9 @@ mkdir -p "${CHALLENGE_DIR}"
 CHDIR_TOKEN="test-token-filedir"
 
 # Run in background — it writes the file then waits for Enter
-acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
-  --challenge-dir "${CHALLENGE_DIR}" </dev/null &
+# Use sleep to keep stdin open (EOF from /dev/null triggers immediate cleanup)
+sleep 999 | acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
+  --challenge-dir "${CHALLENGE_DIR}" &
 CHDIR_PID=$!
 sleep 2
 
@@ -638,6 +639,7 @@ for ALG in "${KEY_ALGORITHMS[@]}"; do
 
   acme generate-key --algorithm "${ALG}" --account-key "${E2E_KEY}" >/dev/null 2>&1
 
+  set +e
   OUTPUT=$(acme --account-key "${E2E_KEY}" run \
     --contact "e2e-${ALG}@example.com" \
     --challenge-type http-01 \
@@ -646,6 +648,7 @@ for ALG in "${KEY_ALGORITHMS[@]}"; do
     --key-output "${E2E_PRIVKEY}" \
     "${SINGLE_DOMAIN}" 2>&1)
   RC=$?
+  set -e
 
   if [[ ${RC} -eq 0 ]] && [[ -f "${E2E_CERT}" ]]; then
     if grep -q "BEGIN CERTIFICATE" "${E2E_CERT}"; then
