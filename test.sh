@@ -377,9 +377,11 @@ mkdir -p "${CHALLENGE_DIR}"
 CHDIR_TOKEN="test-token-filedir"
 
 # Run in background — it writes the file then waits for Enter
-# Use sleep to keep stdin open (EOF from /dev/null triggers immediate cleanup)
-sleep 999 | acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
-  --challenge-dir "${CHALLENGE_DIR}" &
+# Use a FIFO to keep stdin open without spawning unkillable processes
+CHDIR_FIFO="${WORK_DIR}/tc10b-fifo"
+mkfifo "${CHDIR_FIFO}"
+acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
+  --challenge-dir "${CHALLENGE_DIR}" < "${CHDIR_FIFO}" &
 CHDIR_PID=$!
 sleep 2
 
@@ -391,8 +393,10 @@ else
   echo "  Contents: $(find "${CHALLENGE_DIR}" -type f 2>/dev/null)"
 fi
 
-kill ${CHDIR_PID} 2>/dev/null || true
+# Send Enter to unblock cleanup, then wait for process to exit
+echo "" > "${CHDIR_FIFO}"
 wait ${CHDIR_PID} 2>/dev/null || true
+rm -f "${CHDIR_FIFO}"
 
 # ── TC-11: Serve HTTP-01 - Port Already In Use ─────────────────────────────
 
