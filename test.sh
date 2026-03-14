@@ -54,7 +54,8 @@ TOTAL=0
 FAILURES=""
 
 # Key algorithm variants to test for e2e flows
-KEY_ALGORITHMS=("es256" "es384" "es512" "rsa2048" "rsa4096" "ed25519")
+# Note: ed25519 excluded from E2E — Pebble only supports RS256, ES256, ES384, ES512
+KEY_ALGORITHMS=("es256" "es384" "es512" "rsa2048" "rsa4096")
 
 # ── Colours ──────────────────────────────────────────────────────────────────
 
@@ -377,12 +378,13 @@ mkdir -p "${CHALLENGE_DIR}"
 CHDIR_TOKEN="test-token-filedir"
 
 # Run in background — it writes the file then waits for Enter
-# Use a FIFO to keep stdin open without spawning unkillable processes
+# Use a FIFO: open write-end via fd to unblock the reader, keep it open during the test
 CHDIR_FIFO="${WORK_DIR}/tc10b-fifo"
 mkfifo "${CHDIR_FIFO}"
 acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
   --challenge-dir "${CHALLENGE_DIR}" < "${CHDIR_FIFO}" &
 CHDIR_PID=$!
+exec 3>"${CHDIR_FIFO}"   # open write-end (unblocks the reader)
 sleep 2
 
 CHALLENGE_FILE="${CHALLENGE_DIR}/.well-known/acme-challenge/${CHDIR_TOKEN}"
@@ -393,8 +395,9 @@ else
   echo "  Contents: $(find "${CHALLENGE_DIR}" -type f 2>/dev/null)"
 fi
 
-# Send Enter to unblock cleanup, then wait for process to exit
-echo "" > "${CHDIR_FIFO}"
+# Send Enter to trigger cleanup, close fd, wait for exit
+echo "" >&3
+exec 3>&-
 wait ${CHDIR_PID} 2>/dev/null || true
 rm -f "${CHDIR_FIFO}"
 
@@ -807,11 +810,13 @@ fi
 # ── TC-35: --key-password and --key-password-file conflict ──────────────────
 
 log_test "35" "--key-password and --key-password-file are mutually exclusive"
+set +e
 OUTPUT=$(acme_rc --account-key "${ENCKEY}" run \
   --key-password "pw1" \
   --key-password-file "${PWFILE}" \
-  "${SINGLE_DOMAIN}" 2>&1 || true)
+  "${SINGLE_DOMAIN}" 2>&1)
 RC=$?
+set -e
 if [[ ${RC} -ne 0 ]]; then
   if echo "${OUTPUT}" | grep -qi "conflict\|cannot be used with\|exclusive"; then
     pass "Conflicting flags correctly rejected by CLI parser"
@@ -936,22 +941,28 @@ ROLLOVER_ACCT_URL=$(echo "${OUTPUT}" | grep "^Account URL:" | head -1 | sed 's/^
 
 if [[ -n "${ROLLOVER_ACCT_URL}" ]]; then
   # Perform key rollover
+  set +e
   OUTPUT=$(acme --account-key "${ROLLOVER_OLD_KEY}" --account-url "${ROLLOVER_ACCT_URL}" \
     key-rollover --new-key "${ROLLOVER_NEW_KEY}" 2>&1)
-  if echo "${OUTPUT}" | grep -qi "key rolled over\|rolled over successfully"; then
+  RC=$?
+  set -e
+  if [[ ${RC} -eq 0 ]] && echo "${OUTPUT}" | grep -qi "key rolled over\|rolled over successfully"; then
     pass "Key rollover completed"
 
     # Verify the new key works with the account
+    set +e
     OUTPUT=$(acme --account-key "${ROLLOVER_NEW_KEY}" --account-url "${ROLLOVER_ACCT_URL}" \
       order "${SINGLE_DOMAIN}" 2>&1)
-    if echo "${OUTPUT}" | grep -q "Order URL:"; then
+    RC=$?
+    set -e
+    if [[ ${RC} -eq 0 ]] && echo "${OUTPUT}" | grep -q "Order URL:"; then
       pass "New key works with the account after rollover"
     else
       fail "39" "New key does not work after rollover"
       echo "  Output: ${OUTPUT}"
     fi
   else
-    fail "39" "Key rollover failed"
+    fail "39" "Key rollover failed (exit code ${RC})"
     echo "  Output: ${OUTPUT}"
   fi
 else
@@ -973,12 +984,15 @@ OUTPUT=$(acme --account-key "${DEACT_KEY}" account --contact deactivate@example.
 DEACT_ACCT_URL=$(echo "${OUTPUT}" | grep "^Account URL:" | head -1 | sed 's/^Account URL:[[:space:]]*//')
 
 if [[ -n "${DEACT_ACCT_URL}" ]]; then
+  set +e
   OUTPUT=$(acme --account-key "${DEACT_KEY}" --account-url "${DEACT_ACCT_URL}" \
     deactivate-account 2>&1)
-  if echo "${OUTPUT}" | grep -q "deactivated"; then
+  RC=$?
+  set -e
+  if [[ ${RC} -eq 0 ]] && echo "${OUTPUT}" | grep -q "deactivated"; then
     pass "Account deactivated"
   else
-    fail "18" "Deactivation output unexpected"
+    fail "18" "Deactivation failed (exit code ${RC})"
     echo "  Output: ${OUTPUT}"
   fi
 else
@@ -989,9 +1003,11 @@ fi
 
 log_test "19" "Operations After Account Deactivation"
 if [[ -n "${DEACT_ACCT_URL}" ]]; then
+  set +e
   OUTPUT=$(acme_rc --account-key "${DEACT_KEY}" --account-url "${DEACT_ACCT_URL}" \
-    order "${SINGLE_DOMAIN}" 2>&1 || true)
+    order "${SINGLE_DOMAIN}" 2>&1)
   RC=$?
+  set -e
   if [[ ${RC} -ne 0 ]]; then
     pass "Order correctly rejected after account deactivation (exit code ${RC})"
   else
