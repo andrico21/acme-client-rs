@@ -1289,7 +1289,7 @@ unset DNS_HOOK_LOG
 
 # ── TC-40c: Multi-domain DNS-01 hook (parallel propagation) ────────────────
 
-log_test "40c" "Multi-domain DNS-01 hook (parallel create/cleanup, concurrency=10)"
+log_test "40c" "Multi-domain DNS-01 hook (parallel create/cleanup, concurrency=1)"
 DNS_HOOK3_LOG="${WORK_DIR}/dns-hook3.log"
 export DNS_HOOK_LOG="${DNS_HOOK3_LOG}"
 
@@ -1299,13 +1299,14 @@ DNS_HOOK3_PRIVKEY="${WORK_DIR}/dns-hook3-private.key"
 
 acme generate-key --account-key "${DNS_HOOK3_KEY}" >/dev/null 2>&1
 
-# Multi-SAN order with DNS hook + explicit concurrency — exercises parallel phased path
+# Multi-SAN order with DNS hook + concurrency=1 — forces semaphore to serialize
+# 3 domains through 1 permit, exercising the throttling logic
 set +e
 OUTPUT=$(acme --account-key "${DNS_HOOK3_KEY}" run \
   --contact dns-hook3@example.com \
   --challenge-type dns-01 \
   --dns-hook "${DNS_HOOK}" \
-  --dns-propagation-concurrency 10 \
+  --dns-propagation-concurrency 1 \
   --cert-output "${DNS_HOOK3_CERT}" \
   --key-output "${DNS_HOOK3_PRIVKEY}" \
   "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
@@ -1349,22 +1350,22 @@ unset DNS_HOOK_LOG
 
 # ── TC-40d: Multi-domain DNS-01 hook cleanup on propagation timeout ─────────
 
-log_test "40d" "Multi-domain DNS-01 hook cleanup on propagation timeout (3 domains, concurrency=10)"
+log_test "40d" "Multi-domain DNS-01 hook cleanup on propagation timeout (3 domains, concurrency=1)"
 DNS_HOOK4_LOG="${WORK_DIR}/dns-hook4.log"
 export DNS_HOOK_LOG="${DNS_HOOK4_LOG}"
 
 DNS_HOOK4_KEY="${WORK_DIR}/dns-hook4.key"
 acme generate-key --account-key "${DNS_HOOK4_KEY}" >/dev/null 2>&1
 
-# Multi-SAN order with --dns-wait 1 + explicit concurrency — propagation will fail
-# The parallel path must clean up ALL created records before bailing
+# Multi-SAN order with --dns-wait 1 + concurrency=1 — propagation will fail
+# Semaphore forces serial checking; cleanup must still cover ALL 3 domains
 set +e
 OUTPUT=$(acme --account-key "${DNS_HOOK4_KEY}" run \
   --contact dns-hook4@example.com \
   --challenge-type dns-01 \
   --dns-hook "${DNS_HOOK}" \
   --dns-wait 1 \
-  --dns-propagation-concurrency 10 \
+  --dns-propagation-concurrency 1 \
   "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
 RC=$?
 set -e
