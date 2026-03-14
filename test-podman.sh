@@ -155,8 +155,8 @@ RUN apk add --no-cache build-base pkgconf openssl-dev openssl-libs-static perl m
 WORKDIR /src
 COPY . .
 ENV OPENSSL_STATIC=1
-ENV RUSTFLAGS="-C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
-RUN cargo build --release && strip target/release/acme-client-rs
+RUN cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack \
+    && strip target/release/acme-client-rs
 CONTAINERFILE
 
 # Extract the binary from the builder image
