@@ -2131,6 +2131,301 @@ async fn cmd_run(
 
     // ── Authorizations ──────────────────────────────────────────────────
     info!("Step {}: Completing authorizations", if pre_authorize { 4 } else { 3 });
+
+    // DNS challenges with a hook benefit from parallel propagation waiting:
+    // all TXT records are created first, then all propagation checks run
+    // concurrently, then challenges are responded to serially (nonce chain).
+    let use_parallel_dns = dns_hook.is_some()
+        && (challenge_type == CHALLENGE_TYPE_DNS01
+            || challenge_type == CHALLENGE_TYPE_DNS_PERSIST01);
+
+    if use_parallel_dns {
+        // ── Phased DNS authorization (parallel propagation wait) ────────
+        struct DnsPending {
+            authz_url: String,
+            domain: String,
+            challenge_url: String,
+            token: String,
+            txt_name: String,
+            txt_value: String,
+        }
+        let hook = dns_hook.unwrap(); // safe: checked above
+
+        // Phase 1: Fetch all authorizations and create DNS records
+        let mut pending: Vec<DnsPending> = Vec::new();
+        for authz_url in &order.authorizations {
+            let authz = client.get_authorization(authz_url).await?;
+            if !json {
+                println!(
+                    "Authorization for {} - status: {}",
+                    authz.identifier.value, authz.status
+                );
+            }
+            if authz.status == AuthorizationStatus::Valid {
+                if !json { println!("  Already valid, skipping"); }
+                continue;
+            }
+
+            let ch = authz
+                .challenges
+                .iter()
+                .find(|c| c.challenge_type == challenge_type)
+                .with_context(|| {
+                    format!("no {challenge_type} challenge for {}", authz.identifier.value)
+                })?;
+
+            let (token, txt_name, txt_value) = if challenge_type == CHALLENGE_TYPE_DNS01 {
+                if authz.identifier.is_ip() {
+                    anyhow::bail!(
+                        "dns-01 challenges are not supported for IP identifiers ({})",
+                        authz.identifier.value
+                    );
+                }
+                let t = ch.token.as_deref().context("challenge has no token")?.to_string();
+                let name = challenge::dns01::record_name(&authz.identifier.value);
+                let value = challenge::dns01::txt_record_value(&t, client.account_key());
+                (t, name, value)
+            } else {
+                // dns-persist-01
+                if authz.identifier.is_ip() {
+                    anyhow::bail!(
+                        "dns-persist-01 challenges are not supported for IP identifiers ({})",
+                        authz.identifier.value
+                    );
+                }
+                let issuer_names = ch.issuer_domain_names.as_ref()
+                    .context("dns-persist-01 challenge has no issuer-domain-names")?;
+                if issuer_names.is_empty() || issuer_names.len() > 10 {
+                    anyhow::bail!("malformed dns-persist-01: issuer-domain-names must have 1-10 entries");
+                }
+                let account_uri = client.account_url()
+                    .context("account URL not known - cannot construct dns-persist-01 record")?
+                    .to_string();
+                let name = challenge::dns_persist01::record_name(&authz.identifier.value);
+                let value = challenge::dns_persist01::txt_record_value(
+                    &issuer_names[0], &account_uri, persist_policy, persist_until,
+                );
+                (String::new(), name, value)
+            };
+
+            // Run create hook
+            info!("Calling DNS hook (create): {} for {}", hook.display(), authz.identifier.value);
+            let status = std::process::Command::new(hook)
+                .env("ACME_DOMAIN", &authz.identifier.value)
+                .env("ACME_TXT_NAME", &txt_name)
+                .env("ACME_TXT_VALUE", &txt_value)
+                .env("ACME_ACTION", "create")
+                .status()
+                .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
+            if !status.success() {
+                // Clean up any records we already created
+                for p in &pending {
+                    let _ = std::process::Command::new(hook)
+                        .env("ACME_DOMAIN", &p.domain)
+                        .env("ACME_TXT_NAME", &p.txt_name)
+                        .env("ACME_TXT_VALUE", &p.txt_value)
+                        .env("ACME_ACTION", "cleanup")
+                        .status();
+                }
+                anyhow::bail!("DNS hook (create) exited with {status}");
+            }
+
+            pending.push(DnsPending {
+                authz_url: authz_url.clone(),
+                domain: authz.identifier.value.clone(),
+                challenge_url: ch.url.clone(),
+                token,
+                txt_name,
+                txt_value,
+            });
+        }
+
+        if !pending.is_empty() {
+            let domain_count = pending.len();
+
+            // Phase 2: Wait for DNS propagation (parallel)
+            if let Some(timeout_secs) = dns_wait {
+                if domain_count > 1 {
+                    info!(
+                        "Waiting up to {timeout_secs}s for DNS TXT propagation across {domain_count} domains (parallel)..."
+                    );
+                } else {
+                    info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
+                }
+
+                let mut set = tokio::task::JoinSet::new();
+                for p in &pending {
+                    let name = p.txt_name.clone();
+                    let value = p.txt_value.clone();
+                    let domain = p.domain.clone();
+                    set.spawn(async move {
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_secs(timeout_secs);
+                        while std::time::Instant::now() < deadline {
+                            match dns_txt_check(&name, &value).await {
+                                Ok(true) => return Ok((domain, true)),
+                                Ok(false) => {}
+                                Err(e) => return Err(e),
+                            }
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        Ok((domain, false))
+                    });
+                }
+
+                let mut failed: Vec<String> = Vec::new();
+                while let Some(result) = set.join_next().await {
+                    let (domain, found) = result.context("DNS propagation task panicked")??;
+                    if found {
+                        info!("DNS TXT record found for {domain}");
+                    } else {
+                        failed.push(domain);
+                    }
+                }
+
+                if !failed.is_empty() {
+                    // Clean up ALL created records before bailing
+                    for p in &pending {
+                        match std::process::Command::new(hook)
+                            .env("ACME_DOMAIN", &p.domain)
+                            .env("ACME_TXT_NAME", &p.txt_name)
+                            .env("ACME_TXT_VALUE", &p.txt_value)
+                            .env("ACME_ACTION", "cleanup")
+                            .status()
+                        {
+                            Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+                            Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
+                            _ => {}
+                        }
+                    }
+                    anyhow::bail!(
+                        "DNS TXT records not found within {timeout_secs}s for: {}",
+                        failed.join(", ")
+                    );
+                }
+            }
+
+            // Phase 3: on_challenge_ready hooks + respond_to_challenge (serial)
+            for p in &pending {
+                if let Some(script) = on_challenge_ready {
+                    if challenge_type == CHALLENGE_TYPE_DNS01 {
+                        let key_auth = challenge::key_authorization(&p.token, client.account_key());
+                        run_hook(script, &[
+                            ("ACME_DOMAIN", p.domain.as_str()),
+                            ("ACME_CHALLENGE_TYPE", challenge_type),
+                            ("ACME_TOKEN", &p.token),
+                            ("ACME_KEY_AUTH", &key_auth),
+                            ("ACME_TXT_NAME", &p.txt_name),
+                            ("ACME_TXT_VALUE", &p.txt_value),
+                        ])?;
+                    } else {
+                        run_hook(script, &[
+                            ("ACME_DOMAIN", p.domain.as_str()),
+                            ("ACME_CHALLENGE_TYPE", challenge_type),
+                            ("ACME_TXT_NAME", &p.txt_name),
+                            ("ACME_TXT_VALUE", &p.txt_value),
+                        ])?;
+                    }
+                }
+                client.respond_to_challenge(&p.challenge_url).await?;
+                if !json {
+                    println!("  Challenge response sent for {}", p.domain);
+                }
+            }
+
+            // Phase 4: Poll all authorizations until valid (serial)
+            for p in &pending {
+                let poll_deadline =
+                    std::time::Instant::now() + std::time::Duration::from_secs(300);
+                loop {
+                    if std::time::Instant::now() > poll_deadline {
+                        // Clean up remaining records
+                        for q in &pending {
+                            let _ = std::process::Command::new(hook)
+                                .env("ACME_DOMAIN", &q.domain)
+                                .env("ACME_TXT_NAME", &q.txt_name)
+                                .env("ACME_TXT_VALUE", &q.txt_value)
+                                .env("ACME_ACTION", "cleanup")
+                                .status();
+                        }
+                        anyhow::bail!(
+                            "authorization for {} did not complete within 5 minutes",
+                            p.domain
+                        );
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    let a = client.get_authorization(&p.authz_url).await?;
+                    if !json {
+                        println!("  Authorization status for {}: {}", p.domain, a.status);
+                    }
+
+                    if let Some(ch) = a
+                        .challenges
+                        .iter()
+                        .find(|c| c.challenge_type == challenge_type)
+                    {
+                        if let Some(ref err) = ch.error {
+                            for q in &pending {
+                                let _ = std::process::Command::new(hook)
+                                    .env("ACME_DOMAIN", &q.domain)
+                                    .env("ACME_TXT_NAME", &q.txt_name)
+                                    .env("ACME_TXT_VALUE", &q.txt_value)
+                                    .env("ACME_ACTION", "cleanup")
+                                    .status();
+                            }
+                            anyhow::bail!(
+                                "challenge validation failed for {}: {err}",
+                                p.domain
+                            );
+                        }
+                    }
+
+                    match a.status {
+                        AuthorizationStatus::Valid => break,
+                        AuthorizationStatus::Invalid => {
+                            for q in &pending {
+                                let _ = std::process::Command::new(hook)
+                                    .env("ACME_DOMAIN", &q.domain)
+                                    .env("ACME_TXT_NAME", &q.txt_name)
+                                    .env("ACME_TXT_VALUE", &q.txt_value)
+                                    .env("ACME_ACTION", "cleanup")
+                                    .status();
+                            }
+                            let detail = a
+                                .challenges
+                                .iter()
+                                .find(|c| c.challenge_type == challenge_type)
+                                .and_then(|c| c.error.as_ref())
+                                .map(|e| format!(": {e}"))
+                                .unwrap_or_default();
+                            anyhow::bail!(
+                                "authorization failed for {}{detail}",
+                                p.domain
+                            );
+                        }
+                        _ => continue,
+                    }
+                }
+            }
+
+            // Phase 5: Cleanup all DNS records
+            for p in &pending {
+                info!("Calling DNS hook (cleanup): {} for {}", hook.display(), p.domain);
+                match std::process::Command::new(hook)
+                    .env("ACME_DOMAIN", &p.domain)
+                    .env("ACME_TXT_NAME", &p.txt_name)
+                    .env("ACME_TXT_VALUE", &p.txt_value)
+                    .env("ACME_ACTION", "cleanup")
+                    .status()
+                {
+                    Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
+                    _ => {}
+                }
+            }
+        }
+    } else {
+    // ── Sequential authorization (HTTP-01, TLS-ALPN-01, manual DNS) ─────
     for authz_url in &order.authorizations {
         let authz = client.get_authorization(authz_url).await?;
         if !json {
@@ -2267,27 +2562,12 @@ async fn cmd_run(
                 let txt_name = challenge::dns01::record_name(&authz.identifier.value);
                 let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
 
-                if let Some(hook) = dns_hook {
-                    // Hook mode: call script with ACME_ACTION=create
-                    info!("Calling DNS hook (create): {}", hook.display());
-                    let status = std::process::Command::new(hook)
-                        .env("ACME_DOMAIN", &authz.identifier.value)
-                        .env("ACME_TXT_NAME", &txt_name)
-                        .env("ACME_TXT_VALUE", &txt_value)
-                        .env("ACME_ACTION", "create")
-                        .status()
-                        .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
-                    if !status.success() {
-                        anyhow::bail!("DNS hook (create) exited with {status}");
-                    }
-                } else {
-                    // No hook: print instructions for manual setup
-                    challenge::dns01::print_instructions(
-                        &authz.identifier.value,
-                        token,
-                        client.account_key(),
-                    );
-                }
+                // No hook: print instructions for manual setup
+                challenge::dns01::print_instructions(
+                    &authz.identifier.value,
+                    token,
+                    client.account_key(),
+                );
 
                 if let Some(timeout_secs) = dns_wait {
                     // Poll DNS propagation
@@ -2305,25 +2585,12 @@ async fn cmd_run(
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     if !found {
-                        if let Some(hook) = dns_hook {
-                            match std::process::Command::new(hook)
-                                .env("ACME_DOMAIN", &authz.identifier.value)
-                                .env("ACME_TXT_NAME", &txt_name)
-                                .env("ACME_TXT_VALUE", &txt_value)
-                                .env("ACME_ACTION", "cleanup")
-                                .status()
-                            {
-                                Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
-                                Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                                _ => {}
-                            }
-                        }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                         );
                     }
-                } else if dns_hook.is_none() {
-                    // Interactive: wait for Enter (no hook + no --dns-wait)
+                } else {
+                    // Interactive: wait for Enter
                     println!("Press Enter once the record has propagated...");
                     let _ = std::io::stdin().read_line(&mut String::new());
                 }
@@ -2364,24 +2631,11 @@ async fn cmd_run(
                     &issuer_names[0], &account_uri, persist_policy, persist_until,
                 );
 
-                if let Some(hook) = dns_hook {
-                    info!("Calling DNS hook (create): {}", hook.display());
-                    let status = std::process::Command::new(hook)
-                        .env("ACME_DOMAIN", &authz.identifier.value)
-                        .env("ACME_TXT_NAME", &txt_name)
-                        .env("ACME_TXT_VALUE", &txt_value)
-                        .env("ACME_ACTION", "create")
-                        .status()
-                        .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
-                    if !status.success() {
-                        anyhow::bail!("DNS hook (create) exited with {status}");
-                    }
-                } else {
-                    challenge::dns_persist01::print_instructions(
-                        &authz.identifier.value, issuer_names, &account_uri,
-                        persist_policy, persist_until,
-                    );
-                }
+                // No hook: print instructions for manual setup
+                challenge::dns_persist01::print_instructions(
+                    &authz.identifier.value, issuer_names, &account_uri,
+                    persist_policy, persist_until,
+                );
 
                 if let Some(timeout_secs) = dns_wait {
                     info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
@@ -2398,24 +2652,11 @@ async fn cmd_run(
                         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                     }
                     if !found {
-                        if let Some(hook) = dns_hook {
-                            match std::process::Command::new(hook)
-                                .env("ACME_DOMAIN", &authz.identifier.value)
-                                .env("ACME_TXT_NAME", &txt_name)
-                                .env("ACME_TXT_VALUE", &txt_value)
-                                .env("ACME_ACTION", "cleanup")
-                                .status()
-                            {
-                                Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
-                                Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                                _ => {}
-                            }
-                        }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
                         );
                     }
-                } else if dns_hook.is_none() {
+                } else {
                     println!("Press Enter once the record has propagated...");
                     let _ = std::io::stdin().read_line(&mut String::new());
                 }
@@ -2522,37 +2763,6 @@ async fn cmd_run(
             }
         }
 
-        // Clean up DNS hook record if applicable
-        if challenge_type == CHALLENGE_TYPE_DNS01 {
-            if let Some(hook) = dns_hook {
-                let token = authz
-                    .challenges
-                    .iter()
-                    .find(|c| c.challenge_type == challenge_type)
-                    .and_then(|c| c.token.as_deref())
-                    .unwrap_or("");
-                let txt_name = challenge::dns01::record_name(&authz.identifier.value);
-                let txt_value =
-                    challenge::dns01::txt_record_value(token, client.account_key());
-                info!("Calling DNS hook (cleanup): {}", hook.display());
-                let status = std::process::Command::new(hook)
-                    .env("ACME_DOMAIN", &authz.identifier.value)
-                    .env("ACME_TXT_NAME", &txt_name)
-                    .env("ACME_TXT_VALUE", &txt_value)
-                    .env("ACME_ACTION", "cleanup")
-                    .status();
-                match status {
-                    Ok(s) if !s.success() => {
-                        tracing::warn!("DNS hook (cleanup) exited with {s}");
-                    }
-                    Err(e) => {
-                        tracing::warn!("DNS hook (cleanup) failed: {e}");
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         // Clean up after successful validation
         if let Some(handle) = serve_task.take() {
             handle.abort();
@@ -2561,6 +2771,7 @@ async fn cmd_run(
             challenge::http01::cleanup_challenge_file(f);
         }
     }
+    } // end sequential authorization
 
     // ── Finalize ────────────────────────────────────────────────────────
     info!("Step {}: Finalizing order", if pre_authorize { 5 } else { 4 });

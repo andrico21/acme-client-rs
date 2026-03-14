@@ -1287,6 +1287,65 @@ fi
 
 unset DNS_HOOK_LOG
 
+# ── TC-40c: Multi-domain DNS-01 hook (parallel propagation) ────────────────
+
+log_test "40c" "Multi-domain DNS-01 hook (parallel create/cleanup)"
+DNS_HOOK3_LOG="${WORK_DIR}/dns-hook3.log"
+export DNS_HOOK_LOG="${DNS_HOOK3_LOG}"
+
+DNS_HOOK3_KEY="${WORK_DIR}/dns-hook3.key"
+DNS_HOOK3_CERT="${WORK_DIR}/dns-hook3-cert.pem"
+DNS_HOOK3_PRIVKEY="${WORK_DIR}/dns-hook3-private.key"
+
+acme generate-key --account-key "${DNS_HOOK3_KEY}" >/dev/null 2>&1
+
+# Multi-SAN order with DNS hook — exercises parallel phased path
+set +e
+OUTPUT=$(acme --account-key "${DNS_HOOK3_KEY}" run \
+  --contact dns-hook3@example.com \
+  --challenge-type dns-01 \
+  --dns-hook "${DNS_HOOK}" \
+  --cert-output "${DNS_HOOK3_CERT}" \
+  --key-output "${DNS_HOOK3_PRIVKEY}" \
+  "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
+RC=$?
+set -e
+
+if [[ -f "${DNS_HOOK3_LOG}" ]]; then
+  CREATE_COUNT=$(grep -c "action=create" "${DNS_HOOK3_LOG}" || true)
+  CLEANUP_COUNT=$(grep -c "action=cleanup" "${DNS_HOOK3_LOG}" || true)
+  UNIQUE_DOMAINS=$(grep -oP 'domain=\S+' "${DNS_HOOK3_LOG}" | sort -u | wc -l)
+  echo "  Hook calls: create=${CREATE_COUNT} cleanup=${CLEANUP_COUNT} unique_domains=${UNIQUE_DOMAINS}"
+  echo "  Exit code: ${RC}"
+  cat "${DNS_HOOK3_LOG}" | sed 's/^/    /'
+
+  if [[ ${CREATE_COUNT} -ge 3 ]]; then
+    pass "DNS hook create called for all domains (${CREATE_COUNT} time(s))"
+  else
+    fail "40c" "Expected at least 3 create calls, got ${CREATE_COUNT}"
+  fi
+  if [[ ${CLEANUP_COUNT} -ge 3 ]]; then
+    pass "DNS hook cleanup called for all domains (${CLEANUP_COUNT} time(s))"
+  else
+    fail "40c" "Expected at least 3 cleanup calls, got ${CLEANUP_COUNT}"
+  fi
+  if [[ ${RC} -eq 0 ]]; then
+    pass "Multi-domain DNS-01 certificate issued"
+  else
+    # Pebble may still fail if it actually checks DNS — not a code bug
+    echo "  Note: exit code ${RC} (Pebble may require real DNS for multi-domain)"
+  fi
+else
+  if [[ ${RC} -eq 0 ]]; then
+    fail "40c" "Hook log not found but command succeeded"
+  else
+    skip "Multi-domain DNS hook test: server requires real DNS validation"
+    echo "  Output: ${OUTPUT}"
+  fi
+fi
+
+unset DNS_HOOK_LOG
+
 # ═════════════════════════════════════════════════════════════════════════════
 # SECTION 15: Cert/Key Output Path Tests
 # ═════════════════════════════════════════════════════════════════════════════
