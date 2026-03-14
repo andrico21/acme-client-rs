@@ -740,6 +740,24 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 acme-client-rs run --ari --days 30 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key --contact admin@example.com example.com
 ```
 
+**Рекомендуемая схема:** настройте ежедневное задание cron (или таймер systemd), запускающее полную команду `run` с `--ari --days 30`. В большинстве случаев клиент завершится немедленно ("окно продления ещё не открыто"). Когда рекомендуемое CA окно откроется, продление произойдёт автоматически. Если ARI недоступна, `--days 30` выступает страховкой:
+
+```cron
+# /etc/cron.d/acme-ari-renew
+0 3 * * * root /usr/local/bin/acme-client-rs \
+  --directory https://acme-v02.api.letsencrypt.org/directory \
+  --account-key /etc/acme/account.key \
+  run --ari --days 30 \
+  --contact admin@example.com \
+  --challenge-type http-01 --challenge-dir /var/www/acme \
+  --cert-output /etc/ssl/certs/example.com.pem \
+  --key-output /etc/ssl/private/example.com.key \
+  example.com www.example.com \
+  && systemctl reload nginx >> /var/log/acme-renew.log 2>&1
+```
+
+Ключевое преимущество: CA контролирует *время* продления (через рекомендуемое окно), что помогает распределить нагрузку на продление и позволяет CA сигнализировать о досрочном продлении при событиях отзыва или изменении политики.
+
 > **Примечание:** ARI требует, чтобы CA публиковал URL `renewalInfo` в своей директории. Let's Encrypt поддерживает ARI. Если сервер не поддерживает ARI, `--ari` молча переходит на `--days`.
 
 ### Bash-скрипт: выпуск и продление

@@ -740,6 +740,24 @@ Combine `--ari` and `--days` for defense in depth:
 acme-client-rs run --ari --days 30 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key --contact admin@example.com example.com
 ```
 
+**Recommended pattern:** set up a daily cron job (or systemd timer) that runs the full `run` command with `--ari --days 30`. Most days the client exits immediately ("renewal window not open yet"). When the CA's suggested window opens, it renews automatically. If ARI is unavailable, `--days 30` acts as a safety net:
+
+```cron
+# /etc/cron.d/acme-ari-renew
+0 3 * * * root /usr/local/bin/acme-client-rs \
+  --directory https://acme-v02.api.letsencrypt.org/directory \
+  --account-key /etc/acme/account.key \
+  run --ari --days 30 \
+  --contact admin@example.com \
+  --challenge-type http-01 --challenge-dir /var/www/acme \
+  --cert-output /etc/ssl/certs/example.com.pem \
+  --key-output /etc/ssl/private/example.com.key \
+  example.com www.example.com \
+  && systemctl reload nginx >> /var/log/acme-renew.log 2>&1
+```
+
+The key benefit: the CA controls *when* you renew (via the suggested window), which helps spread out renewal load and lets the CA signal early renewal if there's a revocation event or policy change.
+
 > **Note:** ARI requires the CA to advertise a `renewalInfo` URL in its directory. Let's Encrypt supports ARI. When the server doesn't support ARI, `--ari` silently falls back to `--days`.
 
 ### Bash Script: Issue and Renew
