@@ -408,8 +408,8 @@ impl AcmeClient {
             "oldKey": self.account_key.jwk(),
         }))?;
 
-        // Inner JWS signed by the NEW key (header has alg + jwk of new key)
-        let inner_jws = new_key.sign_key_change_inner(&inner_payload)?;
+        // Inner JWS signed by the NEW key (header has alg + jwk of new key + url)
+        let inner_jws = new_key.sign_key_change_inner(&inner_payload, &key_change_url)?;
 
         // Outer JWS: POST to keyChange URL, payload is the inner JWS string
         let resp = self.signed_request(&key_change_url, &inner_jws).await?;

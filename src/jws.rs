@@ -370,12 +370,13 @@ impl AccountKey {
 
     /// Sign the inner JWS for key-change (RFC 8555 Section 7.3.5).
     ///
-    /// The inner JWS uses a minimal protected header with only `alg` and
-    /// `jwk` (the NEW key's public JWK).  No `nonce`, `url`, or `kid`.
-    pub fn sign_key_change_inner(&self, payload: &str) -> Result<String> {
+    /// The inner JWS uses a protected header with `alg`, `jwk` (the NEW
+    /// key's public JWK), and `url` (the key-change URL).  No `nonce` or `kid`.
+    pub fn sign_key_change_inner(&self, payload: &str, url: &str) -> Result<String> {
         let header = serde_json::json!({
             "alg": self.alg(),
             "jwk": self.jwk(),
+            "url": url,
         });
         let protected =
             URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());

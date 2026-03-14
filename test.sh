@@ -1071,8 +1071,10 @@ log_header "Section 13: Error Handling"
 # ── TC-25: Missing Account Key File ────────────────────────────────────────
 
 log_test "25" "Missing Account Key File"
-OUTPUT=$(acme_rc --account-key "${WORK_DIR}/nonexistent-file-abc123.key" account 2>&1 || true)
+set +e
+OUTPUT=$(acme_rc --account-key "${WORK_DIR}/nonexistent-file-abc123.key" account 2>&1)
 RC=$?
+set -e
 if [[ ${RC} -ne 0 ]]; then
   if echo "${OUTPUT}" | grep -qi "failed to read\|not found\|no such file"; then
     pass "Clear error for missing key file"
@@ -1086,9 +1088,11 @@ fi
 # ── TC-26: Invalid Directory URL ───────────────────────────────────────────
 
 log_test "26" "Invalid Directory URL"
+set +e
 OUTPUT=$("${ACME_BIN}" --directory "https://localhost:59999/nope" \
-  --account-key "${ACCT_KEY}" account 2>&1 || true)
+  --account-key "${ACCT_KEY}" account 2>&1)
 RC=$?
+set -e
 if [[ ${RC} -ne 0 ]]; then
   pass "Non-zero exit code for invalid directory URL (${RC})"
 else
@@ -1112,9 +1116,11 @@ fi
 
 log_test "27" "Directory Returns Non-JSON (404)"
 # Construct a URL that exists but is not a valid ACME directory
+set +e
 OUTPUT=$("${ACME_BIN}" --directory "${ACME_SERVER}/nonexistent-path-xyz" \
-  --account-key "${ACCT_KEY}" account 2>&1 || true)
+  --account-key "${ACCT_KEY}" account 2>&1)
 RC=$?
+set -e
 if [[ ${RC} -ne 0 ]]; then
   pass "Non-zero exit code for bad directory endpoint (${RC})"
 else
@@ -1330,7 +1336,7 @@ fi
 # ── TC-51: account --output-format json ─────────────────────────────────────
 
 log_test "51" "account --output-format json"
-OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" account --contact json@example.com 2>&1 | grep -v '^\d\{4\}-')
+OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" account --contact json@example.com 2>&1 | grep -vE '^[0-9]{4}-')
 if echo "${OUTPUT}" | grep -q '"command"'; then
   pass "JSON output from account command"
   if ${HAS_PYTHON3}; then
@@ -1433,7 +1439,7 @@ OUTPUT=$(acme --output-format json --account-key "${JSON_E2E_KEY}" run \
   --http-port 5002 \
   --cert-output "${JSON_E2E_CERT}" \
   --key-output "${JSON_E2E_PRIVKEY}" \
-  "${SINGLE_DOMAIN}" 2>&1 | grep -v '^\d\{4\}-')
+  "${SINGLE_DOMAIN}" 2>&1 | grep -vE '^[0-9]{4}-')
 RC=$?
 
 if [[ ${RC} -eq 0 ]] && [[ -f "${JSON_E2E_CERT}" ]]; then
@@ -1477,7 +1483,7 @@ if [[ -f "${JSON_E2E_CERT}" ]]; then
     --cert-output "${JSON_E2E_CERT}" \
     --key-output "${JSON_E2E_PRIVKEY}" \
     --days 1 \
-    "${SINGLE_DOMAIN}" 2>&1 | grep -v '^\d\{4\}-')
+    "${SINGLE_DOMAIN}" 2>&1 | grep -vE '^[0-9]{4}-')
   if echo "${OUTPUT}" | grep -q '"action":"skip"'; then
     pass "JSON renewal skip output contains action=skip"
     if ${HAS_PYTHON3}; then
@@ -1542,7 +1548,7 @@ fi
 log_test "59" "--on-challenge-ready with nonexistent script (run fails gracefully)"
 HOOK_KEY="${WORK_DIR}/hook-test.key"
 acme generate-key --account-key "${HOOK_KEY}" 2>/dev/null
-OUTPUT=$(acme --account-key "${HOOK_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${HOOK_KEY}" \
   run --on-challenge-ready /nonexistent/hook.sh example.com 2>&1) || true
 # Should fail at some point (account creation or challenge) but not panic
 if echo "${OUTPUT}" | grep -qi "panic"; then
@@ -1554,7 +1560,7 @@ fi
 
 # TC-60: --on-cert-issued with nonexistent script
 log_test "60" "--on-cert-issued with nonexistent script (run fails gracefully)"
-OUTPUT=$(acme --account-key "${HOOK_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${HOOK_KEY}" \
   run --on-cert-issued /nonexistent/deploy.sh example.com 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "panic"; then
   fail "60" "Panic with nonexistent cert hook script"
@@ -1565,7 +1571,7 @@ fi
 
 # TC-61: Both hooks accepted together
 log_test "61" "Both --on-challenge-ready and --on-cert-issued accepted together"
-OUTPUT=$(acme --account-key "${HOOK_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${HOOK_KEY}" \
   run --on-challenge-ready /nonexistent/hook.sh --on-cert-issued /nonexistent/deploy.sh \
   example.com 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "cannot be used with"; then
@@ -1604,7 +1610,7 @@ log_test "64" "--eab-kid without --eab-hmac-key rejected"
 EAB_KEY="${WORK_DIR}/eab-test.key"
 acme generate-key --account-key "${EAB_KEY}" 2>/dev/null
 OUTPUT=$(acme --account-key "${EAB_KEY}" account --eab-kid test-kid 2>&1) || true
-if echo "${OUTPUT}" | grep -qi "required.*eab-hmac-key\|eab.hmac.key.*required\|the following required.*eab"; then
+if echo "${OUTPUT}" | grep -qi "required.*eab-hmac-key\|eab-hmac-key.*required\|the following required"; then
   pass "--eab-kid alone correctly rejected"
 else
   fail "64" "Expected clap error about missing --eab-hmac-key"
@@ -1614,7 +1620,7 @@ fi
 # TC-65: --eab-hmac-key without --eab-kid is rejected by clap
 log_test "65" "--eab-hmac-key without --eab-kid rejected"
 OUTPUT=$(acme --account-key "${EAB_KEY}" account --eab-hmac-key dGVzdA 2>&1) || true
-if echo "${OUTPUT}" | grep -qi "required.*eab-kid\|eab.kid.*required\|the following required.*eab"; then
+if echo "${OUTPUT}" | grep -qi "required.*eab-kid\|eab-kid.*required\|the following required"; then
   pass "--eab-hmac-key alone correctly rejected"
 else
   fail "65" "Expected clap error about missing --eab-kid"
@@ -1623,7 +1629,7 @@ fi
 
 # TC-66: Invalid base64url HMAC key is rejected
 log_test "66" "Invalid base64url EAB HMAC key rejected"
-OUTPUT=$(acme --account-key "${EAB_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${EAB_KEY}" \
   account --eab-kid test-kid --eab-hmac-key "not!!!valid===base64" 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "not valid base64url\|base64\|decode"; then
   pass "Invalid base64url key correctly rejected"
@@ -1634,7 +1640,7 @@ fi
 
 # TC-67: EAB with invalid credentials (server rejects)
 log_test "67" "EAB with fake credentials rejected by server"
-OUTPUT=$(acme --account-key "${EAB_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${EAB_KEY}" \
   account --contact eab-test@example.com \
   --eab-kid fake-kid-12345 --eab-hmac-key dGVzdGtleWZvcmhtYWN0ZXN0aW5n 2>&1) || true
 # Server should reject - either "externalAccountBinding" error or HTTP error
@@ -1652,7 +1658,7 @@ fi
 
 # TC-68: EAB flags accepted on run subcommand (no panic)
 log_test "68" "EAB flags accepted on run subcommand without panic"
-OUTPUT=$(acme --account-key "${EAB_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${EAB_KEY}" \
   run --eab-kid fake-kid --eab-hmac-key dGVzdA example.com 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "panic"; then
   fail "68" "Panic with EAB flags on run subcommand"
@@ -1699,7 +1705,7 @@ fi
 
 # TC-72: pre-authorize gracefully handles server without newAuthz
 log_test "72" "pre-authorize handles missing newAuthz in directory"
-OUTPUT=$(acme --account-key "${PREAUTH_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${PREAUTH_KEY}" \
   pre-authorize --domain "preauth-test.${TEST_DOMAIN}" 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "pre-authorization\|newAuthz\|not support"; then
   pass "Server without newAuthz handled gracefully"
@@ -1727,7 +1733,7 @@ fi
 
 # TC-74: --pre-authorize accepted on run subcommand (no panic)
 log_test "74" "--pre-authorize accepted on run with no panic"
-OUTPUT=$(acme --account-key "${PREAUTH_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${PREAUTH_KEY}" \
   run --pre-authorize --challenge-type http-01 \
   "preauth-test.${TEST_DOMAIN}" 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "panic"; then
@@ -1739,7 +1745,7 @@ fi
 
 # TC-75: pre-authorize with JSON output format
 log_test "75" "pre-authorize JSON output format"
-OUTPUT=$(acme --account-key "${PREAUTH_KEY}" --server "${ACME_SERVER}" \
+OUTPUT=$(acme --account-key "${PREAUTH_KEY}" \
   --output-format json pre-authorize --domain "preauth-test.${TEST_DOMAIN}" 2>&1) || true
 if echo "${OUTPUT}" | grep -qi "panic"; then
   fail "75" "Panic with pre-authorize JSON output"
