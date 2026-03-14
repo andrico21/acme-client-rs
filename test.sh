@@ -1289,7 +1289,7 @@ unset DNS_HOOK_LOG
 
 # ── TC-40c: Multi-domain DNS-01 hook (parallel propagation) ────────────────
 
-log_test "40c" "Multi-domain DNS-01 hook (parallel create/cleanup)"
+log_test "40c" "Multi-domain DNS-01 hook (parallel create/cleanup, concurrency=10)"
 DNS_HOOK3_LOG="${WORK_DIR}/dns-hook3.log"
 export DNS_HOOK_LOG="${DNS_HOOK3_LOG}"
 
@@ -1299,12 +1299,13 @@ DNS_HOOK3_PRIVKEY="${WORK_DIR}/dns-hook3-private.key"
 
 acme generate-key --account-key "${DNS_HOOK3_KEY}" >/dev/null 2>&1
 
-# Multi-SAN order with DNS hook — exercises parallel phased path
+# Multi-SAN order with DNS hook + explicit concurrency — exercises parallel phased path
 set +e
 OUTPUT=$(acme --account-key "${DNS_HOOK3_KEY}" run \
   --contact dns-hook3@example.com \
   --challenge-type dns-01 \
   --dns-hook "${DNS_HOOK}" \
+  --dns-propagation-concurrency 10 \
   --cert-output "${DNS_HOOK3_CERT}" \
   --key-output "${DNS_HOOK3_PRIVKEY}" \
   "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
@@ -1348,14 +1349,14 @@ unset DNS_HOOK_LOG
 
 # ── TC-40d: Multi-domain DNS-01 hook cleanup on propagation timeout ─────────
 
-log_test "40d" "Multi-domain DNS-01 hook cleanup on propagation timeout (3 domains)"
+log_test "40d" "Multi-domain DNS-01 hook cleanup on propagation timeout (3 domains, concurrency=10)"
 DNS_HOOK4_LOG="${WORK_DIR}/dns-hook4.log"
 export DNS_HOOK_LOG="${DNS_HOOK4_LOG}"
 
 DNS_HOOK4_KEY="${WORK_DIR}/dns-hook4.key"
 acme generate-key --account-key "${DNS_HOOK4_KEY}" >/dev/null 2>&1
 
-# Multi-SAN order with --dns-wait 1 — propagation will fail for all 3 domains
+# Multi-SAN order with --dns-wait 1 + explicit concurrency — propagation will fail
 # The parallel path must clean up ALL created records before bailing
 set +e
 OUTPUT=$(acme --account-key "${DNS_HOOK4_KEY}" run \
@@ -1363,6 +1364,7 @@ OUTPUT=$(acme --account-key "${DNS_HOOK4_KEY}" run \
   --challenge-type dns-01 \
   --dns-hook "${DNS_HOOK}" \
   --dns-wait 1 \
+  --dns-propagation-concurrency 10 \
   "${SAN_DOMAIN1}" "${SAN_DOMAIN2}" "${SAN_DOMAIN3}" 2>&1)
 RC=$?
 set -e
