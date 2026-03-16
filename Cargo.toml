@@ -7,7 +7,7 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
-clap = { version = "4", features = ["derive", "env"] }
+clap = { version = "4.6", features = ["derive", "env"] }
 ecdsa = { version = "0.16", features = ["signing"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
 hmac = "0.12"
