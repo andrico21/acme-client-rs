@@ -146,7 +146,7 @@ acme --insecure --account-key test-account.key account --contact test@example.co
 **Goal:** Account creation works without a contact email.
 
 ```sh
-acme --account-key test-account.key account
+acme --insecure --account-key test-account.key account
 ```
 
 **Expected:**
@@ -731,13 +731,16 @@ acme --insecure --account-key test.key run --key-password "pw1" --key-password-f
 **Goal:** `run --days 1` skips issuance when the existing certificate has more than 1 day remaining.
 
 ```sh
-# Issue a certificate first, then re-run with --days 1
+# Step 1: Issue a certificate first
+acme --insecure --account-key renewal.key run --contact renewal@example.com --challenge-type http-01 --http-port 5002 --cert-output renewal-cert.pem --key-output renewal-key.pem test.example.com
+
+# Step 2: Re-run with --days 1 (should skip - cert has many days left)
 acme --insecure --account-key renewal.key run --contact renewal@example.com --challenge-type http-01 --http-port 5002 --cert-output renewal-cert.pem --key-output renewal-key.pem --days 1 test.example.com
 ```
 
 **Expected:**
-- Exit code: 0
-- Output contains `skipping renewal` (case-insensitive)
+- Both commands exit with code 0
+- Step 2 output contains `skipping renewal` (case-insensitive)
 
 ---
 

@@ -1856,6 +1856,7 @@ async fn cmd_run(
 
             let mut challenge_file: Option<std::path::PathBuf> = None;
             let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
+            let mut dns_cleanup_info: Option<(String, String)> = None;
 
             match challenge_type {
                 CHALLENGE_TYPE_HTTP01 => {
@@ -1972,6 +1973,7 @@ async fn cmd_run(
                             ("ACME_TXT_VALUE", &txt_value_ref),
                         ])?;
                     }
+                    dns_cleanup_info = Some((txt_name, txt_value));
                     client.respond_to_challenge(&challenge_url).await?;
                 }
                 CHALLENGE_TYPE_DNS_PERSIST01 => {
@@ -2051,6 +2053,7 @@ async fn cmd_run(
                             ("ACME_TXT_VALUE", &txt_value),
                         ])?;
                     }
+                    dns_cleanup_info = Some((txt_name, txt_value));
                     client.respond_to_challenge(&challenge_url).await?;
                 }
                 CHALLENGE_TYPE_TLSALPN01 => {
@@ -2113,15 +2116,13 @@ async fn cmd_run(
                 }
             }
 
-            // Clean up DNS hook if applicable
-            if challenge_type == CHALLENGE_TYPE_DNS01 {
+            // Clean up DNS hook if applicable (dns-01 and dns-persist-01)
+            if let Some((ref txt_name, ref txt_value)) = dns_cleanup_info {
                 if let Some(hook) = dns_hook {
-                    let txt_name = challenge::dns01::record_name(&domain_display);
-                    let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
                     let status = std::process::Command::new(hook)
                         .env("ACME_DOMAIN", &domain_display)
-                        .env("ACME_TXT_NAME", &txt_name)
-                        .env("ACME_TXT_VALUE", &txt_value)
+                        .env("ACME_TXT_NAME", txt_name)
+                        .env("ACME_TXT_VALUE", txt_value)
                         .env("ACME_ACTION", "cleanup")
                         .status();
                     match status {

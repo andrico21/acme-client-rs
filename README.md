@@ -14,7 +14,7 @@ Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release bi
 - Four challenge types: HTTP-01 (built-in server or `--challenge-dir`), DNS-01 (interactive, hook scripts, auto-propagation check), DNS-PERSIST-01 (persistent DNS records, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist)), TLS-ALPN-01 (interactive)
 - External Account Binding (EAB) for CAs that require it (`--eab-kid` + `--eab-hmac-key`)
 - Pre-authorization (RFC 8555 Section 7.4.1) via `pre-authorize` subcommand or `--pre-authorize` flag on `run`
-- Generic hook scripts: `--on-challenge-ready` (called after each challenge is set up) and `--on-cert-issued` (called after certificate is saved)
+- Generic hook scripts: `--on-challenge-ready` (called after each dns-01, dns-persist-01, or tls-alpn-01 challenge is set up) and `--on-cert-issued` (called after certificate is saved)
 - IP identifier support (RFC 8738) with IPv6 normalization - auto-detected from CLI input
 - Automated end-to-end flow (`run` subcommand) with built-in renewal (`--days N` skips if not due - no separate renew command needed)
 - ACME Renewal Information (ARI, RFC 9702): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
@@ -208,11 +208,11 @@ Automate DNS record creation with an external script:
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type dns-persist-01 --dns-hook /usr/local/bin/dns-hook.sh your.domain.com
 ```
 
-The hook is called with `ACME_ACTION=create` (no cleanup call - records are meant to persist):
+The hook is called with `ACME_ACTION=create` before validation and `ACME_ACTION=cleanup` after:
 
 | Variable | Example |
 |---|---|
-| `ACME_ACTION` | `create` |
+| `ACME_ACTION` | `create` or `cleanup` |
 | `ACME_DOMAIN` | `your.domain.com` |
 | `ACME_TXT_NAME` | `_validation-persist.your.domain.com` |
 | `ACME_TXT_VALUE` | `letsencrypt.org; accounturi=https://...` |
@@ -1241,7 +1241,7 @@ Global options can be placed before or after the subcommand.
 | `--days <N>` | - | **Renewal mode:** skip issuance if existing `--cert-output` has more than N days remaining. Use this to make `run` idempotent for cron/scheduled tasks. |
 | `--key-password <PW>` | - | Encrypt the private key (PKCS#8, AES-256-CBC + scrypt KDF) |
 | `--key-password-file <PATH>` | - | Read the key encryption password from a file (first line) |
-| `--on-challenge-ready <SCRIPT>` | - | Run a script after each challenge is ready for validation (before responding) |
+| `--on-challenge-ready <SCRIPT>` | - | Run a script after each challenge is ready for validation (dns-01, dns-persist-01, tls-alpn-01; not called for http-01) |
 | `--on-cert-issued <SCRIPT>` | - | Run a script after the certificate is issued and saved to disk |
 | `--eab-kid <KID>` | - | EAB Key ID from the CA (for CAs that require External Account Binding) |
 | `--eab-hmac-key <KEY>` | - | EAB HMAC key (base64url-encoded, from the CA) |
@@ -1320,7 +1320,7 @@ These are set by the client when calling `--dns-hook`:
 
 | Variable | Description |
 |---|---|
-| `ACME_ACTION` | `create` (before validation) or `cleanup` (after validation; dns-01 only - dns-persist-01 records persist) |
+| `ACME_ACTION` | `create` (before validation) or `cleanup` (after validation) |
 | `ACME_DOMAIN` | The domain being validated |
 | `ACME_TXT_NAME` | Full DNS record name (e.g., `_acme-challenge.example.com` or `_validation-persist.example.com`) |
 | `ACME_TXT_VALUE` | TXT record value (base64url SHA-256 for dns-01, or persistent record value for dns-persist-01) |

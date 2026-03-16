@@ -14,7 +14,7 @@
 - Четыре типа вызовов: HTTP-01 (встроенный сервер или `--challenge-dir`), DNS-01 (интерактивный, hook-скрипты, автопроверка появления TXT-записи), DNS-PERSIST-01 (постоянные DNS-записи, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist)), TLS-ALPN-01 (интерактивный)
 - Привязка внешнего аккаунта (EAB) для CA, которые этого требуют в обязательном порядке (`--eab-kid` + `--eab-hmac-key`)
 - Предварительная авторизация (RFC 8555 Section 7.4.1) через субкоманду `pre-authorize` или флаг `--pre-authorize` в `run`
-- Универсальные hook-скрипты: `--on-challenge-ready` (вызывается после подготовки каждого вызова) и `--on-cert-issued` (вызывается после сохранения сертификата)
+- Универсальные hook-скрипты: `--on-challenge-ready` (вызывается после подготовки каждого вызова dns-01, dns-persist-01 или tls-alpn-01) и `--on-cert-issued` (вызывается после сохранения сертификата)
 - Поддержка IP-идентификаторов (RFC 8738) с нормализацией IPv6 - автоматическое определение из аргументов командной строки
 - Автоматизированный сквозной процесс (субкоманда `run`) со встроенным продлением (`--days N` пропускает запуск обновления, если срок продления ещё не наступил - отдельная команда renew не нужна)
 - ACME Renewal Information (ARI, RFC 9702): субкоманда `renewal-info` для запроса рекомендуемого окна продления от CA, и флаг `--ari` в `run` для использования серверного расписания продления с привязкой заказа через поле `replaces`
@@ -208,11 +208,11 @@ letsencrypt.org; accounturi=https://acme-server/acme/acct/123; policy=wildcard; 
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type dns-persist-01 --dns-hook /usr/local/bin/dns-hook.sh your.domain.com
 ```
 
-Hook вызывается с `ACME_ACTION=create` (вызов cleanup отсутствует - записи предназначены для сохранения):
+Hook вызывается с `ACME_ACTION=create` перед валидацией и `ACME_ACTION=cleanup` после:
 
 | Переменная | Пример |
 |---|---|
-| `ACME_ACTION` | `create` |
+| `ACME_ACTION` | `create` or `cleanup` |
 | `ACME_DOMAIN` | `your.domain.com` |
 | `ACME_TXT_NAME` | `_validation-persist.your.domain.com` |
 | `ACME_TXT_VALUE` | `letsencrypt.org; accounturi=https://...` |
@@ -1241,7 +1241,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--days <N>` | - | **Режим продления:** пропустить выпуск, если у существующего `--cert-output` осталось более N дней. Используйте для идемпотентности `run` в cron/планировщике. |
 | `--key-password <PW>` | - | Зашифровать закрытый ключ (PKCS#8, AES-256-CBC + scrypt KDF) |
 | `--key-password-file <PATH>` | - | Прочитать пароль шифрования ключа из файла (первая строка) |
-| `--on-challenge-ready <SCRIPT>` | - | Запустить скрипт после готовности каждого вызова к валидации (перед ответом) |
+| `--on-challenge-ready <SCRIPT>` | - | Запустить скрипт после готовности каждого вызова к валидации (dns-01, dns-persist-01, tls-alpn-01; не вызывается для http-01) |
 | `--on-cert-issued <SCRIPT>` | - | Запустить скрипт после выпуска и сохранения сертификата на диск |
 | `--eab-kid <KID>` | - | EAB Key ID от CA (для CA, требующих привязку внешнего аккаунта) |
 | `--eab-hmac-key <KEY>` | - | EAB HMAC-ключ (в кодировке base64url, от CA) |
@@ -1320,7 +1320,7 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 
 | Переменная | Описание |
 |---|---|
-| `ACME_ACTION` | `create` (перед валидацией) или `cleanup` (после валидации; только dns-01 - записи dns-persist-01 сохраняются) |
+| `ACME_ACTION` | `create` (перед валидацией) или `cleanup` (после валидации) |
 | `ACME_DOMAIN` | Валидируемый домен |
 | `ACME_TXT_NAME` | Полное имя DNS-записи (например, `_acme-challenge.example.com` или `_validation-persist.example.com`) |
 | `ACME_TXT_VALUE` | Значение TXT-записи (base64url SHA-256 для dns-01 или значение постоянной записи для dns-persist-01) |
