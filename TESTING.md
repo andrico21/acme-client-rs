@@ -1174,7 +1174,7 @@ acme --insecure --output-format json --account-key preauth.key pre-authorize --d
 
 ## Manual-Only Test Cases
 
-The following test cases require special server configurations and are not included in the automated test script (`test.sh`):
+The following test cases require special server configurations and are not included in the automated test script (`tests/test.sh`):
 
 | TC | Description | Requirements |
 |----|-------------|-------------|

@@ -11,6 +11,18 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Check advisories, licenses, bans & sources
+        run: cargo deny check
+
   build-linux:
     name: Build & Test (Linux)
     runs-on: ubuntu-24.04
@@ -76,5 +88,5 @@ jobs:
 
       - name: Run test suite
         run: |
-          chmod +x test-podman.sh test.sh target/release/acme-client-rs
-          ./test-podman.sh --no-build
+          chmod +x tests/test-podman.sh tests/test.sh target/release/acme-client-rs
+          ./tests/test-podman.sh --no-build

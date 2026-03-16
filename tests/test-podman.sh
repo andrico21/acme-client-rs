@@ -6,15 +6,15 @@
 #   sudo apt install -y podman
 #
 # Usage:
-#   chmod +x test-podman.sh
-#   ./test-podman.sh              # full build + test
-#   ./test-podman.sh --no-build   # skip build, reuse existing binary
+#   chmod +x tests/test-podman.sh
+#   ./tests/test-podman.sh              # full build + test
+#   ./tests/test-podman.sh --no-build   # skip build, reuse existing binary
 #
 # What this script does:
 #   1. Builds acme-client-rs inside a container (static musl binary)
 #   2. Starts Pebble ACME test server via podman
 #   3. Waits for Pebble to become healthy
-#   4. Runs the full test suite (test.sh) against Pebble
+#   4. Runs the full test suite (tests/test.sh) against Pebble
 #   5. Cleans up all containers, pods, and images
 #
 # The script is fully self-contained — no Rust toolchain, no OpenSSL headers,
@@ -43,7 +43,7 @@ NC='\033[0m'
 # ── Configuration ────────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${SCRIPT_DIR}"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 POD_NAME="acme-test-pod"
 PEBBLE_IMAGE="ghcr.io/letsencrypt/pebble:latest"
 CHALLTESTSRV_IMAGE="ghcr.io/letsencrypt/pebble-challtestsrv:latest"
@@ -124,11 +124,11 @@ if [[ ! -f "${PROJECT_DIR}/Cargo.toml" ]]; then
 fi
 log_info "Project directory: ${PROJECT_DIR}"
 
-if [[ ! -f "${PROJECT_DIR}/test.sh" ]]; then
-  log_error "test.sh not found — the test runner is required"
+if [[ ! -f "${SCRIPT_DIR}/test.sh" ]]; then
+  log_error "tests/test.sh not found — the test runner is required"
   exit 1
 fi
-log_info "Test runner: test.sh"
+log_info "Test runner: tests/test.sh"
 
 # Check for required tools; install any that are missing
 MISSING_PKGS=()
@@ -270,12 +270,12 @@ echo -e "  ${BOLD}Binary:${NC}  ${PROJECT_DIR}/target/release/acme-client-rs"
 echo ""
 
 cd "${PROJECT_DIR}"
-chmod +x test.sh
+chmod +x "${SCRIPT_DIR}/test.sh"
 
 # Run the full test suite
 # test.sh expects: <acme-server-url> <test-subdomain> [--insecure]
 set +e
-./test.sh "${ACME_SERVER}" "${TEST_DOMAIN}" --insecure
+"${SCRIPT_DIR}/test.sh" "${ACME_SERVER}" "${TEST_DOMAIN}" --insecure
 TEST_EXIT=$?
 set -e
 
