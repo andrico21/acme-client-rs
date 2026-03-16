@@ -953,7 +953,9 @@ Example `on-challenge-ready.sh` (e.g., to log or notify):
 ```bash
 #!/usr/bin/env bash
 set -euo pipefail
-# ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN, ACME_KEY_AUTH set by acme-client-rs
+# ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN (dns-01/tls-alpn-01),
+# ACME_KEY_AUTH (dns-01/tls-alpn-01), ACME_TXT_NAME (dns-01/dns-persist-01),
+# ACME_TXT_VALUE (dns-01/dns-persist-01) set by acme-client-rs
 echo "Challenge ready: ${ACME_CHALLENGE_TYPE} for ${ACME_DOMAIN}"
 ```
 

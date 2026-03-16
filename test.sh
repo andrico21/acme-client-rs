@@ -117,6 +117,7 @@ extract() {
   echo "${OUTPUT}" | grep "^${prefix}" | head -1 | sed "s/^${prefix}[[:space:]]*//"
 }
 
+# shellcheck disable=SC2329  # invoked via trap
 cleanup() {
   echo ""
   echo -e "${CYAN}Cleaning up work directory: ${WORK_DIR}${NC}"
@@ -156,8 +157,7 @@ log_header "Section 1: Key Generation"
 # ── TC-01: Generate Account Key (ES256 default) ─────────────────────────────
 
 log_test "01" "Generate Account Key (ES256 default)"
-OUTPUT=$(acme generate-key --account-key "${WORK_DIR}/tc01-account.key" 2>&1)
-if [[ $? -eq 0 ]] && [[ -f "${WORK_DIR}/tc01-account.key" ]]; then
+if OUTPUT=$(acme generate-key --account-key "${WORK_DIR}/tc01-account.key" 2>&1) && [[ -f "${WORK_DIR}/tc01-account.key" ]]; then
   if echo "${OUTPUT}" | grep -qi "es256\|ES256"; then
     pass "ES256 key generated"
   else
@@ -181,8 +181,7 @@ fi
 for ALG in "${KEY_ALGORITHMS[@]}"; do
   log_test "01b-${ALG}" "Generate Account Key (${ALG})"
   KEY_FILE="${WORK_DIR}/tc01b-${ALG}.key"
-  OUTPUT=$(acme generate-key --algorithm "${ALG}" --account-key "${KEY_FILE}" 2>&1)
-  if [[ $? -eq 0 ]] && [[ -f "${KEY_FILE}" ]]; then
+  if OUTPUT=$(acme generate-key --algorithm "${ALG}" --account-key "${KEY_FILE}" 2>&1) && [[ -f "${KEY_FILE}" ]]; then
     # Verify PEM header exists
     if head -1 "${KEY_FILE}" | grep -q "BEGIN"; then
       pass "${ALG} key generated and contains PEM header"
@@ -309,25 +308,7 @@ if [[ -n "${AUTHZ_URL:-}" ]]; then
     HAS_TLSALPN=$(echo "${OUTPUT}" | grep -c "tls-alpn-01" || true)
     pass "Authorization fetched - http-01:${HAS_HTTP01} dns-01:${HAS_DNS01} tls-alpn-01:${HAS_TLSALPN}"
 
-    # Extract HTTP-01 challenge URL and token for later tests
-    HTTP01_LINE=$(echo "${OUTPUT}" | grep "http-01" | head -1 || true)
-    if [[ -n "${HTTP01_LINE}" ]]; then
-      HTTP01_URL=$(echo "${HTTP01_LINE}" | sed 's/.*url=\(http[^ ]*\).*/\1/')
-      TOKEN_LINE=$(echo "${OUTPUT}" | grep -A1 "http-01" | grep "token:" | head -1 || true)
-      if [[ -n "${TOKEN_LINE}" ]]; then
-        HTTP01_TOKEN=$(echo "${TOKEN_LINE}" | sed 's/.*token:[[:space:]]*//')
-      fi
-    fi
 
-    # Extract DNS-01 challenge URL and token
-    DNS01_LINE=$(echo "${OUTPUT}" | grep "dns-01" | head -1 || true)
-    if [[ -n "${DNS01_LINE}" ]]; then
-      DNS01_URL=$(echo "${DNS01_LINE}" | sed 's/.*url=\(http[^ ]*\).*/\1/')
-      DNS01_TOKEN_LINE=$(echo "${OUTPUT}" | grep -A1 "dns-01" | grep "token:" | head -1 || true)
-      if [[ -n "${DNS01_TOKEN_LINE}" ]]; then
-        DNS01_TOKEN=$(echo "${DNS01_TOKEN_LINE}" | sed 's/.*token:[[:space:]]*//')
-      fi
-    fi
   else
     fail "08" "Authorization fetch returned no identifier"
     echo "  Output: ${OUTPUT}"
@@ -450,7 +431,7 @@ if command -v curl &>/dev/null; then
     pass "HTTP-01 server listening on custom port ${CUSTOM_PORT}"
   else
     # If it responded at all, port binding worked
-    if curl -sf "http://localhost:${CUSTOM_PORT}/" 2>&1 >/dev/null; then
+    if curl -sf "http://localhost:${CUSTOM_PORT}/" >/dev/null 2>&1; then
       pass "Server is reachable on custom port ${CUSTOM_PORT}"
     else
       fail "30" "Server not reachable on port ${CUSTOM_PORT}"
@@ -531,7 +512,7 @@ fi
 log_test "14" "Poll Order Status"
 if [[ -n "${MANUAL_ORDER_URL:-}" ]]; then
   # Poll a few times until valid
-  for i in 1 2 3 4 5; do
+  for _ in 1 2 3 4 5; do
     OUTPUT=$(acme --account-key "${MANUAL_KEY}" --account-url "${MANUAL_ACCT_URL}" \
       poll-order "${MANUAL_ORDER_URL}" 2>&1)
     ORDER_STATUS=$(echo "${OUTPUT}" | grep "Order status:" | head -1 | sed 's/.*Order status:[[:space:]]*//')
@@ -743,8 +724,7 @@ if [[ ${RC} -eq 0 ]] && [[ -f "${ENCPRIVKEY}" ]]; then
 
     # Verify we can decrypt with the correct password
     if command -v openssl &>/dev/null; then
-      DECRYPT_OUTPUT=$(openssl pkey -in "${ENCPRIVKEY}" -passin "pass:${TEST_PASSWORD}" -noout 2>&1 || true)
-      if [[ $? -eq 0 ]] || echo "${DECRYPT_OUTPUT}" | grep -qvi "error"; then
+      if DECRYPT_OUTPUT=$(openssl pkey -in "${ENCPRIVKEY}" -passin "pass:${TEST_PASSWORD}" -noout 2>&1); then
         pass "OpenSSL can decrypt the private key with the correct password"
       else
         fail "33" "OpenSSL could not decrypt the private key"
@@ -794,8 +774,7 @@ if [[ ${RC} -eq 0 ]] && [[ -f "${ENCPRIVKEY2}" ]]; then
 
     # Verify decryption with the file password
     if command -v openssl &>/dev/null; then
-      DECRYPT_OUTPUT=$(openssl pkey -in "${ENCPRIVKEY2}" -passin "pass:${FILE_PASSWORD}" -noout 2>&1 || true)
-      if [[ $? -eq 0 ]] || echo "${DECRYPT_OUTPUT}" | grep -qvi "error"; then
+      if DECRYPT_OUTPUT=$(openssl pkey -in "${ENCPRIVKEY2}" -passin "pass:${FILE_PASSWORD}" -noout 2>&1); then
         pass "Password from file decrypts the key successfully"
       fi
     fi
@@ -1048,8 +1027,7 @@ unset ACME_ACCOUNT_KEY_FILE
 
 log_test "24" "Global Args After Subcommand"
 AFTER_KEY="${WORK_DIR}/after-sub.key"
-OUTPUT=$(acme generate-key --account-key "${AFTER_KEY}" 2>&1)
-if [[ $? -eq 0 ]] && [[ -f "${AFTER_KEY}" ]]; then
+if OUTPUT=$(acme generate-key --account-key "${AFTER_KEY}" 2>&1) && [[ -f "${AFTER_KEY}" ]]; then
   # Now use the key with args after subcommand
   OUTPUT=$(acme account --account-key "${AFTER_KEY}" --contact after@example.com 2>&1)
   if echo "${OUTPUT}" | grep -q "Account status: valid"; then
