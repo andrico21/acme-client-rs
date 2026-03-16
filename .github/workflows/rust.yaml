@@ -76,5 +76,5 @@ jobs:
 
       - name: Run test suite
         run: |
-          chmod +x test-podman.sh test.sh target/release/acme-client-rs
-          ./test-podman.sh --no-build
+          chmod +x tests/test-podman.sh tests/test.sh target/release/acme-client-rs
+          ./tests/test-podman.sh --no-build
