@@ -73,8 +73,8 @@
 
 # Path to a DNS-01/DNS-PERSIST-01 hook script.
 # The script is called with environment variables: ACME_ACTION, ACME_DOMAIN,
-# ACME_TXT_NAME, ACME_TXT_VALUE. For dns-01, ACME_ACTION is "create" or "cleanup".
-# For dns-persist-01, only "create" is called (records are persistent).
+# ACME_TXT_NAME, ACME_TXT_VALUE. For both dns-01 and dns-persist-01,
+# ACME_ACTION is "create" before validation or "cleanup" after.
 # CLI: --dns-hook
 # dns_hook = "/usr/local/bin/dns-hook.sh"
 
@@ -119,8 +119,9 @@
 # key_password_file = "/etc/acme/key-password.txt"
 
 # Hook script run after each challenge is set up and ready for validation.
-# Environment variables: ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN, ACME_KEY_AUTH,
-# ACME_TXT_NAME (dns-01/dns-persist-01), ACME_TXT_VALUE (dns-01/dns-persist-01).
+# Environment variables: ACME_DOMAIN, ACME_CHALLENGE_TYPE, ACME_TOKEN (dns-01/tls-alpn-01),
+# ACME_KEY_AUTH (dns-01/tls-alpn-01), ACME_TXT_NAME (dns-01/dns-persist-01),
+# ACME_TXT_VALUE (dns-01/dns-persist-01).
 # CLI: --on-challenge-ready
 # on_challenge_ready = "/usr/local/bin/reload-nginx.sh"
 

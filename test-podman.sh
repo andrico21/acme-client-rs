@@ -47,7 +47,6 @@ PROJECT_DIR="${SCRIPT_DIR}"
 POD_NAME="acme-test-pod"
 PEBBLE_IMAGE="ghcr.io/letsencrypt/pebble:latest"
 CHALLTESTSRV_IMAGE="ghcr.io/letsencrypt/pebble-challtestsrv:latest"
-BUILDER_IMAGE="docker.io/library/rust:alpine"
 ACME_SERVER="https://localhost:14000/dir"
 TEST_DOMAIN="localhost"
 
@@ -79,6 +78,7 @@ log_error() {
 
 # ── Cleanup (runs on exit) ───────────────────────────────────────────────────
 
+# shellcheck disable=SC2329  # invoked via trap
 cleanup() {
   echo ""
   log_step "Cleanup"
