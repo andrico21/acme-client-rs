@@ -2852,7 +2852,7 @@ async fn cmd_run(
     } else if let Some(path) = key_password_file {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read password file: {}", path.display()))?;
-        Some(content.lines().next().unwrap_or("").to_string())
+        content.lines().next().map(|line| line.trim().to_string()).filter(|pw| !pw.is_empty())
     } else {
         None
     };
