@@ -2,11 +2,34 @@
 
 [![CI](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
 
-A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9702](https://www.rfc-editor.org/rfc/rfc9702) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary with zero runtime dependencies.
+A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9702](https://www.rfc-editor.org/rfc/rfc9702) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
 
 Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX), and structured JSON output for CI/CD integration.
 
 > **AI Disclosure:** This project was developed with AI assistance using [Claude Opus 4.6](https://www.anthropic.com/claude) (via GitHub Copilot). All code, documentation, and tests were reviewed and validated by the author.
+
+## Installation
+
+Download a prebuilt binary from the [latest release](https://github.com/andrico21/acme-client-rs/releases/latest):
+
+| Artifact | Platform | Linking | Notes |
+|---|---|---|---|
+| `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Static (musl)** | **Recommended.** No runtime dependencies — works on any Linux distro. |
+| `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Dynamic (GNU) | Requires GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
+| `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Dynamic | Intel Macs. |
+| `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Dynamic | Apple Silicon (M1+). |
+| `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Dynamic (MSVC) | Windows 10+. |
+
+**Linux quick install (static binary):**
+
+```sh
+curl -sL https://github.com/andrico21/acme-client-rs/releases/latest/download/acme-client-rs-linux-x86_64-musl.tar.gz | tar xz
+sudo install -m 755 acme-client-rs /usr/local/bin/
+```
+
+> **Tip:** On Linux, always prefer the **musl** binary. The GNU variant dynamically links against the system GLIBC and will fail on distributions shipping GLIBC older than 2.39 (e.g., RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
+
+Alternatively, build from source — see [Building](#building) below.
 
 ## Features
 
