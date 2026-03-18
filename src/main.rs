@@ -2109,10 +2109,16 @@ async fn cmd_run(
                     println!("  Authorization status: {}", a.status);
                 }
                 if let Some(ch) = a.challenges.iter().find(|c| c.challenge_type == challenge_type) {
-                    if let Some(ref err) = ch.error {
+                    if is_challenge_terminal(ch) {
                         if let Some(handle) = serve_task.take() { handle.abort(); }
                         if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
-                        anyhow::bail!("challenge validation failed for {}: {err}", domain_display);
+                        let detail = ch.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default();
+                        anyhow::bail!("challenge validation failed for {}{detail}", domain_display);
+                    } else if let Some(ref err) = ch.error {
+                        tracing::debug!(
+                            "Challenge has error but status is {} (will keep polling): {err}",
+                            ch.status
+                        );
                     }
                 }
                 match a.status {
@@ -2410,7 +2416,7 @@ async fn cmd_run(
                         .iter()
                         .find(|c| c.challenge_type == challenge_type)
                     {
-                        if let Some(ref err) = ch.error {
+                        if is_challenge_terminal(ch) {
                             for q in &pending {
                                 let _ = std::process::Command::new(hook)
                                     .env("ACME_DOMAIN", &q.domain)
@@ -2419,9 +2425,15 @@ async fn cmd_run(
                                     .env("ACME_ACTION", "cleanup")
                                     .status();
                             }
+                            let detail = ch.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default();
                             anyhow::bail!(
-                                "challenge validation failed for {}: {err}",
+                                "challenge validation failed for {}{detail}",
                                 p.domain
+                            );
+                        } else if let Some(ref err) = ch.error {
+                            tracing::debug!(
+                                "Challenge has error but status is {} (will keep polling): {err}",
+                                ch.status
                             );
                         }
                     }
