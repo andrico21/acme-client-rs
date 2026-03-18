@@ -2575,22 +2575,20 @@ async fn cmd_run(
                     }));
                 }
 
+                // Yield briefly so the HTTP-01 server task is ready
+                // before telling the CA to validate.
+                tokio::task::yield_now().await;
+
                 let ch_resp = client.respond_to_challenge(&challenge_url).await?;
                 if let Some(ref err) = ch_resp.error {
-                    // Server already tried to validate and failed
-                    if let Some(handle) = serve_task.take() {
-                        handle.abort();
-                    }
-                    if let Some(ref f) = challenge_file {
-                        challenge::http01::cleanup_challenge_file(f);
-                    }
-                    anyhow::bail!(
-                        "HTTP-01 validation failed for {}: {err}\n\n\
-                         The ACME server tried to reach:\n  {validation_url}\n\n\
-                         Make sure this URL is reachable from the ACME server.\n\
-                         If HTTP port 80 is served by a reverse proxy, use:\n  \
-                         --challenge-dir <WEBROOT>",
-                        authz.identifier.value
+                    // Some CAs (e.g. step-ca) validate synchronously during the
+                    // challenge POST and may return an error on a still-pending
+                    // challenge. Per RFC 8555 §7.5.1 this is just a failed
+                    // attempt — the authorization may still succeed on retry.
+                    // Log a warning and let the polling loop handle it.
+                    tracing::warn!(
+                        "HTTP-01 challenge returned error (will keep polling): {err}\n  \
+                         Validation URL: {validation_url}"
                     );
                 }
                 if !json {
