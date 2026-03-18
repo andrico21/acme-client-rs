@@ -2761,22 +2761,32 @@ async fn cmd_run(
                 println!("  Authorization status: {}", a.status);
             }
 
-            // Surface challenge-level errors early
+            // Surface challenge-level errors early (only if terminal)
             if let Some(ch) = a
                 .challenges
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
             {
-                if let Some(ref err) = ch.error {
+                if ch.status == types::ChallengeStatus::Invalid {
                     if let Some(handle) = serve_task.take() {
                         handle.abort();
                     }
                     if let Some(ref f) = challenge_file {
                         challenge::http01::cleanup_challenge_file(f);
                     }
+                    let detail = ch
+                        .error
+                        .as_ref()
+                        .map(|e| format!(": {e}"))
+                        .unwrap_or_default();
                     anyhow::bail!(
-                        "challenge validation failed for {}: {err}",
+                        "challenge validation failed for {}{detail}",
                         authz.identifier.value
+                    );
+                } else if let Some(ref err) = ch.error {
+                    tracing::debug!(
+                        "Challenge has error but status is {} (will keep polling): {err}",
+                        ch.status
                     );
                 }
             }
