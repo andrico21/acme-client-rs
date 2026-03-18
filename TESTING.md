@@ -1274,7 +1274,7 @@ The following test cases require special server configurations and are not inclu
 
 ## Live Test Results
 
-Tested against a **step-ca** ACME server on **2026-03-11** using version **1.3.2**.
+Tested against a **step-ca** ACME server on **2026-03-11** using version **1.7.0**.
 
 | TC | Test | Key | Challenge | Result |
 |----|------|-----|-----------|--------|

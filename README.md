@@ -1376,4 +1376,4 @@ These are set when calling `--on-cert-issued` (once after certificate is saved):
 
 ## License
 
-Free to use, modify, and redistribute with attribution to the original author.
+Licensed under the [Apache License, Version 2.0](LICENSE).
