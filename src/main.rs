@@ -15,7 +15,8 @@ use tracing::info;
 use crate::client::{AcmeClient, compute_cert_id};
 use crate::jws::{AccountKey, KeyAlgorithm};
 use crate::types::{
-    AuthorizationStatus, Identifier, OrderStatus, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
+    AuthorizationStatus, Challenge, ChallengeStatus, Identifier, OrderStatus,
+    CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
     CHALLENGE_TYPE_TLSALPN01, CHALLENGE_TYPE_DNS_PERSIST01,
 };
 
@@ -2767,7 +2768,7 @@ async fn cmd_run(
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
             {
-                if ch.status == types::ChallengeStatus::Invalid {
+                if is_challenge_terminal(ch) {
                     if let Some(handle) = serve_task.take() {
                         handle.abort();
                     }
@@ -2908,5 +2909,79 @@ async fn cmd_run(
     }
 
     Ok(())
+}
+
+/// Returns `true` if the challenge has reached a terminal failure state.
+///
+/// Per RFC 8555 §7.5.1, a challenge with `status: "invalid"` is terminal.
+/// A challenge with `status: "pending"` and an `error` field is NOT terminal —
+/// it just means a previous validation attempt failed. Some CAs (e.g. step-ca)
+/// validate synchronously and attach errors to still-pending challenges.
+fn is_challenge_terminal(ch: &Challenge) -> bool {
+    ch.status == ChallengeStatus::Invalid
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{AcmeError, Challenge, ChallengeStatus};
+
+    fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Challenge {
+        Challenge {
+            challenge_type: "http-01".to_string(),
+            url: "https://example.com/chall/1".to_string(),
+            status,
+            validated: None,
+            token: Some("test-token".to_string()),
+            error,
+            issuer_domain_names: None,
+        }
+    }
+
+    fn make_error() -> AcmeError {
+        AcmeError {
+            error_type: Some("urn:ietf:params:acme:error:connection".to_string()),
+            detail: Some("The server could not connect to validation target".to_string()),
+            status: None,
+            subproblems: None,
+        }
+    }
+
+    #[test]
+    fn pending_without_error_is_not_terminal() {
+        let ch = make_challenge(ChallengeStatus::Pending, None);
+        assert!(!is_challenge_terminal(&ch));
+    }
+
+    #[test]
+    fn pending_with_error_is_not_terminal() {
+        // step-ca returns error on pending challenge after sync validation failure
+        let ch = make_challenge(ChallengeStatus::Pending, Some(make_error()));
+        assert!(!is_challenge_terminal(&ch));
+    }
+
+    #[test]
+    fn processing_without_error_is_not_terminal() {
+        let ch = make_challenge(ChallengeStatus::Processing, None);
+        assert!(!is_challenge_terminal(&ch));
+    }
+
+    #[test]
+    fn invalid_with_error_is_terminal() {
+        let ch = make_challenge(ChallengeStatus::Invalid, Some(make_error()));
+        assert!(is_challenge_terminal(&ch));
+    }
+
+    #[test]
+    fn invalid_without_error_is_terminal() {
+        let ch = make_challenge(ChallengeStatus::Invalid, None);
+        assert!(is_challenge_terminal(&ch));
+    }
+
+    #[test]
+    fn valid_is_not_terminal() {
+        let ch = make_challenge(ChallengeStatus::Valid, None);
+        assert!(!is_challenge_terminal(&ch));
+    }
 }
 
