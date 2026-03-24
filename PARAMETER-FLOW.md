@@ -69,7 +69,17 @@ graph TD
 
     %% Renewal checks (only if cert exists)
     CERT_EXISTS -- No --> ACCT_STEP
-    CERT_EXISTS -- Yes --> ARI_CHECK{"--ari flag?"}
+    CERT_EXISTS -- Yes --> SAN_CHECK{"SANs match<br/>requested domains?"}
+
+    %% Domain mismatch check (before ARI/days)
+    SAN_CHECK -- Yes --> ARI_CHECK
+    SAN_CHECK -- "parse failed" --> ARI_CHECK
+    SAN_CHECK -- "No (mismatch)" --> REISSUE_FLAG{"--reissue-on-mismatch?"}
+    REISSUE_FLAG -- Yes --> ACCT_STEP_REISSUE["Proceed to reissue<br/>(skip ARI/days,<br/>no replaceOrder)"]
+    REISSUE_FLAG -- No --> SKIP_MISMATCH["SKIP: domain mismatch<br/>(use --reissue-on-mismatch)"]
+    ACCT_STEP_REISSUE --> ACCT_STEP
+
+    ARI_CHECK{"--ari flag?"}
 
     ARI_CHECK -- Yes --> ARI_QUERY["Query ACME server<br/>renewal info (RFC 9702)"]
     ARI_QUERY --> ARI_RESULT{"ARI result?"}
@@ -213,9 +223,9 @@ graph TD
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
 
     class BAIL_DOMAIN,BAIL_IP,BAIL_IP2,BAIL_IDN,FAIL_AUTH error
-    class SKIP_ARI,SKIP_DAYS skip
+    class SKIP_ARI,SKIP_DAYS,SKIP_MISMATCH skip
     class DONE success
-    class VALIDATE_DOMAINS,CERT_EXISTS,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK decision
+    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK decision
 ```
 
 ### Configuration Commands
@@ -348,7 +358,7 @@ graph TD
 ```mermaid
 graph TD
     %% === order ===
-    ORD["order"] --> ORD_IDS["Build identifiers<br/>from --domain list"]
+    ORD["order"] --> ORD_IDS["Build identifiers<br/>from domains (positional)"]
     ORD_IDS --> ORD_CALL["new_order()"]
     ORD_CALL --> ORD_FMT{"--output-format?"}
     ORD_FMT -- json --> ORD_JSON["JSON: order_url,<br/>status, finalize_url,<br/>authorizations[]"]
@@ -541,7 +551,7 @@ graph TD
 ### Run Flow Details
 
 1. **Config precedence**: CLI > config file > env > defaults. Config overrides env in **both** modes. In config_mode, non-secret env vars (ACME_DIRECTORY_URL, ACME_ACCOUNT_KEY_FILE, etc.) are actively stripped.
-2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. ARI (RFC 9702) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
+2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9702) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
 3. **Authorization path split**: `--dns-hook` + DNS challenge type triggers **phased parallel** (5 phases with concurrent propagation checks); everything else goes **sequential**. Sequential DNS paths are always manual (no hook) — hook-based DNS always takes the parallel path.
 4. **Parallel phase 2 is conditional**: DNS propagation wait (phase 2) only runs if `--dns-wait` is set. Without it, phase 1 goes directly to phase 3.
 5. **Challenge terminal logic**: Only `status == Invalid` is terminal; `Pending` with an error field keeps polling (allows step-ca retry).

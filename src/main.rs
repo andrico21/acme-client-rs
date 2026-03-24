@@ -505,6 +505,9 @@ Examples:
         /// Use ACME Renewal Information (RFC 9702) to decide when to renew
         #[arg(long)]
         ari: bool,
+        /// Reissue the certificate if requested domains differ from existing cert's SANs
+        #[arg(long)]
+        reissue_on_mismatch: bool,
         /// Policy for dns-persist-01 records (e.g., "wildcard" for wildcard + subdomain scope)
         #[arg(long)]
         persist_policy: Option<String>,
@@ -695,6 +698,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         ref mut eab_hmac_key,
         ref mut pre_authorize,
         ref mut ari,
+        ref mut reissue_on_mismatch,
         ref mut persist_policy,
         ref mut persist_until,
         ref mut cert_key_algorithm,
@@ -761,6 +765,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         if on_cert_issued.is_none() { on_cert_issued.clone_from(&cfg_run.on_cert_issued); }
         if !*pre_authorize { if cfg_run.pre_authorize == Some(true) { *pre_authorize = true; } }
         if !*ari { if cfg_run.ari == Some(true) { *ari = true; } }
+        if !*reissue_on_mismatch && cfg_run.reissue_on_mismatch == Some(true) { *reissue_on_mismatch = true; }
         if persist_policy.is_none() { persist_policy.clone_from(&cfg_run.persist_policy); }
         if persist_until.is_none() { *persist_until = cfg_run.persist_until; }
 
@@ -851,6 +856,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             eab_hmac_key,
             pre_authorize,
             ari,
+            reissue_on_mismatch,
             persist_policy,
             persist_until,
             cert_key_algorithm,
@@ -878,6 +884,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 eab_hmac_key.as_deref(),
                 *pre_authorize,
                 *ari,
+                *reissue_on_mismatch,
                 persist_policy.as_deref(),
                 *persist_until,
                 *cert_key_algorithm,
@@ -901,6 +908,73 @@ fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
     let now = time::OffsetDateTime::now_utc();
     let remaining = not_after - now;
     Ok(remaining.whole_days())
+}
+
+/// Parse a PEM certificate and return the set of SAN identifiers (DNS names + IPs).
+///
+/// DNS names are lowercased; IP addresses are canonicalized via `std::net::IpAddr`.
+fn cert_san_identifiers(path: &std::path::Path) -> Result<std::collections::BTreeSet<String>> {
+    use x509_parser::prelude::*;
+
+    let pem_data = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let parsed = ::pem::parse(&pem_data).context("failed to parse certificate PEM")?;
+    let (_, cert) = X509Certificate::from_der(parsed.contents())
+        .map_err(|e| anyhow::anyhow!("failed to parse X.509 certificate: {e}"))?;
+
+    let mut ids = std::collections::BTreeSet::new();
+
+    let san_ext = cert
+        .extensions()
+        .iter()
+        .find(|ext| ext.oid == oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME);
+
+    if let Some(ext) = san_ext
+        && let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension()
+    {
+            for name in &san.general_names {
+                match name {
+                    GeneralName::DNSName(dns) => {
+                        ids.insert(dns.to_lowercase());
+                    }
+                    GeneralName::IPAddress(bytes) => {
+                        // IPv4 = 4 bytes, IPv6 = 16 bytes
+                        let ip: Option<std::net::IpAddr> = match bytes.len() {
+                            4 => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                                bytes[0], bytes[1], bytes[2], bytes[3],
+                            ))),
+                            16 => {
+                                let mut octets = [0u8; 16];
+                                octets.copy_from_slice(bytes);
+                                Some(std::net::IpAddr::V6(std::net::Ipv6Addr::from(octets)))
+                            }
+                            _ => None,
+                        };
+                        if let Some(addr) = ip {
+                            ids.insert(addr.to_string());
+                        }
+                    }
+                    _ => {} // Ignore other GeneralName types
+                }
+            }
+    }
+
+    Ok(ids)
+}
+
+/// Normalize a domain/IP string for comparison (lowercase, canonical IP form).
+fn normalize_identifier(value: &str) -> String {
+    // Strip brackets for IPv6 literals like [::1]
+    let candidate = if value.starts_with('[') && value.ends_with(']') {
+        &value[1..value.len() - 1]
+    } else {
+        value
+    };
+    if let Ok(ip) = candidate.parse::<std::net::IpAddr>() {
+        ip.to_string()
+    } else {
+        value.to_lowercase()
+    }
 }
 
 fn load_account_key(path: &PathBuf) -> Result<AccountKey> {
@@ -1069,6 +1143,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "eab_hmac_key": { "value": r.eab_hmac_key },
                 "pre_authorize": { "value": r.pre_authorize.unwrap_or(false) },
                 "ari": { "value": r.ari.unwrap_or(false) },
+                "reissue_on_mismatch": { "value": r.reissue_on_mismatch.unwrap_or(false) },
                 "persist_policy": { "value": r.persist_policy },
                 "persist_until": { "value": r.persist_until },
                 "cert_key_algorithm": { "value": r.cert_key_algorithm.as_deref().unwrap_or("ec-p256") },
@@ -1078,6 +1153,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                     "dns_hook", "dns_wait", "cert_output", "key_output", "days",
                     "key_password_file", "on_challenge_ready", "on_cert_issued",
                     "eab_kid", "eab_hmac_key", "pre_authorize", "ari",
+                    "reissue_on_mismatch",
                     "persist_policy", "persist_until", "cert_key_algorithm"]
                 {
                     let has = !rv[key]["value"].is_null()
@@ -1158,6 +1234,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             println!("  eab_hmac_key       = {}{}", opt_str(&r.eab_hmac_key), src(cfg_source(r.eab_hmac_key.is_some())));
             println!("  pre_authorize      = {}{}", opt_bool(r.pre_authorize), src(cfg_source(r.pre_authorize.is_some())));
             println!("  ari                = {}{}", opt_bool(r.ari), src(cfg_source(r.ari.is_some())));
+            println!("  reissue_on_mismatch = {}{}", opt_bool(r.reissue_on_mismatch), src(cfg_source(r.reissue_on_mismatch.is_some())));
             println!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
             println!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
             println!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
@@ -1699,6 +1776,7 @@ async fn cmd_run(
     eab_hmac_key: Option<&str>,
     pre_authorize: bool,
     ari: bool,
+    reissue_on_mismatch: bool,
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
     cert_key_alg: CertKeyAlgorithm,
@@ -1710,6 +1788,79 @@ async fn cmd_run(
     let mut ari_cert_id: Option<String> = None;
 
     if cert_output.exists() {
+        // ── 0pre. Domain mismatch check ────────────────────────────────
+        let mut skip_renewal_checks = false;
+
+        let requested: std::collections::BTreeSet<String> = domains
+            .iter()
+            .map(|d| normalize_identifier(d))
+            .collect();
+
+        match cert_san_identifiers(cert_output) {
+            Ok(cert_sans) => {
+                if requested != cert_sans {
+                    let added: Vec<&str> = requested
+                        .difference(&cert_sans)
+                        .map(|s| s.as_str())
+                        .collect();
+                    let removed: Vec<&str> = cert_sans
+                        .difference(&requested)
+                        .map(|s| s.as_str())
+                        .collect();
+
+                    if reissue_on_mismatch {
+                        if json {
+                            println!("{}", serde_json::json!({
+                                "command": "run",
+                                "action": "reissue",
+                                "reason": "domain_mismatch",
+                                "cert_domains": cert_sans,
+                                "requested_domains": requested,
+                                "added": added,
+                                "removed": removed,
+                            }));
+                        } else {
+                            println!(
+                                "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
+                                added.join(", "),
+                                removed.join(", "),
+                            );
+                        }
+                        // Skip ARI/days checks — proceed directly to issuance
+                        // (ari_cert_id stays None: this is reissuance, not renewal)
+                        skip_renewal_checks = true;
+                    } else {
+                        if json {
+                            println!("{}", serde_json::json!({
+                                "command": "run",
+                                "action": "skip",
+                                "reason": "domain_mismatch",
+                                "hint": "use --reissue-on-mismatch to override",
+                                "cert_domains": cert_sans,
+                                "requested_domains": requested,
+                                "added": added,
+                                "removed": removed,
+                            }));
+                        } else {
+                            println!(
+                                "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
+                                 Use --reissue-on-mismatch to override.",
+                                cert_sans.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                                requested.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
+                                added.join(", "),
+                                removed.join(", "),
+                            );
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Could not read SANs from {}: {e} — skipping domain mismatch check", cert_output.display());
+            }
+        }
+
+        if !skip_renewal_checks {
         // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
         if ari {
             match std::fs::read_to_string(cert_output) {
@@ -1820,6 +1971,7 @@ async fn cmd_run(
                 }
             }
         }
+        } // if !skip_renewal_checks
     }
 
     // ── 1. Account ──────────────────────────────────────────────────────

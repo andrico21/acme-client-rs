@@ -40,6 +40,7 @@ Alternatively, build from source — see [Building](#building) below.
 - Generic hook scripts: `--on-challenge-ready` (called after each dns-01, dns-persist-01, or tls-alpn-01 challenge is set up) and `--on-cert-issued` (called after certificate is saved)
 - IP identifier support (RFC 8738) with IPv6 normalization - auto-detected from CLI input
 - Automated end-to-end flow (`run` subcommand) with built-in renewal (`--days N` skips if not due - no separate renew command needed)
+- Domain mismatch protection: detects when requested domains differ from existing certificate's SANs, prevents accidental overwrites (`--reissue-on-mismatch` to explicitly allow)
 - ACME Renewal Information (ARI, RFC 9702): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
 - Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF
 - Step-by-step manual flow (individual subcommands)
@@ -782,6 +783,27 @@ acme-client-rs run --ari --days 30 --cert-output /etc/ssl/certs/example.com.pem 
 The key benefit: the CA controls *when* you renew (via the suggested window), which helps spread out renewal load and lets the CA signal early renewal if there's a revocation event or policy change.
 
 > **Note:** ARI requires the CA to advertise a `renewalInfo` URL in its directory. Let's Encrypt supports ARI. When the server doesn't support ARI, `--ari` silently falls back to `--days`.
+
+### Domain Mismatch Protection
+
+When using `--ari` or `--days`, the tool compares the requested domain list against the existing certificate's SANs (Subject Alternative Names). If the domains differ, the tool treats this as a **reissuance** (not a renewal) and behaves as follows:
+
+**Without `--reissue-on-mismatch`** (safe default): logs the mismatch and skips — the existing certificate is never overwritten. This protects production certificates from accidental domain changes:
+
+```
+$ acme-client-rs run --days 30 --cert-output cert.pem example.com api.example.com
+Domain mismatch: cert has [example.com, www.example.com], requested [api.example.com, example.com] (added: [api.example.com], removed: [www.example.com]). Use --reissue-on-mismatch to override.
+```
+
+**With `--reissue-on-mismatch`**: acknowledges the mismatch and proceeds to issue a new certificate with the updated domain list, bypassing ARI/days time checks. The old certificate is overwritten:
+
+```sh
+acme-client-rs run --days 30 --reissue-on-mismatch --cert-output cert.pem --key-output key.pem example.com api.example.com
+```
+
+The comparison is case-insensitive and normalizes IP addresses (IPv4 and IPv6). If the existing certificate cannot be parsed, the mismatch check is skipped and ARI/days checks proceed normally (fail-safe).
+
+> **Note:** When `--reissue-on-mismatch` triggers reissuance, `ari_cert_id` is NOT set — this is a new order, not a `replaceOrder` (RFC 9702), because the certificate being replaced has different identifiers.
 
 ### Bash Script: Issue and Renew
 

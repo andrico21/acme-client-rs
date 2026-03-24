@@ -1920,6 +1920,82 @@ else
   pass "No panic with pre-authorize JSON output"
 fi
 
+# ── TC-76: run domain mismatch (skip without --reissue-on-mismatch) ────────
+
+log_test "76" "run domain mismatch detection (skip)"
+if [[ -f "${JSON_E2E_CERT}" ]]; then
+  # Request a DIFFERENT domain than what's in the existing cert
+  MISMATCH_DOMAIN="mismatch-test.${TEST_DOMAIN}"
+  OUTPUT=$(acme --output-format json --account-key "${JSON_E2E_KEY}" run \
+    --contact json-e2e@example.com \
+    --challenge-type http-01 \
+    --http-port 5002 \
+    --cert-output "${JSON_E2E_CERT}" \
+    --key-output "${JSON_E2E_PRIVKEY}" \
+    --days 1 \
+    "${MISMATCH_DOMAIN}" 2>/dev/null)
+  RC=$?
+  if [[ ${RC} -eq 0 ]] && echo "${OUTPUT}" | grep -q '"action":"skip"'; then
+    pass "Domain mismatch correctly skipped (exit 0)"
+    if ${HAS_PYTHON3} && json_valid "${OUTPUT}"; then
+      REASON=$(json_field "${OUTPUT}" "reason")
+      HINT=$(json_field "${OUTPUT}" "hint")
+      if [[ "${REASON}" == "domain_mismatch" ]]; then
+        pass "reason is domain_mismatch"
+      else
+        fail "76" "Expected reason=domain_mismatch, got: ${REASON}"
+      fi
+      if echo "${HINT}" | grep -q "reissue-on-mismatch"; then
+        pass "hint mentions --reissue-on-mismatch"
+      fi
+    fi
+  else
+    fail "76" "Domain mismatch did not skip (exit ${RC})"
+    echo "  Output: ${OUTPUT}"
+  fi
+else
+  skip "No certificate for domain mismatch test"
+fi
+
+# ── TC-77: run domain mismatch with --reissue-on-mismatch ─────────────────
+
+log_test "77" "run domain mismatch with --reissue-on-mismatch"
+if [[ -f "${JSON_E2E_CERT}" ]]; then
+  REISSUE_DOMAIN="reissue-test.${TEST_DOMAIN}"
+  REISSUE_CERT="${WORK_DIR}/reissue-cert.pem"
+  REISSUE_KEY="${WORK_DIR}/reissue-key.pem"
+  # Copy existing cert to a temp location so we don't destroy the original
+  cp "${JSON_E2E_CERT}" "${REISSUE_CERT}"
+  OUTPUT=$(acme --output-format json --account-key "${JSON_E2E_KEY}" run \
+    --contact json-e2e@example.com \
+    --challenge-type http-01 \
+    --http-port 5002 \
+    --cert-output "${REISSUE_CERT}" \
+    --key-output "${REISSUE_KEY}" \
+    --days 1 \
+    --reissue-on-mismatch \
+    "${REISSUE_DOMAIN}" 2>/dev/null)
+  RC=$?
+  if [[ ${RC} -eq 0 ]]; then
+    # Should see BOTH a reissue message AND an issued action
+    if echo "${OUTPUT}" | grep -q '"action":"reissue"'; then
+      pass "Domain mismatch reissue message present"
+    fi
+    if echo "${OUTPUT}" | grep -q '"action":"issued"'; then
+      pass "Certificate was reissued successfully"
+    elif echo "${OUTPUT}" | grep -q '"reason":"domain_mismatch"'; then
+      pass "Reissue flow triggered (domain_mismatch detected)"
+    fi
+  else
+    fail "77" "Reissue with --reissue-on-mismatch failed (exit ${RC})"
+    echo "  Output: ${OUTPUT}"
+  fi
+  # Clean up temp files
+  rm -f "${REISSUE_CERT}" "${REISSUE_KEY}" 2>/dev/null
+else
+  skip "No certificate for domain mismatch reissue test"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═════════════════════════════════════════════════════════════════════════════

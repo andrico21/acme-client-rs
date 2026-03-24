@@ -78,6 +78,8 @@ pub struct RunConfig {
     pub pre_authorize: Option<bool>,
     /// Use ACME Renewal Information (RFC 9702) to decide when to renew.
     pub ari: Option<bool>,
+    /// Reissue the certificate if requested domains differ from existing cert's SANs.
+    pub reissue_on_mismatch: Option<bool>,
     /// Policy for dns-persist-01 records.
     pub persist_policy: Option<String>,
     /// Unix timestamp for dns-persist-01 persistUntil parameter.
@@ -277,6 +279,15 @@ pub fn generate_template() -> &'static str {
 # CLI: --ari
 # Default: false
 # ari = true
+
+# Reissue the certificate if the requested domains differ from the existing
+# certificate's SANs. Without this flag, a domain mismatch is detected but
+# the tool skips renewal (protecting production certificates from accidental
+# overwrites). With this flag, the old certificate is replaced with a new one
+# containing the updated domain list.
+# CLI: --reissue-on-mismatch
+# Default: false
+# reissue_on_mismatch = true
 
 # Policy for dns-persist-01 records (e.g., "wildcard").
 # CLI: --persist-policy

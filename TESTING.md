@@ -1172,6 +1172,47 @@ acme --insecure --output-format json --account-key preauth.key pre-authorize --d
 
 ---
 
+## TC-76: run Domain Mismatch Detection (Skip)
+
+**Goal:** Requesting different domains than the existing certificate should skip with a helpful message.
+
+```sh
+# Requires an existing cert for a DIFFERENT domain
+acme --insecure --output-format json --account-key e2e.key run \
+  --contact e2e@example.com \
+  --challenge-type http-01 --http-port 5002 \
+  --cert-output existing-cert.pem --key-output existing-key.pem \
+  --days 1 \
+  different-domain.example.com
+```
+
+**Expected:**
+- Exit code 0
+- JSON output with `"action": "skip"`, `"reason": "domain_mismatch"`
+- Hint suggesting `--reissue-on-mismatch`
+
+---
+
+## TC-77: run Domain Mismatch with --reissue-on-mismatch
+
+**Goal:** With `--reissue-on-mismatch`, domain mismatch triggers reissuance instead of skip.
+
+```sh
+acme --insecure --output-format json --account-key e2e.key run \
+  --contact e2e@example.com \
+  --challenge-type http-01 --http-port 5002 \
+  --cert-output existing-cert.pem --key-output existing-key.pem \
+  --days 1 --reissue-on-mismatch \
+  different-domain.example.com
+```
+
+**Expected:**
+- Exit code 0
+- JSON output with `"action": "reissue"`, `"reason": "domain_mismatch"`
+- Followed by normal certificate issuance
+
+---
+
 ## Manual-Only Test Cases
 
 The following test cases require special server configurations and are not included in the automated test script (`tests/test.sh`):
@@ -1269,6 +1310,8 @@ The following test cases require special server configurations and are not inclu
 | 73 | `--pre-authorize` in `run` help | - | Flag listed | Yes |
 | 74 | `--pre-authorize` on `run` | - | No panic | Yes |
 | 75 | `pre-authorize` JSON output | - | Structured JSON | Yes |
+| 76 | `run` domain mismatch (skip) | - | Skip with reason | Yes |
+| 77 | `run` domain mismatch (reissue) | - | Reissue triggered | Yes |
 
 ---
 
