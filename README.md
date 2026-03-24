@@ -47,6 +47,8 @@ Alternatively, build from source — see [Building](#building) below.
 - Six key algorithms: ES256 (default), ES384, ES512, RSA-2048, RSA-4096, Ed25519
 - Configurable via CLI flags, config file, or environment variables
 - `--insecure` flag for testing with self-signed CAs (e.g., Pebble)
+- `--silent` flag to suppress all stdout output (exit codes only, for scripted use)
+- `--print-cert` flag to print the issued certificate PEM to stdout after saving
 - Clean error messages (no stack traces for operational errors)
 - Structured JSON output (`--output-format json`) for machine consumption and CI/CD pipelines
 
@@ -1244,6 +1246,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--account-url <URL>` | `-a` | `ACME_ACCOUNT_URL` | - | Account URL (required after account creation) |
 | `--output-format <FMT>` | | `ACME_OUTPUT_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (structured) |
 | `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (for testing with self-signed CAs like Pebble) |
+| `--silent` | | - | `false` | Suppress all stdout output; only exit code indicates success/failure |
 
 Global options can be placed before or after the subcommand.
 
@@ -1297,6 +1300,8 @@ Global options can be placed before or after the subcommand.
 | `--persist-until <TIMESTAMP>` | - | Unix timestamp for dns-persist-01 `persistUntil` parameter |
 | `--cert-key-algorithm <ALG>` | `ec-p256` | Certificate key algorithm for CSR: `ec-p256`, `ec-p384`, or `ed25519` |
 | `--ari` | `false` | **ARI renewal mode (RFC 9702):** query the server's suggested renewal window and skip issuance if the window has not opened. When renewing, the `replaces` field is included in the order to link the new cert to the old one. Falls back to `--days` if ARI is unavailable. |
+| `--reissue-on-mismatch` | `false` | Allow reissuance when requested domains differ from the existing certificate's SANs (default: skip with warning) |
+| `--print-cert` | `false` | Print the issued certificate PEM to stdout after saving to file |
 
 <details>
 <summary><strong>Key Rollover (RFC 8555 Section 7.3.5)</strong></summary>

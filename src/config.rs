@@ -80,6 +80,8 @@ pub struct RunConfig {
     pub ari: Option<bool>,
     /// Reissue the certificate if requested domains differ from existing cert's SANs.
     pub reissue_on_mismatch: Option<bool>,
+    /// Print the certificate PEM to stdout after issuance.
+    pub print_cert: Option<bool>,
     /// Policy for dns-persist-01 records.
     pub persist_policy: Option<String>,
     /// Unix timestamp for dns-persist-01 persistUntil parameter.
@@ -288,6 +290,13 @@ pub fn generate_template() -> &'static str {
 # CLI: --reissue-on-mismatch
 # Default: false
 # reissue_on_mismatch = true
+
+# Print the certificate PEM to stdout after issuance.
+# By default, only the file path is shown. Enable this to also print the
+# full PEM-encoded certificate chain.
+# CLI: --print-cert
+# Default: false
+# print_cert = true
 
 # Policy for dns-persist-01 records (e.g., "wildcard").
 # CLI: --persist-policy

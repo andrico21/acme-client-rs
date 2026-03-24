@@ -1996,6 +1996,98 @@ else
   skip "No certificate for domain mismatch reissue test"
 fi
 
+# ── TC-78: run --print-cert ───────────────────────────────────────────────
+
+log_test "78" "run --print-cert prints PEM to stdout"
+PRINT_CERT_DOMAIN="print-cert.${TEST_DOMAIN}"
+PRINT_CERT_FILE="${WORK_DIR}/print-cert.pem"
+PRINT_CERT_KEY="${WORK_DIR}/print-cert.key"
+OUTPUT=$(acme --account-key "${JSON_E2E_KEY}" run \
+  --contact e2e@example.com \
+  --challenge-type http-01 \
+  --http-port 5002 \
+  --cert-output "${PRINT_CERT_FILE}" \
+  --key-output "${PRINT_CERT_KEY}" \
+  --print-cert \
+  "${PRINT_CERT_DOMAIN}" 2>/dev/null)
+RC=$?
+if [[ ${RC} -eq 0 ]]; then
+  if echo "${OUTPUT}" | grep -q "BEGIN CERTIFICATE"; then
+    pass "Certificate PEM printed to stdout with --print-cert"
+  else
+    fail "78" "Certificate PEM not found in stdout"
+  fi
+  if [[ -f "${PRINT_CERT_FILE}" ]]; then
+    pass "Certificate file saved alongside stdout output"
+  else
+    fail "78" "Certificate file not created"
+  fi
+else
+  fail "78" "run --print-cert failed (exit ${RC})"
+fi
+rm -f "${PRINT_CERT_FILE}" "${PRINT_CERT_KEY}" 2>/dev/null
+
+# ── TC-79: --silent suppresses all stdout ─────────────────────────────────
+
+log_test "79" "--silent suppresses all stdout"
+
+# 79a: silent run
+SILENT_CERT="${WORK_DIR}/silent-cert.pem"
+SILENT_KEY="${WORK_DIR}/silent-key.pem"
+SILENT_DOMAIN="silent-test.${TEST_DOMAIN}"
+OUTPUT=$(acme --silent --account-key "${JSON_E2E_KEY}" run \
+  --contact e2e@example.com \
+  --challenge-type http-01 \
+  --http-port 5002 \
+  --cert-output "${SILENT_CERT}" \
+  --key-output "${SILENT_KEY}" \
+  "${SILENT_DOMAIN}" 2>/dev/null)
+RC=$?
+if [[ ${RC} -eq 0 ]]; then
+  if [[ -z "${OUTPUT}" ]]; then
+    pass "Silent run produced no stdout"
+  else
+    fail "79a" "Silent run produced stdout: ${OUTPUT}"
+  fi
+  if [[ -f "${SILENT_CERT}" ]]; then
+    pass "Certificate file created despite --silent"
+  else
+    fail "79a" "Certificate file not created"
+  fi
+else
+  fail "79a" "Silent run failed (exit ${RC})"
+fi
+rm -f "${SILENT_CERT}" "${SILENT_KEY}" 2>/dev/null
+
+# 79b: silent generate-key
+SILENT_GEN_KEY="${WORK_DIR}/silent-gen.key"
+OUTPUT=$(acme --silent generate-key --account-key "${SILENT_GEN_KEY}" 2>/dev/null)
+RC=$?
+if [[ ${RC} -eq 0 ]]; then
+  if [[ -z "${OUTPUT}" ]]; then
+    pass "Silent generate-key produced no stdout"
+  else
+    fail "79b" "Silent generate-key produced stdout: ${OUTPUT}"
+  fi
+  if [[ -f "${SILENT_GEN_KEY}" ]]; then
+    pass "Key file created despite --silent"
+  else
+    fail "79b" "Key file not created"
+  fi
+else
+  fail "79b" "Silent generate-key failed (exit ${RC})"
+fi
+rm -f "${SILENT_GEN_KEY}" 2>/dev/null
+
+# 79c: silent show-config
+OUTPUT=$(acme --silent show-config 2>/dev/null)
+RC=$?
+if [[ ${RC} -eq 0 ]] && [[ -z "${OUTPUT}" ]]; then
+  pass "Silent show-config produced no stdout"
+else
+  fail "79c" "Silent show-config produced stdout or failed (exit ${RC})"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═════════════════════════════════════════════════════════════════════════════

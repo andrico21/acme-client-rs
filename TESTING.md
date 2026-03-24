@@ -1213,6 +1213,65 @@ acme --output-format json --account-key e2e.key run \
 
 ---
 
+## TC-78: run --print-cert
+
+**Goal:** With `--print-cert`, the issued certificate PEM is printed to stdout after saving to file.
+
+```sh
+acme --account-key e2e.key run \
+  --contact e2e@example.com \
+  --challenge-type http-01 --http-port 5002 \
+  --cert-output cert78.pem --key-output key78.pem \
+  --print-cert \
+  tc78.example.com
+```
+
+**Expected:**
+- Exit code 0
+- Certificate saved to `cert78.pem`
+- Certificate PEM printed to stdout (contains `-----BEGIN CERTIFICATE-----`)
+- Without `--print-cert`, no PEM is printed to stdout
+
+---
+
+## TC-79: --silent suppresses all stdout
+
+**Goal:** The `--silent` global flag suppresses all stdout output across all subcommands.
+
+```sh
+# 79a: silent run — no stdout, exit code only
+acme --silent --account-key e2e.key run \
+  --contact e2e@example.com \
+  --challenge-type http-01 --http-port 5002 \
+  --cert-output cert79.pem --key-output key79.pem \
+  tc79.example.com
+# Capture: stdout must be empty, exit code 0, cert79.pem exists
+
+# 79b: silent with --output-format json — still no stdout
+acme --silent --output-format json --account-key e2e.key run \
+  --contact e2e@example.com \
+  --challenge-type http-01 --http-port 5002 \
+  --cert-output cert79b.pem --key-output key79b.pem \
+  tc79b.example.com
+# Capture: stdout must be empty, exit code 0
+
+# 79c: silent generate-key — no stdout
+acme --silent generate-key --account-key silent-test.key
+# Capture: stdout must be empty, exit code 0, silent-test.key exists
+
+# 79d: silent show-config — no stdout
+acme --silent show-config
+# Capture: stdout must be empty, exit code 0
+```
+
+**Expected:**
+- All sub-tests: exit code 0
+- All sub-tests: stdout is completely empty (zero bytes)
+- Files are still created correctly
+- stderr (tracing) is unaffected by `--silent`
+
+---
+
 ## Manual-Only Test Cases
 
 The following test cases require special server configurations and are not included in the automated test script (`tests/test.sh`):
