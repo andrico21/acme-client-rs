@@ -130,8 +130,10 @@ jobs:
         run: |
           docker run --rm --platform linux/arm/v7 \
             -v "$PWD":/work -w /work \
-            rust:alpine sh -c '
-              apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
+            alpine sh -c '
+              apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd curl
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+              source $HOME/.cargo/env
               OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
               strip target/release/acme-client-rs
               file target/release/acme-client-rs
