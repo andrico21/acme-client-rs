@@ -786,7 +786,7 @@ The key benefit: the CA controls *when* you renew (via the suggested window), wh
 
 ### Domain Mismatch Protection
 
-When using `--ari` or `--days`, the tool compares the requested domain list against the existing certificate's SANs (Subject Alternative Names). If the domains differ, the tool treats this as a **reissuance** (not a renewal) and behaves as follows:
+When the certificate file already exists, the tool compares the requested domain list against the existing certificate's SANs (Subject Alternative Names). If the domains differ, the tool treats this as a **reissuance** (not a renewal) and behaves as follows:
 
 **Without `--reissue-on-mismatch`** (safe default): logs the mismatch and skips — the existing certificate is never overwritten. This protects production certificates from accidental domain changes:
 

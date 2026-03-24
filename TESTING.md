@@ -1178,7 +1178,7 @@ acme --insecure --output-format json --account-key preauth.key pre-authorize --d
 
 ```sh
 # Requires an existing cert for a DIFFERENT domain
-acme --insecure --output-format json --account-key e2e.key run \
+acme --output-format json --account-key e2e.key run \
   --contact e2e@example.com \
   --challenge-type http-01 --http-port 5002 \
   --cert-output existing-cert.pem --key-output existing-key.pem \
@@ -1198,7 +1198,7 @@ acme --insecure --output-format json --account-key e2e.key run \
 **Goal:** With `--reissue-on-mismatch`, domain mismatch triggers reissuance instead of skip.
 
 ```sh
-acme --insecure --output-format json --account-key e2e.key run \
+acme --output-format json --account-key e2e.key run \
   --contact e2e@example.com \
   --challenge-type http-01 --http-port 5002 \
   --cert-output existing-cert.pem --key-output existing-key.pem \
