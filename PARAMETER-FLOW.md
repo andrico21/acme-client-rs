@@ -5,6 +5,7 @@ graph TD
     START["acme-client-rs<br/>CLI Entry"] --> TRACE["Init tracing<br/>(RUST_LOG env)"]
     TRACE --> PARSE["Parse CLI args<br/>(clap derive)"]
     PARSE --> CFG_CHECK{"--config or<br/>ACME_CONFIG?"}
+    PARSE -.-> SILENT_NOTE(["--silent (global)<br/>suppresses stdout in<br/>all command handlers"])
 
     %% Config loading
     CFG_CHECK -- Yes --> LOAD_CFG["Load TOML config<br/>config_mode = true"]
@@ -50,9 +51,11 @@ graph TD
     %% Styling
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
+    classDef note fill:#78909c,color:white,stroke:#546e7f,stroke-dasharray:5 5
 
     class GEN_CFG,SHOW_CFG,GEN_KEY success
     class CFG_CHECK,CMD,PREC,ENV_MODE decision
+    class SILENT_NOTE note
 ```
 
 ---
@@ -553,6 +556,7 @@ graph TD
 
 - **Output format branching**: Every command except `generate-config` checks `--output-format` (json/text) and formats output accordingly. JSON mode prints machine-readable objects; text mode prints human-friendly messages.
 - **Account auto-lookup**: Five commands (`show-dns-persist01`, `key-rollover`, `revoke`, `renewal-info`, `pre-authorize`) need an account URL for KID-based JWS signing. If `--account-url` is not provided, they automatically call `create_account(None, true, None)` to look up/register the account.
+- **Silent mode**: The global `--silent` flag suppresses all stdout output across every command handler. Two patterns are used: **early-return** (`show-config` and `generate-config` skip entirely) and **output gating** (all other commands perform their work but skip print statements). Side effects (file writes, ACME API calls, hooks) still execute normally.
 
 ### Run Flow Details
 
