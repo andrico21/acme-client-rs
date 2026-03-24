@@ -80,6 +80,76 @@ jobs:
           name: acme-client-rs-linux-x86_64-musl
           path: acme-client-rs-linux-x86_64-musl.tar.gz
 
+  build-linux-aarch64-musl:
+    name: Build Linux (aarch64, musl, static)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Build in Alpine aarch64 container
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/work -w /work \
+            rust:alpine sh -c '
+              apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
+              OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
+              strip target/release/acme-client-rs
+              file target/release/acme-client-rs
+              file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
+            '
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/acme-client-rs dist/
+          cd dist
+          tar czf ../acme-client-rs-linux-aarch64-musl.tar.gz acme-client-rs
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: acme-client-rs-linux-aarch64-musl
+          path: acme-client-rs-linux-aarch64-musl.tar.gz
+
+  build-linux-armv7-musl:
+    name: Build Linux (armv7, musl, static)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm
+
+      - name: Build in Alpine armv7 container
+        run: |
+          docker run --rm --platform linux/arm/v7 \
+            -v "$PWD":/work -w /work \
+            rust:alpine sh -c '
+              apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
+              OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
+              strip target/release/acme-client-rs
+              file target/release/acme-client-rs
+              file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
+            '
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/release/acme-client-rs dist/
+          cd dist
+          tar czf ../acme-client-rs-linux-armv7-musl.tar.gz acme-client-rs
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: acme-client-rs-linux-armv7-musl
+          path: acme-client-rs-linux-armv7-musl.tar.gz
+
   build-macos-x86_64:
     name: Build macOS (x86_64)
     runs-on: macos-14
@@ -180,7 +250,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux-gnu, build-linux-musl, build-macos-x86_64, build-macos-arm64, build-windows-msvc, integration-test]
+    needs: [build-linux-gnu, build-linux-musl, build-linux-aarch64-musl, build-linux-armv7-musl, build-macos-x86_64, build-macos-arm64, build-windows-msvc, integration-test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
@@ -195,6 +265,8 @@ jobs:
           files: |
             acme-client-rs-linux-x86_64-gnu.tar.gz
             acme-client-rs-linux-x86_64-musl.tar.gz
+            acme-client-rs-linux-aarch64-musl.tar.gz
+            acme-client-rs-linux-armv7-musl.tar.gz
             acme-client-rs-darwin-x86_64.tar.gz
             acme-client-rs-darwin-arm64.tar.gz
             acme-client-rs-windows-x86_64-msvc.zip
