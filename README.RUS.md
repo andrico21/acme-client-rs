@@ -128,7 +128,7 @@ AUTH="Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
 
 case "${ACME_ACTION}" in
   create)
-    curl -s -X POST "${API}" -H "${AUTH}" -H "Content-Type: application/json" --data '{"type":"TXT","name":"'"${ACME_TXT_NAME}"'","content":"'"${ACME_TXT_VALUE}"'","ttl":120}'
+    curl -s -X POST "${API}" -H "${AUTH}" -H "Content-Type: application/json" --data '{"type":"TXT","name":"'"${ACME_TXT_NAME}"'","content":"\"'"${ACME_TXT_VALUE}"'\"","ttl":120}'
     ;;
   cleanup)
     RECORD_ID=$(curl -s "${API}?type=TXT&name=${ACME_TXT_NAME}" -H "${AUTH}" | jq -r '.result[0].id')
