@@ -47,8 +47,23 @@ graph TD
     CMD -- renewal-info --> REN_INFO["Get ARI renewal info"]
     CMD -- run --> RUN["cmd_run()<br/>Full automated flow"]
 
-    %% === RUN subcommand detail ===
-    RUN --> VALIDATE_DOMAINS{"domains<br/>provided?"}
+    %% Styling
+    classDef success fill:#4caf50,color:white,stroke:#2e7d32
+    classDef decision fill:#42a5f5,color:white,stroke:#1565c0
+
+    class GEN_CFG,SHOW_CFG,GEN_KEY success
+    class CFG_CHECK,CMD,PREC,ENV_MODE decision
+```
+
+---
+
+## Subcommand Detail Flows
+
+### run (Full Automated Flow)
+
+```mermaid
+graph TD
+    RUN["run"] --> VALIDATE_DOMAINS{"domains<br/>provided?"}
     VALIDATE_DOMAINS -- No --> BAIL_DOMAIN["ERROR: at least one<br/>domain required"]
     VALIDATE_DOMAINS -- Yes --> CERT_EXISTS{"cert file<br/>exists?"}
 
@@ -199,13 +214,9 @@ graph TD
 
     class BAIL_DOMAIN,BAIL_IP,BAIL_IP2,BAIL_IDN,FAIL_AUTH error
     class SKIP_ARI,SKIP_DAYS skip
-    class DONE,GEN_CFG,SHOW_CFG,GEN_KEY success
-    class CFG_CHECK,CERT_EXISTS,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,CMD,PREC,ENV_MODE,P2_CHECK decision
+    class DONE success
+    class VALIDATE_DOMAINS,CERT_EXISTS,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK decision
 ```
-
----
-
-## Subcommand Detail Flows
 
 ### Configuration Commands
 
