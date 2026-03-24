@@ -448,9 +448,6 @@ acme --insecure --account-key e2e-account.key run --contact e2e@example.com --ch
     Authorization status: valid
   Order status: valid
   Certificate saved to certificate.pem
-  -----BEGIN CERTIFICATE-----
-  ...
-  -----END CERTIFICATE-----
   ```
 - `certificate.pem` file created with valid PEM content
 

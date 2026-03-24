@@ -1167,7 +1167,8 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             });
             if verbose {
                 for key in ["domains", "contact", "challenge_type", "http_port", "challenge_dir",
-                    "dns_hook", "dns_wait", "cert_output", "key_output", "days",
+                    "dns_hook", "dns_wait", "dns_propagation_concurrency",
+                    "challenge_timeout", "cert_output", "key_output", "days",
                     "key_password_file", "on_challenge_ready", "on_cert_issued",
                     "eab_kid", "eab_hmac_key", "pre_authorize", "ari",
                     "reissue_on_mismatch", "print_cert",
@@ -1177,6 +1178,8 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                         && rv[key]["value"] != serde_json::json!(false)
                         && rv[key]["value"] != serde_json::json!("http-01")
                         && rv[key]["value"] != serde_json::json!(80)
+                        && rv[key]["value"] != serde_json::json!(5)
+                        && rv[key]["value"] != serde_json::json!(300)
                         && rv[key]["value"] != serde_json::json!("certificate.pem")
                         && rv[key]["value"] != serde_json::json!("private.key")
                         && rv[key]["value"] != serde_json::json!("ec-p256");

@@ -1380,4 +1380,4 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 
 ## Лицензия
 
-Свободно для использования, модификации и распространения с указанием автора.
+Лицензировано на условиях [Apache License, Version 2.0](LICENSE).
