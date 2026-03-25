@@ -2120,10 +2120,12 @@ log_header "Section 20: ACME Certificate Profiles"
 # ── TC-80: list-profiles (text output) ──────────────────────────────────────
 
 log_test "80" "list-profiles (text output)"
-OUTPUT=$(acme list-profiles 2>/dev/null) || true
+set +e
+OUTPUT=$(acme list-profiles 2>/dev/null)
 RC=$?
+set -e
 if [[ ${RC} -eq 0 ]]; then
-  if echo "${OUTPUT}" | grep -qi "profiles\|does not advertise"; then
+  if [[ -z "${OUTPUT}" ]] || echo "${OUTPUT}" | grep -qi "profiles\|does not advertise"; then
     pass "list-profiles text output works"
   else
     fail "80" "list-profiles returned 0 but unexpected output: ${OUTPUT}"
@@ -2135,8 +2137,10 @@ fi
 # ── TC-81: list-profiles (JSON output) ──────────────────────────────────────
 
 log_test "81" "list-profiles (JSON output)"
-OUTPUT=$(acme list-profiles --output-format json 2>/dev/null) || true
+set +e
+OUTPUT=$(acme list-profiles --output-format json 2>/dev/null)
 RC=$?
+set -e
 if [[ ${RC} -eq 0 ]]; then
   if echo "${OUTPUT}" | grep -q '"command"'; then
     if echo "${OUTPUT}" | grep -q '"list-profiles"'; then
@@ -2157,8 +2161,10 @@ fi
 log_test "82" "list-profiles (no-profiles behaviour)"
 # We can't force a server to not have profiles, so we just verify
 # the command doesn't crash regardless of server support
-OUTPUT=$(acme list-profiles 2>/dev/null) || true
+set +e
+OUTPUT=$(acme list-profiles 2>/dev/null)
 RC=$?
+set -e
 if [[ ${RC} -eq 0 ]]; then
   pass "list-profiles handles server response without crashing"
 else
@@ -2197,8 +2203,10 @@ fi
 log_test "84" "--profile on order"
 acme generate-key --account-key "${WORK_DIR}/tc84-account.key" >/dev/null 2>&1
 acme --account-key "${WORK_DIR}/tc84-account.key" account >/dev/null 2>&1 || true
-OUTPUT=$(acme --account-key "${WORK_DIR}/tc84-account.key" order --profile classic "${SINGLE_DOMAIN}" 2>/dev/null) || true
+set +e
+OUTPUT=$(acme --account-key "${WORK_DIR}/tc84-account.key" order --profile classic "${SINGLE_DOMAIN}" 2>/dev/null)
 RC=$?
+set -e
 if [[ ${RC} -eq 0 ]]; then
   pass "order --profile classic succeeded"
   if echo "${OUTPUT}" | grep -qi "profile"; then
@@ -2223,7 +2231,10 @@ log_test "85" "--profile unknown warning"
 STDERR_FILE="${WORK_DIR}/tc85-stderr.txt"
 acme generate-key --account-key "${WORK_DIR}/tc85-account.key" >/dev/null 2>&1
 acme --account-key "${WORK_DIR}/tc85-account.key" account >/dev/null 2>&1 || true
-OUTPUT=$(acme --account-key "${WORK_DIR}/tc85-account.key" order --profile "nonexistent-profile-xyz" "${SINGLE_DOMAIN}" 2>"${STDERR_FILE}") || true
+set +e
+OUTPUT=$(acme --account-key "${WORK_DIR}/tc85-account.key" order --profile "nonexistent-profile-xyz" "${SINGLE_DOMAIN}" 2>"${STDERR_FILE}")
+RC=$?
+set -e
 STDERR=$(cat "${STDERR_FILE}" 2>/dev/null || true)
 if echo "${STDERR}" | grep -qi "warn.*profile\|not found\|unknown\|not advertised"; then
   pass "Warning emitted for unknown profile"
