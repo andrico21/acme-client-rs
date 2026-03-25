@@ -1843,6 +1843,9 @@ async fn cmd_run(
     // Track cert ID for ARI replaceOrder (set during ARI check)
     let mut ari_cert_id: Option<String> = None;
 
+    // Reuse client built during ARI check to avoid double directory+account fetch
+    let mut early_client: Option<AcmeClient> = None;
+
     if cert_output.exists() {
         // ── 0pre. Domain mismatch check ────────────────────────────────
         let mut skip_renewal_checks = false;
@@ -1927,11 +1930,8 @@ async fn cmd_run(
                 Ok(pem_data) => {
                     match pem_to_der(&pem_data) {
                         Ok(cert_der) => {
-                            // We need the client to query ARI, build it early
-                            let key = load_account_key(&cli.account_key)?;
-                            let mut ari_client = AcmeClient::new(
-                                &cli.directory, key, cli.insecure,
-                            ).await?;
+                            // Build client early so we reuse directory + account for step 1
+                            let mut ari_client = build_client(cli).await?;
                             // ARI uses POST-as-GET, needs KID
                             ari_client.create_account(None, true, None).await?;
 
@@ -1982,6 +1982,7 @@ async fn cmd_run(
                             } else {
                                 tracing::warn!("Server does not support ARI - falling back to --days check");
                             }
+                            early_client = Some(ari_client);
                         }
                         Err(e) => {
                             tracing::warn!("Could not parse certificate {}: {e}", cert_output.display());
@@ -2040,7 +2041,10 @@ async fn cmd_run(
 
     // ── 1. Account ──────────────────────────────────────────────────────
     info!("Step 1: Creating / looking up account");
-    let mut client = build_client(cli).await?;
+    let mut client = match early_client.take() {
+        Some(c) => c,
+        None => build_client(cli).await?,
+    };
     let contact_list = contact.map(|c| vec![format!("mailto:{c}")]);
     let eab = parse_eab(eab_kid, eab_hmac_key)?;
     let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key.as_slice()));
