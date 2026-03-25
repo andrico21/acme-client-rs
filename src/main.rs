@@ -188,11 +188,17 @@ Examples:
     order example.com
 
   # Multi-SAN
-  acme-client-rs order example.com www.example.com api.example.com")]
+  acme-client-rs order example.com www.example.com api.example.com
+
+  # Select a certificate profile (draft-ietf-acme-profiles-01)
+  acme-client-rs order --profile tlsserver example.com")]
     Order {
         /// Domain names to include
         #[arg(required = true)]
         domains: Vec<String>,
+        /// Certificate profile (draft-ietf-acme-profiles-01)
+        #[arg(long, env = "ACME_PROFILE")]
+        profile: Option<String>,
     },
 
     /// Fetch an authorization object
@@ -413,6 +419,20 @@ Requires the server to support ARI (renewalInfo in its directory).")]
         cert_path: PathBuf,
     },
 
+    /// List certificate profiles advertised by the ACME server (draft-ietf-acme-profiles-01)
+    #[command(after_long_help = "\
+Examples:
+  # Show profiles from Let's Encrypt production
+  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\\\
+    list-profiles
+
+  # Machine-readable output
+  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\\\
+    --output-format json list-profiles
+
+Requires the server to advertise profiles in its directory metadata.")]
+    ListProfiles,
+
     /// Run the full ACME flow end-to-end
     #[command(after_long_help = "\
 Examples:
@@ -524,6 +544,9 @@ Examples:
         /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
         #[arg(long, default_value = "ec-p256")]
         cert_key_algorithm: CertKeyAlgorithm,
+        /// Certificate profile (draft-ietf-acme-profiles-01)
+        #[arg(long, env = "ACME_PROFILE")]
+        profile: Option<String>,
     },
 }
 
@@ -710,6 +733,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         ref mut persist_policy,
         ref mut persist_until,
         ref mut cert_key_algorithm,
+        ref mut profile,
         ..
     } = cli.command
     {
@@ -777,6 +801,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         if !*print_cert && cfg_run.print_cert == Some(true) { *print_cert = true; }
         if persist_policy.is_none() { persist_policy.clone_from(&cfg_run.persist_policy); }
         if persist_until.is_none() { *persist_until = cfg_run.persist_until; }
+        if profile.is_none() { profile.clone_from(&cfg_run.profile); }
 
         // Secrets ALLOWED from env even in config mode:
         //   key_password_file, eab_kid, eab_hmac_key
@@ -814,7 +839,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
         Commands::Account { contact, agree_tos, eab_kid, eab_hmac_key } => {
             cmd_account(&cli, contact.clone(), *agree_tos, eab_kid.as_deref(), eab_hmac_key.as_deref()).await
         }
-        Commands::Order { domains } => cmd_order(&cli, domains.clone()).await,
+        Commands::Order { domains, profile } => cmd_order(&cli, domains.clone(), profile.clone()).await,
         Commands::GetAuthz { url } => cmd_get_authz(&cli, url).await,
         Commands::RespondChallenge { url } => cmd_respond_challenge(&cli, url).await,
         Commands::ServeHttp01 { token, port, challenge_dir } => {
@@ -841,6 +866,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
         Commands::RenewalInfo { cert_path } => {
             cmd_renewal_info(&cli, cert_path).await
         }
+        Commands::ListProfiles => cmd_list_profiles(&cli).await,
         Commands::PreAuthorize { domain, challenge_type } => {
             cmd_pre_authorize(&cli, domain, challenge_type).await
         }
@@ -870,6 +896,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             persist_policy,
             persist_until,
             cert_key_algorithm,
+            profile,
         } => {
             anyhow::ensure!(!domains.is_empty(), "at least one domain is required (pass on CLI or set [run].domains in config)");
             cmd_run(
@@ -899,6 +926,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 persist_policy.as_deref(),
                 *persist_until,
                 *cert_key_algorithm,
+                profile.as_deref(),
             )
             .await
         }
@@ -1164,6 +1192,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "persist_policy": { "value": r.persist_policy },
                 "persist_until": { "value": r.persist_until },
                 "cert_key_algorithm": { "value": r.cert_key_algorithm.as_deref().unwrap_or("ec-p256") },
+                "profile": { "value": r.profile },
             });
             if verbose {
                 for key in ["domains", "contact", "challenge_type", "http_port", "challenge_dir",
@@ -1172,7 +1201,8 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                     "key_password_file", "on_challenge_ready", "on_cert_issued",
                     "eab_kid", "eab_hmac_key", "pre_authorize", "ari",
                     "reissue_on_mismatch", "print_cert",
-                    "persist_policy", "persist_until", "cert_key_algorithm"]
+                    "persist_policy", "persist_until", "cert_key_algorithm",
+                    "profile"]
                 {
                     let has = !rv[key]["value"].is_null()
                         && rv[key]["value"] != serde_json::json!(false)
@@ -1259,6 +1289,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             println!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
             println!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
             println!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
+            println!("  profile            = {}{}", opt_str(&r.profile), src(cfg_source(r.profile.is_some())));
         } else if !has_config {
             println!();
             println!("[run]");
@@ -1328,10 +1359,21 @@ async fn cmd_account(
     Ok(())
 }
 
-async fn cmd_order(cli: &Cli, domains: Vec<String>) -> Result<()> {
+async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> Result<()> {
     let mut client = build_client(cli).await?;
+    // Validate profile against advertised list (draft-ietf-acme-profiles-01 §4)
+    if let Some(ref p) = profile {
+        if let Some(available) = client.available_profiles() {
+            if !available.contains_key(p) {
+                tracing::warn!(
+                    "Profile \"{p}\" is not advertised by the server (available: {})",
+                    available.keys().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
+    }
     let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
-    let (order, order_url) = client.new_order(ids).await?;
+    let (order, order_url) = client.new_order(ids, profile).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             println!("{}", serde_json::json!({
@@ -1340,15 +1382,58 @@ async fn cmd_order(cli: &Cli, domains: Vec<String>) -> Result<()> {
                 "status": format!("{}", order.status),
                 "finalize_url": order.finalize,
                 "authorizations": order.authorizations,
+                "profile": order.profile,
             }));
         } else {
             println!("Order URL:    {order_url}");
             println!("Status:       {}", order.status);
+            if let Some(ref p) = order.profile {
+                println!("Profile:      {p}");
+            }
             println!("Finalize URL: {}", order.finalize);
             for url in &order.authorizations {
                 println!("  authz: {url}");
             }
         }
+    }
+    Ok(())
+}
+
+async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
+    // Only fetch the directory — no account key needed.
+    let http = reqwest::Client::builder()
+        .danger_accept_invalid_certs(cli.insecure)
+        .build()
+        .context("failed to build HTTP client")?;
+    let resp = http
+        .get(&cli.directory)
+        .send()
+        .await
+        .context("failed to fetch ACME directory")?;
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("ACME directory request failed: {body}");
+    }
+    let dir: crate::types::Directory = resp.json().await.context("failed to parse directory")?;
+    let profiles = dir.meta.as_ref().and_then(|m| m.profiles.as_ref());
+    match profiles {
+        Some(profiles) if !cli.silent => {
+            if cli.output_format == OutputFormat::Json {
+                println!("{}", serde_json::json!({
+                    "command": "list-profiles",
+                    "profiles": profiles,
+                }));
+            } else {
+                println!("Available certificate profiles:");
+                for (name, description) in profiles {
+                    println!("  {name}: {description}");
+                }
+            }
+        }
+        None if !cli.silent => {
+            println!("Server does not advertise any profiles.");
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -1835,6 +1920,7 @@ async fn cmd_run(
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
     cert_key_alg: CertKeyAlgorithm,
+    profile: Option<&str>,
 ) -> Result<()> {
     // ── 0. Renewal check ────────────────────────────────────────────────
     let json = cli.output_format == OutputFormat::Json;
@@ -2385,15 +2471,30 @@ async fn cmd_run(
 
     // ── 2b. New order ───────────────────────────────────────────────────
     info!("Step {}: Placing order", if pre_authorize { 3 } else { 2 });
+    let profile_owned = profile.map(String::from);
+    // Validate profile against advertised list (draft-ietf-acme-profiles-01 §4)
+    if let Some(ref p) = profile_owned {
+        if let Some(available) = client.available_profiles() {
+            if !available.contains_key(p) {
+                tracing::warn!(
+                    "Profile \"{p}\" is not advertised by the server (available: {})",
+                    available.keys().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
+    }
     let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
     let (order, order_url) = if let Some(ref cert_id) = ari_cert_id {
         info!("Using ARI replaces field (certID: {cert_id})");
-        client.new_order_replacing(ids, cert_id.clone()).await?
+        client.new_order_replacing(ids, cert_id.clone(), profile_owned).await?
     } else {
-        client.new_order(ids).await?
+        client.new_order(ids, profile_owned).await?
     };
     if !json && !silent {
         println!("Order URL:  {order_url}");
+        if let Some(ref p) = order.profile {
+            println!("Profile:    {p}");
+        }
         println!("Order status: {}", order.status);
     }
 

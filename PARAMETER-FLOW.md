@@ -46,6 +46,7 @@ graph TD
     CMD -- pre-authorize --> PRE_CMD["Pre-authorize domain"]
     CMD -- revoke --> REVOKE["Revoke certificate"]
     CMD -- renewal-info --> REN_INFO["Get ARI renewal info"]
+    CMD -- list-profiles --> LIST_PROF["Fetch directory<br/>display profiles"]
     CMD -- run --> RUN["cmd_run()<br/>Full automated flow"]
 
     %% Styling
@@ -53,7 +54,7 @@ graph TD
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
     classDef note fill:#78909c,color:white,stroke:#546e7f,stroke-dasharray:5 5
 
-    class GEN_CFG,SHOW_CFG,GEN_KEY success
+    class GEN_CFG,SHOW_CFG,GEN_KEY,LIST_PROF success
     class CFG_CHECK,CMD,PREC,ENV_MODE decision
     class SILENT_NOTE note
 ```
@@ -102,7 +103,10 @@ graph TD
     DAYS_CHECK -- No --> ACCT_STEP
 
     %% Account + Pre-authorization
-    ACCT_STEP["Step 1: Create/find<br/>account"] --> PREAUTH_CHECK{"--pre-authorize?"}
+    ACCT_STEP["Step 1: Create/find<br/>account"] --> PROF_VAL{"--profile?"}
+    PROF_VAL -- Yes --> PROF_WARN["Validate against<br/>server profiles<br/>(warn if unknown)"]
+    PROF_WARN --> PREAUTH_CHECK
+    PROF_VAL -- No --> PREAUTH_CHECK{"--pre-authorize?"}
     PREAUTH_CHECK -- Yes --> PRE_AUTH["Step 2: Pre-authorize<br/>each domain (sequential)"]
     PRE_AUTH --> PRE_CH_TYPE{"challenge<br/>type?"}
     PRE_CH_TYPE -- http-01 --> PRE_HTTP["Setup HTTP-01<br/>(server or dir)"]
@@ -117,8 +121,8 @@ graph TD
 
     %% Create order
     NEW_ORDER{"ari_cert_id<br/>available?"}
-    NEW_ORDER -- Yes --> REPLACE_ORD["new_order_replacing()<br/>(RFC 9702)"]
-    NEW_ORDER -- No --> NORMAL_ORD["new_order()"]
+    NEW_ORDER -- Yes --> REPLACE_ORD["new_order_replacing(profile)<br/>(RFC 9702)"]
+    NEW_ORDER -- No --> NORMAL_ORD["new_order(profile)"]
     REPLACE_ORD --> AUTHZ_MODE
     NORMAL_ORD --> AUTHZ_MODE
 
@@ -234,7 +238,7 @@ graph TD
     class BAIL_DOMAIN,BAIL_IP,BAIL_IP2,BAIL_IDN,FAIL_AUTH error
     class SKIP_ARI,SKIP_DAYS,SKIP_MISMATCH skip
     class DONE success
-    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK,PRINT_CERT decision
+    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PROF_VAL,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK,PRINT_CERT decision
 ```
 
 ### Configuration Commands
@@ -368,10 +372,13 @@ graph TD
 graph TD
     %% === order ===
     ORD["order"] --> ORD_IDS["Build identifiers<br/>from domains (positional)"]
-    ORD_IDS --> ORD_CALL["new_order()"]
+    ORD_IDS --> ORD_PROF{"--profile?"}
+    ORD_PROF -- Yes --> ORD_PROF_VAL["Validate against<br/>server profiles<br/>(warn if unknown)"]
+    ORD_PROF -- No --> ORD_CALL
+    ORD_PROF_VAL --> ORD_CALL["new_order(profile)"]
     ORD_CALL --> ORD_FMT{"--output-format?"}
-    ORD_FMT -- json --> ORD_JSON["JSON: order_url,<br/>status, finalize_url,<br/>authorizations[]"]
-    ORD_FMT -- text --> ORD_TEXT["Text: order_url,<br/>status, finalize_url,<br/>authz list"]
+    ORD_FMT -- json --> ORD_JSON["JSON: order_url,<br/>status, finalize_url,<br/>authorizations[],<br/>profile"]
+    ORD_FMT -- text --> ORD_TEXT["Text: order_url,<br/>status, finalize_url,<br/>authz list, profile"]
     ORD_JSON --> ORD_DONE["DONE"]
     ORD_TEXT --> ORD_DONE
 
@@ -425,7 +432,7 @@ graph TD
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
     class ORD_DONE,GAZ_DONE,RC_DONE,FIN_DONE,PO_DONE,DC_DONE success
-    class ORD_FMT,GAZ_FMT,RC_FMT,FIN_ALG,FIN_FMT,PO_FMT,DC_FMT decision
+    class ORD_FMT,ORD_PROF,GAZ_FMT,RC_FMT,FIN_ALG,FIN_FMT,PO_FMT,DC_FMT decision
 ```
 
 ### Challenge Helper Commands

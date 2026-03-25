@@ -1,5 +1,7 @@
 //! ACME protocol types per RFC 8555
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 // ── Challenge type constants (RFC 8555 §8) ──────────────────────────────────
@@ -34,6 +36,9 @@ pub struct DirectoryMeta {
     pub website: Option<String>,
     pub caa_identities: Option<Vec<String>>,
     pub external_account_required: Option<bool>,
+    /// Certificate profiles (draft-ietf-acme-profiles-01 §3).
+    /// Maps profile name → human-readable description.
+    pub profiles: Option<HashMap<String, String>>,
 }
 
 // ── Identifier (RFC 8555 §9.7.7, RFC 8738 for IP) ────────────────────────────
@@ -156,6 +161,9 @@ pub struct NewOrderRequest {
     /// ARI replacement indicator (RFC 9702 §5) - the certID of the cert being replaced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
+    /// Certificate profile (draft-ietf-acme-profiles-01 §4).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -170,6 +178,8 @@ pub struct Order {
     pub authorizations: Vec<String>,
     pub finalize: String,
     pub certificate: Option<String>,
+    /// Certificate profile (draft-ietf-acme-profiles-01 §4).
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

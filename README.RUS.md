@@ -19,6 +19,7 @@
 - Автоматизированный сквозной процесс (субкоманда `run`) со встроенным продлением (`--days N` пропускает запуск обновления, если срок продления ещё не наступил - отдельная команда renew не нужна)
 - Защита от несовпадения доменов: обнаруживает, когда запрашиваемые домены отличаются от SAN существующего сертификата, предотвращает случайную перезапись (`--reissue-on-mismatch` для явного разрешения)
 - ACME Renewal Information (ARI, RFC 9702): субкоманда `renewal-info` для запроса рекомендуемого окна продления от CA, и флаг `--ari` в `run` для использования серверного расписания продления с привязкой заказа через поле `replaces`
+- Профили сертификатов (draft-ietf-acme-profiles-01): субкоманда `list-profiles` для запроса доступных профилей, флаг `--profile` в `order` и `run` для выбора профиля
 - Опциональное шифрование закрытого ключа (`--key-password` / `--key-password-file`) с использованием PKCS#8 + AES-256-CBC с KDF scrypt
 - Пошаговый ручной процесс (отдельные субкоманды)
 - Шесть алгоритмов ключей: ES256 (по умолчанию), ES384, ES512, RSA-2048, RSA-4096, Ed25519
@@ -1248,6 +1249,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5) |
 | `pre-authorize` | Предварительная авторизация идентификатора перед созданием заказа (RFC 8555 Section 7.4.1) |
 | `renewal-info <path>` | Запрос ACME Renewal Information для сертификата (RFC 9702) |
+| `list-profiles` | Список профилей сертификатов, объявленных ACME-сервером (draft-ietf-acme-profiles-01) |
 | `revoke-cert <path>` | Отзыв сертификата |
 | `run <domains...>` | Запуск полного ACME-процесса от начала до конца |
 
@@ -1279,6 +1281,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--ari` | `false` | **Режим продления ARI (RFC 9702):** запрос рекомендуемого окна продления от сервера и пропуск выпуска, если окно ещё не открылось. При продлении поле `replaces` включается в заказ для связывания нового сертификата со старым. Переход на `--days`, если ARI недоступна. |
 | `--reissue-on-mismatch` | `false` | Разрешить перевыпуск при несовпадении запрошенных доменов с SAN существующего сертификата (по умолчанию: пропуск с предупреждением) |
 | `--print-cert` | `false` | Вывести PEM выпущенного сертификата в stdout после сохранения в файл |
+| `--profile <NAME>` | - | Профиль сертификата (draft-ietf-acme-profiles-01). Используйте `list-profiles` для просмотра доступных вариантов. |
 
 <details>
 <summary><strong>Ротация ключей (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1341,6 +1344,7 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_KEY_PASSWORD_FILE` | Путь к файлу пароля закрытого ключа (альтернатива `--key-password-file`) |
 | `ACME_EAB_KID` | EAB Key ID (альтернатива `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC-ключ, base64url-кодировка (альтернатива `--eab-hmac-key`) |
+| `ACME_PROFILE` | Профиль сертификата (альтернатива `--profile`) |
 | `RUST_LOG` | Фильтр уровня логирования (например, `debug`, `info`, `warn`) |
 
 ### Переменные окружения DNS-хука
