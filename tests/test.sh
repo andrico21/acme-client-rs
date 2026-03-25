@@ -2202,23 +2202,29 @@ fi
 
 # ── TC-84: --profile on order ───────────────────────────────────────────────
 # Reuse account key and URL from earlier tests (same as TC-06)
+# Query the server for available profiles and use the first one
 
 log_test "84" "--profile on order"
-set +e
-OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
-  order --profile classic "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
-RC=$?
-set -e
-if [[ ${RC} -eq 0 ]]; then
-  pass "order --profile classic succeeded"
-  if echo "${OUTPUT}" | grep -qi "profile"; then
-    pass "Profile echoed in order output"
-  else
-    skip "Server may not support profiles (no profile in output)"
-  fi
+FIRST_PROFILE=$(acme list-profiles 2>/dev/null | grep "^  " | head -1 | sed 's/^  //;s/:.*//')
+if [[ -z "${FIRST_PROFILE}" ]]; then
+  skip "Server does not advertise any profiles"
 else
-  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
-  fail "84" "order --profile failed (exit ${RC}): ${ERRTXT}"
+  set +e
+  OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
+    order --profile "${FIRST_PROFILE}" "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
+  RC=$?
+  set -e
+  if [[ ${RC} -eq 0 ]]; then
+    pass "order --profile ${FIRST_PROFILE} succeeded"
+    if echo "${OUTPUT}" | grep -qi "profile"; then
+      pass "Profile echoed in order output"
+    else
+      skip "Profile not echoed (server may ignore profile field)"
+    fi
+  else
+    ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+    fail "84" "order --profile ${FIRST_PROFILE} failed (exit ${RC}): ${ERRTXT}"
+  fi
 fi
 
 # ── TC-85: --profile unknown warning ────────────────────────────────────────
