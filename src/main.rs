@@ -1402,6 +1402,7 @@ async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> 
 async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     // Only fetch the directory — no account key needed.
     let http = reqwest::Client::builder()
+        .user_agent(concat!("acme-client-rs/", env!("CARGO_PKG_VERSION")))
         .danger_accept_invalid_certs(cli.insecure)
         .build()
         .context("failed to build HTTP client")?;

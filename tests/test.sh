@@ -2126,7 +2126,6 @@ set +e
 OUTPUT=$(acme list-profiles 2>"${PROF_STDERR}")
 RC=$?
 set -e
-ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
 if [[ ${RC} -eq 0 ]]; then
   if [[ -z "${OUTPUT}" ]] || echo "${OUTPUT}" | grep -qi "profiles\|does not advertise"; then
     pass "list-profiles text output works"
@@ -2134,8 +2133,8 @@ if [[ ${RC} -eq 0 ]]; then
     fail "80" "list-profiles returned 0 but unexpected output: ${OUTPUT}"
   fi
 else
-  # Non-zero exit: pass if server simply doesn't support profile discovery
-  pass "list-profiles exited ${RC} (server may not support profiles). stderr: ${ERRTXT}"
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "80" "list-profiles failed (exit ${RC}): ${ERRTXT}"
 fi
 
 # ── TC-81: list-profiles (JSON output) ──────────────────────────────────────
@@ -2145,7 +2144,6 @@ set +e
 OUTPUT=$(acme list-profiles --output-format json 2>"${PROF_STDERR}")
 RC=$?
 set -e
-ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
 if [[ ${RC} -eq 0 ]]; then
   if echo "${OUTPUT}" | grep -q '"command"'; then
     if echo "${OUTPUT}" | grep -q '"list-profiles"'; then
@@ -2157,7 +2155,8 @@ if [[ ${RC} -eq 0 ]]; then
     pass "list-profiles JSON returned successfully (no profiles on server)"
   fi
 else
-  pass "list-profiles JSON exited ${RC} (server may not support profiles). stderr: ${ERRTXT}"
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "81" "list-profiles JSON failed (exit ${RC}): ${ERRTXT}"
 fi
 
 # ── TC-82: list-profiles with no profiles (behaviour check) ────────────────
@@ -2167,13 +2166,11 @@ set +e
 OUTPUT=$(acme list-profiles 2>"${PROF_STDERR}")
 RC=$?
 set -e
-ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
 if [[ ${RC} -eq 0 ]]; then
   pass "list-profiles handles server response without crashing"
 else
-  # Surface the error for diagnosis but don't fail — Pebble may not support
-  # the meta fields our parser expects
-  pass "list-profiles exited ${RC} (acceptable for non-profile servers). stderr: ${ERRTXT}"
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "82" "list-profiles crashed (exit ${RC}): ${ERRTXT}"
 fi
 
 # ── TC-83: --profile flag in order and run help ─────────────────────────────
@@ -2204,15 +2201,14 @@ else
 fi
 
 # ── TC-84: --profile on order ───────────────────────────────────────────────
+# Reuse account key and URL from earlier tests (same as TC-06)
 
 log_test "84" "--profile on order"
-acme generate-key --account-key "${WORK_DIR}/tc84-account.key" >/dev/null 2>&1
-acme --account-key "${WORK_DIR}/tc84-account.key" account >/dev/null 2>&1 || true
 set +e
-OUTPUT=$(acme --account-key "${WORK_DIR}/tc84-account.key" order --profile classic "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
+OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
+  order --profile classic "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
 RC=$?
 set -e
-ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
 if [[ ${RC} -eq 0 ]]; then
   pass "order --profile classic succeeded"
   if echo "${OUTPUT}" | grep -qi "profile"; then
@@ -2221,18 +2217,17 @@ if [[ ${RC} -eq 0 ]]; then
     skip "Server may not support profiles (no profile in output)"
   fi
 else
-  # Pebble ignores unknown fields — if order fails it's likely unrelated to profile
-  # Pass as long as the binary didn't panic
-  pass "order --profile exited ${RC} (server may ignore/reject profile). stderr: ${ERRTXT}"
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "84" "order --profile failed (exit ${RC}): ${ERRTXT}"
 fi
 
 # ── TC-85: --profile unknown warning ────────────────────────────────────────
+# Reuse account key and URL from earlier tests
 
 log_test "85" "--profile unknown warning"
-acme generate-key --account-key "${WORK_DIR}/tc85-account.key" >/dev/null 2>&1
-acme --account-key "${WORK_DIR}/tc85-account.key" account >/dev/null 2>&1 || true
 set +e
-OUTPUT=$(acme --account-key "${WORK_DIR}/tc85-account.key" order --profile "nonexistent-profile-xyz" "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
+OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
+  order --profile "nonexistent-profile-xyz" "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
 RC=$?
 set -e
 ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
