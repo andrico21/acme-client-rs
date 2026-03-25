@@ -12,6 +12,8 @@ use tracing::{debug, info, warn};
 use crate::jws::AccountKey;
 use crate::types::*;
 
+use std::collections::HashMap;
+
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
 const USER_AGENT_VALUE: &str = concat!("acme-client-rs/", env!("CARGO_PKG_VERSION"));
 
@@ -290,8 +292,9 @@ impl AcmeClient {
     pub async fn new_order(
         &mut self,
         identifiers: Vec<Identifier>,
+        profile: Option<String>,
     ) -> Result<(Order, String)> {
-        self.new_order_inner(identifiers, None).await
+        self.new_order_inner(identifiers, None, profile).await
     }
 
     /// Submit a replacement order (ARI, RFC 9702 §5).
@@ -301,14 +304,16 @@ impl AcmeClient {
         &mut self,
         identifiers: Vec<Identifier>,
         replaces: String,
+        profile: Option<String>,
     ) -> Result<(Order, String)> {
-        self.new_order_inner(identifiers, Some(replaces)).await
+        self.new_order_inner(identifiers, Some(replaces), profile).await
     }
 
     async fn new_order_inner(
         &mut self,
         identifiers: Vec<Identifier>,
         replaces: Option<String>,
+        profile: Option<String>,
     ) -> Result<(Order, String)> {
         if replaces.is_some() {
             info!("Creating replacement order (ARI)");
@@ -320,6 +325,7 @@ impl AcmeClient {
             not_before: None,
             not_after: None,
             replaces,
+            profile,
         })?;
         let url = self.directory.new_order.clone();
         let resp = self.signed_request(&url, &payload).await?;
@@ -494,6 +500,15 @@ impl AcmeClient {
     /// Check whether the server supports ARI (has `renewalInfo` in directory).
     pub fn supports_ari(&self) -> bool {
         self.directory.renewal_info.is_some()
+    }
+
+    /// Return the advertised profiles (name → description), if any
+    /// (draft-ietf-acme-profiles-01 §3).
+    pub fn available_profiles(&self) -> Option<&HashMap<String, String>> {
+        self.directory
+            .meta
+            .as_ref()
+            .and_then(|m| m.profiles.as_ref())
     }
 }
 

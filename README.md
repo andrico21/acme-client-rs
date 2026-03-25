@@ -42,6 +42,7 @@ Alternatively, build from source — see [Building](#building) below.
 - Automated end-to-end flow (`run` subcommand) with built-in renewal (`--days N` skips if not due - no separate renew command needed)
 - Domain mismatch protection: detects when requested domains differ from existing certificate's SANs, prevents accidental overwrites (`--reissue-on-mismatch` to explicitly allow)
 - ACME Renewal Information (ARI, RFC 9702): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
+- Certificate profiles (draft-ietf-acme-profiles-01): `list-profiles` subcommand to query available profiles, `--profile` flag on `order` and `run` to select a profile
 - Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF
 - Step-by-step manual flow (individual subcommands)
 - Six key algorithms: ES256 (default), ES384, ES512, RSA-2048, RSA-4096, Ed25519
@@ -1271,6 +1272,7 @@ Global options can be placed before or after the subcommand.
 | `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5) |
 | `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1) |
 | `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9702) |
+| `list-profiles` | List certificate profiles advertised by the ACME server (draft-ietf-acme-profiles-01) |
 | `revoke-cert <path>` | Revoke a certificate |
 | `run <domains...>` | Run the full ACME flow end-to-end |
 
@@ -1302,6 +1304,7 @@ Global options can be placed before or after the subcommand.
 | `--ari` | `false` | **ARI renewal mode (RFC 9702):** query the server's suggested renewal window and skip issuance if the window has not opened. When renewing, the `replaces` field is included in the order to link the new cert to the old one. Falls back to `--days` if ARI is unavailable. |
 | `--reissue-on-mismatch` | `false` | Allow reissuance when requested domains differ from the existing certificate's SANs (default: skip with warning) |
 | `--print-cert` | `false` | Print the issued certificate PEM to stdout after saving to file |
+| `--profile <NAME>` | - | Certificate profile to request (draft-ietf-acme-profiles-01). Use `list-profiles` to see available options. |
 
 <details>
 <summary><strong>Key Rollover (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1364,6 +1367,7 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_KEY_PASSWORD_FILE` | Private key password file path (alternative to `--key-password-file`) |
 | `ACME_EAB_KID` | EAB Key ID (alternative to `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC key, base64url-encoded (alternative to `--eab-hmac-key`) |
+| `ACME_PROFILE` | Certificate profile (alternative to `--profile`) |
 | `RUST_LOG` | Log level filter (e.g., `debug`, `info`, `warn`) |
 
 ### DNS Hook Environment Variables

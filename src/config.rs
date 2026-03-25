@@ -90,6 +90,8 @@ pub struct RunConfig {
     pub domains: Option<Vec<String>>,
     /// Certificate key algorithm: "ec-p256", "ec-p384", or "ed25519".
     pub cert_key_algorithm: Option<String>,
+    /// Certificate profile (draft-ietf-acme-profiles-01).
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -312,6 +314,13 @@ pub fn generate_template() -> &'static str {
 # CLI: --cert-key-algorithm
 # Default: "ec-p256"
 # cert_key_algorithm = "ec-p256"
+
+# Certificate profile (draft-ietf-acme-profiles-01).
+# Selects a specific certificate profile when placing an order.
+# Available profiles can be queried with `acme-client-rs list-profiles`.
+# CLI: --profile
+# Env: ACME_PROFILE
+# profile = "classic"
 
 # ── Account subcommand options ───────────────────────────────────────────────
 # These apply when using `acme-client-rs account`.

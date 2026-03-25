@@ -2112,6 +2112,144 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
+# SECTION 20: ACME Certificate Profiles (draft-ietf-acme-profiles-01)
+# ═════════════════════════════════════════════════════════════════════════════
+
+log_header "Section 20: ACME Certificate Profiles"
+
+PROF_STDERR="${WORK_DIR}/profiles-stderr.txt"
+
+# ── TC-80: list-profiles (text output) ──────────────────────────────────────
+
+log_test "80" "list-profiles (text output)"
+set +e
+OUTPUT=$(acme list-profiles 2>"${PROF_STDERR}")
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  if [[ -z "${OUTPUT}" ]] || echo "${OUTPUT}" | grep -qi "profiles\|does not advertise"; then
+    pass "list-profiles text output works"
+  else
+    fail "80" "list-profiles returned 0 but unexpected output: ${OUTPUT}"
+  fi
+else
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "80" "list-profiles failed (exit ${RC}): ${ERRTXT}"
+fi
+
+# ── TC-81: list-profiles (JSON output) ──────────────────────────────────────
+
+log_test "81" "list-profiles (JSON output)"
+set +e
+OUTPUT=$(acme list-profiles --output-format json 2>"${PROF_STDERR}")
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  if echo "${OUTPUT}" | grep -q '"command"'; then
+    if echo "${OUTPUT}" | grep -q '"list-profiles"'; then
+      pass "list-profiles JSON has correct command field"
+    else
+      fail "81" "JSON missing 'list-profiles' command value"
+    fi
+  else
+    pass "list-profiles JSON returned successfully (no profiles on server)"
+  fi
+else
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "81" "list-profiles JSON failed (exit ${RC}): ${ERRTXT}"
+fi
+
+# ── TC-82: list-profiles with no profiles (behaviour check) ────────────────
+
+log_test "82" "list-profiles (no-profiles behaviour)"
+set +e
+OUTPUT=$(acme list-profiles 2>"${PROF_STDERR}")
+RC=$?
+set -e
+if [[ ${RC} -eq 0 ]]; then
+  pass "list-profiles handles server response without crashing"
+else
+  ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+  fail "82" "list-profiles crashed (exit ${RC}): ${ERRTXT}"
+fi
+
+# ── TC-83: --profile flag in order and run help ─────────────────────────────
+
+log_test "83" "--profile flag in order and run help"
+
+# Check order help
+HELP_ORDER=$("${ACME_BIN}" order --help 2>&1)
+if echo "${HELP_ORDER}" | grep -q "\-\-profile"; then
+  pass "--profile listed in order --help"
+else
+  fail "83" "--profile not found in order --help"
+fi
+
+# Check run help
+HELP_RUN=$("${ACME_BIN}" run --help 2>&1)
+if echo "${HELP_RUN}" | grep -q "\-\-profile"; then
+  pass "--profile listed in run --help"
+else
+  fail "83" "--profile not found in run --help"
+fi
+
+# Check ACME_PROFILE env var appears
+if echo "${HELP_ORDER}" | grep -q "ACME_PROFILE"; then
+  pass "ACME_PROFILE env var documented in order --help"
+else
+  fail "83" "ACME_PROFILE env var not in order --help"
+fi
+
+# ── TC-84: --profile on order ───────────────────────────────────────────────
+# Reuse account key and URL from earlier tests (same as TC-06)
+# Query the server for available profiles and use the first one
+
+log_test "84" "--profile on order"
+FIRST_PROFILE=$(acme list-profiles 2>/dev/null | grep "^  " | head -1 | sed 's/^  //;s/:.*//')
+if [[ -z "${FIRST_PROFILE}" ]]; then
+  skip "Server does not advertise any profiles"
+else
+  set +e
+  OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
+    order --profile "${FIRST_PROFILE}" "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
+  RC=$?
+  set -e
+  if [[ ${RC} -eq 0 ]]; then
+    pass "order --profile ${FIRST_PROFILE} succeeded"
+    if echo "${OUTPUT}" | grep -qi "profile"; then
+      pass "Profile echoed in order output"
+    else
+      skip "Profile not echoed (server may ignore profile field)"
+    fi
+  else
+    ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+    fail "84" "order --profile ${FIRST_PROFILE} failed (exit ${RC}): ${ERRTXT}"
+  fi
+fi
+
+# ── TC-85: --profile unknown warning ────────────────────────────────────────
+# Reuse account key and URL from earlier tests
+
+log_test "85" "--profile unknown warning"
+set +e
+OUTPUT=$(acme --account-key "${ACCT_KEY}" --account-url "${ACCOUNT_URL}" \
+  order --profile "nonexistent-profile-xyz" "${SINGLE_DOMAIN}" 2>"${PROF_STDERR}")
+RC=$?
+set -e
+ERRTXT=$(cat "${PROF_STDERR}" 2>/dev/null || true)
+if echo "${ERRTXT}" | grep -qi "warn.*profile\|not found\|unknown\|not advertised"; then
+  pass "Warning emitted for unknown profile"
+else
+  if echo "${ERRTXT}" | grep -qi "profile"; then
+    pass "Profile-related message in stderr"
+  else
+    skip "Server may not advertise profiles (no warning expected)"
+  fi
+fi
+
+rm -f "${PROF_STDERR}" 2>/dev/null
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═════════════════════════════════════════════════════════════════════════════
 

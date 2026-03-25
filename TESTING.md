@@ -1269,6 +1269,99 @@ acme --silent show-config
 
 ---
 
+## TC-80: list-profiles (text output)
+
+**Goal:** The `list-profiles` subcommand displays available certificate profiles from the ACME server directory.
+
+```sh
+acme --directory https://acme-v02.api.letsencrypt.org/directory list-profiles
+```
+
+**Expected:**
+- Output starts with `Available certificate profiles:`
+- Lists profile names with URLs (e.g., `classic: https://letsencrypt.org/docs/profiles#classic`)
+- Does NOT require an account key file
+- Exit code 0
+
+---
+
+## TC-81: list-profiles (JSON output)
+
+**Goal:** JSON output for `list-profiles` returns structured data.
+
+```sh
+acme --directory https://acme-v02.api.letsencrypt.org/directory --output-format json list-profiles
+```
+
+**Expected:**
+- JSON object with `"command": "list-profiles"` and `"profiles"` map
+- Each profile is a key-value pair (name → description URL)
+- Exit code 0
+
+---
+
+## TC-82: list-profiles (no profiles)
+
+**Goal:** When the server does not advertise profiles, a clear message is shown.
+
+```sh
+acme --directory https://localhost:14000/dir list-profiles
+```
+
+**Expected (if Pebble has no profiles):**
+- Output: `Server does not advertise any profiles.`
+- Exit code 0
+
+---
+
+## TC-83: --profile flag in order and run help
+
+**Goal:** The `--profile` flag appears in help for `order` and `run` subcommands.
+
+```sh
+acme order --help | grep -i profile
+acme run --help | grep -i profile
+```
+
+**Expected:**
+- Both show `--profile <PROFILE>` with description and `[env: ACME_PROFILE=]`
+
+---
+
+## TC-84: --profile on order
+
+**Goal:** The `--profile` flag is accepted on the `order` subcommand and the profile is echoed in the response.
+
+```sh
+acme --directory https://acme-server/directory \
+  --account-url <account-url> \
+  order --profile classic example.com
+```
+
+**Expected:**
+- Order placed successfully
+- Text output includes `Profile: classic`
+- JSON output includes `"profile": "classic"`
+- Exit code 0
+
+---
+
+## TC-85: --profile warning for unknown profile
+
+**Goal:** Using a profile not advertised by the server emits a warning but proceeds.
+
+```sh
+RUST_LOG=warn acme --directory https://acme-server/directory \
+  --account-url <account-url> \
+  order --profile nonexistent example.com
+```
+
+**Expected:**
+- stderr warning: `Profile "nonexistent" is not advertised by the server`
+- Order still attempted (server may reject with ACME error)
+
+---
+
 ## Manual-Only Test Cases
 
 The following test cases require special server configurations and are not included in the automated test script (`tests/test.sh`):
@@ -1370,6 +1463,12 @@ The following test cases require special server configurations and are not inclu
 | 77 | `run` domain mismatch (reissue) | - | Reissue triggered | Yes |
 | 78 | `run --print-cert` | HTTP-01 | PEM printed to stdout | Yes |
 | 79 | `--silent` suppresses stdout | - | No stdout output | Yes |
+| 80 | `list-profiles` (text) | - | Profiles listed | Manual |
+| 81 | `list-profiles` (JSON) | - | Structured JSON | Manual |
+| 82 | `list-profiles` (no profiles) | - | Clear message | Manual |
+| 83 | `--profile` in help | - | Flag listed | Yes |
+| 84 | `--profile` on `order` | - | Profile echoed | Manual |
+| 85 | `--profile` unknown warning | - | Warning emitted | Manual |
 
 ---
 
