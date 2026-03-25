@@ -910,7 +910,7 @@ acme --insecure --output-format json --account-key json-e2e.key run --contact js
 
 **Expected:**
 - Exit code: 0
-- JSON output contains `"action":"issued"`, `"cert_path"`, `"key_path"`, `"key_encrypted": false`
+- JSON output contains `"action":"issued"`, `"cert_path"`, `"key_path"`, `"key_encrypted": false`, `"profile": null`
 
 ---
 
