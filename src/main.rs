@@ -423,11 +423,11 @@ Requires the server to support ARI (renewalInfo in its directory).")]
     #[command(after_long_help = "\
 Examples:
   # Show profiles from Let's Encrypt production
-  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\\\
+  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\
     list-profiles
 
   # Machine-readable output
-  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\\\
+  acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory \\
     --output-format json list-profiles
 
 Requires the server to advertise profiles in its directory metadata.")]
@@ -1432,7 +1432,14 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
             }
         }
         None if !cli.silent => {
-            println!("Server does not advertise any profiles.");
+            if cli.output_format == OutputFormat::Json {
+                println!("{}", serde_json::json!({
+                    "command": "list-profiles",
+                    "profiles": null,
+                }));
+            } else {
+                println!("Server does not advertise any profiles.");
+            }
         }
         _ => {}
     }
@@ -3234,6 +3241,7 @@ async fn cmd_run(
             "cert_path": cert_output.display().to_string(),
             "key_path": key_output.display().to_string(),
             "key_encrypted": key_encrypted,
+            "profile": profile,
         }));
     } else if !silent {
         println!("Certificate saved to {}", cert_output.display());

@@ -910,7 +910,7 @@ acme --insecure --output-format json --account-key json-e2e.key run --contact js
 
 **Expected:**
 - Exit code: 0
-- JSON output contains `"action":"issued"`, `"cert_path"`, `"key_path"`, `"key_encrypted": false`
+- JSON output contains `"action":"issued"`, `"cert_path"`, `"key_path"`, `"key_encrypted": false`, `"profile": null`
 
 ---
 
@@ -923,7 +923,7 @@ acme --insecure --output-format json --account-key json-e2e.key run --contact js
 ```
 
 **Expected:**
-- JSON output contains `"action":"skip"`, `"days_remaining"`, `"threshold": "1"`
+- JSON output contains `"action":"skip"`, `"days_remaining"`, `"threshold": 1`
 
 ---
 
@@ -1333,15 +1333,17 @@ acme run --help | grep -i profile
 **Goal:** The `--profile` flag is accepted on the `order` subcommand and the profile is echoed in the response.
 
 ```sh
+# Use a profile advertised by the server (e.g., "classic" for Let's Encrypt,
+# "default" for Pebble). Query available profiles with list-profiles first.
 acme --directory https://acme-server/directory \
   --account-url <account-url> \
-  order --profile classic example.com
+  order --profile <server-profile> example.com
 ```
 
 **Expected:**
 - Order placed successfully
-- Text output includes `Profile: classic`
-- JSON output includes `"profile": "classic"`
+- Text output includes `Profile: <server-profile>`
+- JSON output includes `"profile": "<server-profile>"`
 - Exit code 0
 
 ---
@@ -1463,12 +1465,12 @@ The following test cases require special server configurations and are not inclu
 | 77 | `run` domain mismatch (reissue) | - | Reissue triggered | Yes |
 | 78 | `run --print-cert` | HTTP-01 | PEM printed to stdout | Yes |
 | 79 | `--silent` suppresses stdout | - | No stdout output | Yes |
-| 80 | `list-profiles` (text) | - | Profiles listed | Manual |
-| 81 | `list-profiles` (JSON) | - | Structured JSON | Manual |
-| 82 | `list-profiles` (no profiles) | - | Clear message | Manual |
+| 80 | `list-profiles` (text) | - | Profiles listed | Yes |
+| 81 | `list-profiles` (JSON) | - | Structured JSON | Yes |
+| 82 | `list-profiles` (no profiles) | - | Clear message | Yes |
 | 83 | `--profile` in help | - | Flag listed | Yes |
-| 84 | `--profile` on `order` | - | Profile echoed | Manual |
-| 85 | `--profile` unknown warning | - | Warning emitted | Manual |
+| 84 | `--profile` on `order` | - | Profile echoed | Yes |
+| 85 | `--profile` unknown warning | - | Warning emitted | Yes |
 
 ---
 
