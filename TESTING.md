@@ -1333,15 +1333,17 @@ acme run --help | grep -i profile
 **Goal:** The `--profile` flag is accepted on the `order` subcommand and the profile is echoed in the response.
 
 ```sh
+# Use a profile advertised by the server (e.g., "classic" for Let's Encrypt,
+# "default" for Pebble). Query available profiles with list-profiles first.
 acme --directory https://acme-server/directory \
   --account-url <account-url> \
-  order --profile classic example.com
+  order --profile <server-profile> example.com
 ```
 
 **Expected:**
 - Order placed successfully
-- Text output includes `Profile: classic`
-- JSON output includes `"profile": "classic"`
+- Text output includes `Profile: <server-profile>`
+- JSON output includes `"profile": "<server-profile>"`
 - Exit code 0
 
 ---

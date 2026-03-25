@@ -1432,7 +1432,14 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
             }
         }
         None if !cli.silent => {
-            println!("Server does not advertise any profiles.");
+            if cli.output_format == OutputFormat::Json {
+                println!("{}", serde_json::json!({
+                    "command": "list-profiles",
+                    "profiles": null,
+                }));
+            } else {
+                println!("Server does not advertise any profiles.");
+            }
         }
         _ => {}
     }
