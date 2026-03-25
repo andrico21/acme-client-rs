@@ -115,63 +115,6 @@ jobs:
           name: acme-client-rs-linux-aarch64-musl
           path: acme-client-rs-linux-aarch64-musl.tar.gz
 
-  build-linux-armv7-musl:
-    name: Build Linux (armv7, musl, static)
-    runs-on: ubuntu-24.04
-    env:
-      CROSS_TOOLCHAIN: /opt/armv7l-linux-musleabihf-cross
-      OPENSSL_VERSION: "3.5.5"
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-unknown-linux-musleabihf
-
-      - name: Install musl cross-compilation toolchain
-        run: |
-          curl -sSfL https://musl.cc/armv7l-linux-musleabihf-cross.tgz | sudo tar xzf - -C /opt
-          echo "$CROSS_TOOLCHAIN/bin" >> $GITHUB_PATH
-
-      - name: Cross-compile OpenSSL for armv7
-        run: |
-          curl -sSfL "https://github.com/openssl/openssl/releases/download/openssl-$OPENSSL_VERSION/openssl-$OPENSSL_VERSION.tar.gz" | tar xzf -
-          cd openssl-$OPENSSL_VERSION
-          ./Configure linux-armv4 no-shared no-async \
-            --prefix=/opt/openssl-armv7 \
-            --cross-compile-prefix=armv7l-linux-musleabihf-
-          make -j$(nproc)
-          sudo make install_sw
-
-      - name: Build
-        env:
-          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER: armv7l-linux-musleabihf-gcc
-          CC_armv7_unknown_linux_musleabihf: armv7l-linux-musleabihf-gcc
-          AR_armv7_unknown_linux_musleabihf: armv7l-linux-musleabihf-ar
-          OPENSSL_STATIC: "1"
-          OPENSSL_DIR: /opt/openssl-armv7
-        run: cargo rustc --release --target armv7-unknown-linux-musleabihf -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
-
-      - name: Strip binary
-        run: armv7l-linux-musleabihf-strip target/armv7-unknown-linux-musleabihf/release/acme-client-rs
-
-      - name: Verify static linking
-        run: |
-          file target/armv7-unknown-linux-musleabihf/release/acme-client-rs
-          file target/armv7-unknown-linux-musleabihf/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
-
-      - name: Package
-        run: |
-          mkdir -p dist
-          cp target/armv7-unknown-linux-musleabihf/release/acme-client-rs dist/
-          cd dist
-          tar czf ../acme-client-rs-linux-armv7-musl.tar.gz acme-client-rs
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: acme-client-rs-linux-armv7-musl
-          path: acme-client-rs-linux-armv7-musl.tar.gz
-
   build-macos-x86_64:
     name: Build macOS (x86_64)
     runs-on: macos-14
@@ -272,7 +215,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [build-linux-gnu, build-linux-musl, build-linux-aarch64-musl, build-linux-armv7-musl, build-macos-x86_64, build-macos-arm64, build-windows-msvc, integration-test]
+    needs: [build-linux-gnu, build-linux-musl, build-linux-aarch64-musl, build-macos-x86_64, build-macos-arm64, build-windows-msvc, integration-test]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
@@ -288,7 +231,6 @@ jobs:
             acme-client-rs-linux-x86_64-gnu.tar.gz
             acme-client-rs-linux-x86_64-musl.tar.gz
             acme-client-rs-linux-aarch64-musl.tar.gz
-            acme-client-rs-linux-armv7-musl.tar.gz
             acme-client-rs-darwin-x86_64.tar.gz
             acme-client-rs-darwin-arm64.tar.gz
             acme-client-rs-windows-x86_64-msvc.zip
