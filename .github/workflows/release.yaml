@@ -20,7 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
 
       - name: Install OpenSSL dev headers
         run: sudo apt update && sudo apt install -y pkg-config libssl-dev
@@ -47,7 +49,7 @@ jobs:
     name: Build Linux (x86_64, musl, static)
     runs-on: ubuntu-24.04
     container:
-      image: rust:alpine
+      image: rust:1.94.1-alpine
     steps:
       - uses: actions/checkout@v6
 
@@ -95,7 +97,7 @@ jobs:
         run: |
           docker run --rm --platform linux/arm64 \
             -v "$PWD":/work -w /work \
-            rust:alpine sh -c '
+            rust:1.94.1-alpine sh -c '
               apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
               OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
               strip target/release/acme-client-rs
@@ -121,8 +123,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: 1.94.1
           targets: x86_64-apple-darwin
 
       - name: Build
@@ -146,7 +149,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
 
       - name: Build
         run: cargo rustc --release -- -C link-args=-Wl,-headerpad_max_install_names
@@ -169,7 +174,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.94.1
 
       - name: Build
         env:
