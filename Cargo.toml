@@ -10,7 +10,7 @@ base64 = "0.22"
 clap = { version = "4.6", features = ["derive", "env"] }
 ecdsa = { version = "0.16", features = ["signing"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
-hmac = "0.12"
+hmac = "0.13"
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 p384 = { version = "0.13", features = ["ecdsa", "pem"] }
 p521 = { version = "0.13", features = ["ecdsa", "pem"] }
