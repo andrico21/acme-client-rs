@@ -47,3 +47,12 @@ Thumbs.db
 certs/
 certificates/
 private_keys/
+
+# Local scratch / working notes (not part of the tree)
+*.log
+idx.txt
+loc.txt
+RUST_1_95_NOTES.md
+RUST_GUIDELINES.md
+COMMIT_MSG.txt
+clippy.json
