@@ -501,7 +501,7 @@ Examples:
         /// Write HTTP-01 challenge files to this directory instead of starting a server
         #[arg(long)]
         challenge_dir: Option<PathBuf>,
-        /// Path to a DNS-01 hook script (called with ACME_ACTION=create|cleanup)
+        /// Path to a DNS-01 hook script (called with `ACME_ACTION=create|cleanup`)
         #[arg(long)]
         dns_hook: Option<PathBuf>,
         /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
@@ -582,7 +582,9 @@ async fn main() {
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     // Load config (skip for generate-config)
-    let (loaded_config, config_mode) = if !matches!(cli.command, Commands::GenerateConfig) {
+    let (loaded_config, config_mode) = if matches!(cli.command, Commands::GenerateConfig) {
+        (None, false)
+    } else {
         match load_config(&cli).await {
             Ok(pair) => pair,
             Err(err) => {
@@ -590,8 +592,6 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-    } else {
-        (None, false)
     };
 
     if let Some(ref config) = loaded_config {
@@ -645,13 +645,9 @@ fn apply_config(
     // (except for allowed secrets — handled separately).
     // Without config mode, config merges under both env and defaults.
     let should_apply_config = |source: Option<ValueSource>| -> bool {
-        match source {
-            Some(ValueSource::CommandLine) => false, // CLI always wins
-            Some(ValueSource::EnvVariable) if config_mode => true, // config overrides env in config mode
-            Some(ValueSource::EnvVariable) => true, // config also overrides env without config mode
-            Some(ValueSource::DefaultValue) => true, // config overrides defaults
-            _ => true,
-        }
+        // Only CLI-supplied values win over config; everything else (env, default,
+        // unspecified) yields to config.
+        !matches!(source, Some(ValueSource::CommandLine))
     };
 
     // In config mode, strip env values for global fields that are NOT in the
@@ -680,7 +676,7 @@ fn apply_config(
     // Global: directory
     if should_apply_config(matches.value_source("directory")) {
         if let Some(ref v) = cfg.directory {
-            cli.directory = v.clone();
+            cli.directory.clone_from(v);
         } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable)
         {
             // Reset to default — env var is not allowed in config mode
@@ -691,7 +687,7 @@ fn apply_config(
     // Global: account_key
     if should_apply_config(matches.value_source("account_key")) {
         if let Some(ref v) = cfg.account_key {
-            cli.account_key = v.clone();
+            cli.account_key.clone_from(v);
         } else if config_mode
             && matches.value_source("account_key") == Some(ValueSource::EnvVariable)
         {
@@ -772,7 +768,7 @@ fn apply_config(
             if should_apply_config(sub_matches.value_source("challenge_type"))
                 && let Some(ref v) = cfg_run.challenge_type
             {
-                *challenge_type = v.clone();
+                challenge_type.clone_from(v);
             }
             if should_apply_config(sub_matches.value_source("http_port"))
                 && let Some(v) = cfg_run.http_port
@@ -782,12 +778,12 @@ fn apply_config(
             if should_apply_config(sub_matches.value_source("cert_output"))
                 && let Some(ref v) = cfg_run.cert_output
             {
-                *cert_output = v.clone();
+                cert_output.clone_from(v);
             }
             if should_apply_config(sub_matches.value_source("key_output"))
                 && let Some(ref v) = cfg_run.key_output
             {
-                *key_output = v.clone();
+                key_output.clone_from(v);
             }
             if should_apply_config(sub_matches.value_source("cert_key_algorithm"))
                 && let Some(ref v) = cfg_run.cert_key_algorithm
@@ -800,7 +796,7 @@ fn apply_config(
         // Domains: CLI takes priority, fall back to config
         if domains.is_empty() {
             if let Some(ref v) = cfg_run.domains {
-                *domains = v.clone();
+                domains.clone_from(v);
             }
         } else if config_mode && cfg_run.domains.as_ref().is_none_or(Vec::is_empty) {
             // Domains from CLI but not in config — inform the user
@@ -889,7 +885,7 @@ fn apply_config(
         if contact.is_empty()
             && let Some(ref v) = cfg_acct.contact
         {
-            *contact = v.clone();
+            contact.clone_from(v);
         }
         // Secrets — allowed from env in config mode
         if eab_kid.is_none() {
@@ -1215,6 +1211,7 @@ fn cmd_generate_config(silent: bool) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)] // CLI presentation; cohesive single-purpose printer
 fn cmd_show_config(
     cli: &Cli,
     loaded_config: Option<&config::Config>,
@@ -1222,10 +1219,11 @@ fn cmd_show_config(
     verbose: bool,
     config_mode: bool,
 ) -> Result<()> {
+    use clap::parser::ValueSource;
+
     if cli.silent {
         return Ok(());
     }
-    use clap::parser::ValueSource;
 
     let json = cli.output_format == OutputFormat::Json;
 
@@ -2331,11 +2329,11 @@ async fn check_renewal_status(
             if requested != cert_sans {
                 let added: Vec<&str> = requested
                     .difference(&cert_sans)
-                    .map(|s| s.as_str())
+                    .map(String::as_str)
                     .collect();
                 let removed: Vec<&str> = cert_sans
                     .difference(&requested)
-                    .map(|s| s.as_str())
+                    .map(String::as_str)
                     .collect();
 
                 if reissue_on_mismatch {
@@ -2386,12 +2384,12 @@ async fn check_renewal_status(
                                  Use --reissue-on-mismatch to override.",
                                 cert_sans
                                     .iter()
-                                    .map(|s| s.as_str())
+                                    .map(String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 requested
                                     .iter()
-                                    .map(|s| s.as_str())
+                                    .map(String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 added.join(", "),
@@ -2499,7 +2497,7 @@ async fn check_renewal_status(
             && let Some(threshold) = days
         {
             match cert_days_remaining(cert_output) {
-                Ok(remaining) if remaining > threshold as i64 => {
+                Ok(remaining) if remaining > i64::from(threshold) => {
                     if json {
                         if !silent {
                             println!(
@@ -2630,11 +2628,11 @@ async fn cmd_run(
                 .challenges
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
-                .with_context(|| format!("no {challenge_type} challenge for {}", domain_display))?;
-            let token = if challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
-                ch.token.as_deref().context("challenge has no token")?
-            } else {
+                .with_context(|| format!("no {challenge_type} challenge for {domain_display}"))?;
+            let token = if challenge_type == CHALLENGE_TYPE_DNS_PERSIST01 {
                 "" // dns-persist-01 has no token
+            } else {
+                ch.token.as_deref().context("challenge has no token")?
             };
             let challenge_url = ch.url.clone();
 
@@ -2744,7 +2742,7 @@ async fn cmd_run(
                                     .status()
                                 {
                                     Ok(s) if !s.success() => {
-                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
+                                        tracing::warn!("DNS hook (cleanup) exited with {s}");
                                     }
                                     Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                                     _ => {}
@@ -2848,7 +2846,7 @@ async fn cmd_run(
                                     .status()
                                 {
                                     Ok(s) if !s.success() => {
-                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
+                                        tracing::warn!("DNS hook (cleanup) exited with {s}");
                                     }
                                     Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                                     _ => {}
@@ -2915,8 +2913,7 @@ async fn cmd_run(
                         challenge::http01::cleanup_challenge_file(f).await;
                     }
                     anyhow::bail!(
-                        "pre-authorization for {} did not complete within {challenge_timeout}s",
-                        domain_display
+                        "pre-authorization for {domain_display} did not complete within {challenge_timeout}s",
                     );
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -2941,7 +2938,7 @@ async fn cmd_run(
                             .as_ref()
                             .map(|e| format!(": {e}"))
                             .unwrap_or_default();
-                        anyhow::bail!("challenge validation failed for {}{detail}", domain_display);
+                        anyhow::bail!("challenge validation failed for {domain_display}{detail}");
                     } else if let Some(ref err) = ch.error {
                         tracing::debug!(
                             "Challenge has error but status is {} (will keep polling): {err}",
@@ -2965,9 +2962,9 @@ async fn cmd_run(
                             .and_then(|c| c.error.as_ref())
                             .map(|e| format!(": {e}"))
                             .unwrap_or_default();
-                        anyhow::bail!("pre-authorization failed for {}{detail}", domain_display);
+                        anyhow::bail!("pre-authorization failed for {domain_display}{detail}");
                     }
-                    _ => continue,
+                    _ => {}
                 }
             }
 
@@ -2983,7 +2980,7 @@ async fn cmd_run(
                     .status();
                 match status {
                     Ok(s) if !s.success() => {
-                        tracing::warn!("DNS hook (cleanup) exited with {s}")
+                        tracing::warn!("DNS hook (cleanup) exited with {s}");
                     }
                     Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                     _ => {}
@@ -3186,7 +3183,7 @@ async fn cmd_run(
                     let name = p.txt_name.clone();
                     let value = p.txt_value.clone();
                     let domain = p.domain.clone();
-                    let sem = semaphore.clone();
+                    let sem = std::sync::Arc::clone(&semaphore);
                     set.spawn(async move {
                         let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
                         let deadline = std::time::Instant::now()
@@ -3224,7 +3221,7 @@ async fn cmd_run(
                             .status()
                         {
                             Ok(s) if !s.success() => {
-                                tracing::warn!("DNS hook (cleanup) exited with {s}")
+                                tracing::warn!("DNS hook (cleanup) exited with {s}");
                             }
                             Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                             _ => {}
@@ -3345,7 +3342,7 @@ async fn cmd_run(
                                 .unwrap_or_default();
                             anyhow::bail!("authorization failed for {}{detail}", p.domain);
                         }
-                        _ => continue,
+                        _ => {}
                     }
                 }
             }
@@ -3398,10 +3395,10 @@ async fn cmd_run(
                         authz.identifier.value
                     )
                 })?;
-            let token = if challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
-                ch.token.as_deref().context("challenge has no token")?
-            } else {
+            let token = if challenge_type == CHALLENGE_TYPE_DNS_PERSIST01 {
                 "" // dns-persist-01 has no token
+            } else {
+                ch.token.as_deref().context("challenge has no token")?
             };
             let challenge_url = ch.url.clone();
 
@@ -3737,7 +3734,7 @@ async fn cmd_run(
                             authz.identifier.value
                         );
                     }
-                    _ => continue,
+                    _ => {}
                 }
             }
 
