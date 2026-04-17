@@ -245,7 +245,11 @@ impl std::fmt::Display for AuthorizationStatus {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    clippy::struct_field_names,
+    reason = "'challenge_type' mirrors RFC 8555 JSON field 'type'"
+)]
 pub struct Challenge {
     #[serde(rename = "type")]
     pub challenge_type: String,

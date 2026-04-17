@@ -2,8 +2,8 @@
 //!
 //! Each sub-module computes the required proof material per RFC 8555 §8.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 use crate::jws::AccountKey;
@@ -17,8 +17,8 @@ pub fn key_authorization(token: &str, account_key: &AccountKey) -> String {
 // ── HTTP-01 (RFC 8555 §8.3) ────────────────────────────────────────────────
 
 pub mod http01 {
-    use super::*;
-    use anyhow::{bail, Context, Result};
+    use super::{AccountKey, key_authorization};
+    use anyhow::{Context, Result, bail};
     use std::path::{Path, PathBuf};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tracing::info;
@@ -36,34 +36,33 @@ pub mod http01 {
     /// Write the challenge token file into `<dir>/.well-known/acme-challenge/`.
     ///
     /// Returns the full path to the written file (for cleanup).
-    pub fn write_challenge_file(
+    pub async fn write_challenge_file(
         challenge_dir: &Path,
         token: &str,
         account_key: &AccountKey,
     ) -> Result<PathBuf> {
         let auth = response_body(token, account_key);
         let well_known = challenge_dir.join(".well-known").join("acme-challenge");
-        std::fs::create_dir_all(&well_known).with_context(|| {
-            format!(
-                "failed to create challenge directory {}",
-                well_known.display()
-            )
-        })?;
+        tokio::fs::create_dir_all(&well_known)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create challenge directory {}",
+                    well_known.display()
+                )
+            })?;
         let file_path = well_known.join(token);
-        std::fs::write(&file_path, auth.as_bytes()).with_context(|| {
-            format!(
-                "failed to write challenge file {}",
-                file_path.display()
-            )
-        })?;
+        tokio::fs::write(&file_path, auth.as_bytes())
+            .await
+            .with_context(|| format!("failed to write challenge file {}", file_path.display()))?;
         info!("HTTP-01: wrote challenge to {}", file_path.display());
         Ok(file_path)
     }
 
     /// Remove a previously written challenge file (best-effort).
-    pub fn cleanup_challenge_file(path: &Path) {
-        if path.exists() {
-            if let Err(e) = std::fs::remove_file(path) {
+    pub async fn cleanup_challenge_file(path: &Path) {
+        if tokio::fs::try_exists(path).await.unwrap_or(false) {
+            if let Err(e) = tokio::fs::remove_file(path).await {
                 tracing::warn!("failed to clean up challenge file {}: {e}", path.display());
             } else {
                 info!("HTTP-01: cleaned up {}", path.display());
@@ -75,9 +74,7 @@ pub mod http01 {
     ///
     /// If the port is already in use, returns a user-friendly error
     /// suggesting `--challenge-dir`.
-    pub async fn bind_or_suggest(
-        port: u16,
-    ) -> Result<tokio::net::TcpListener> {
+    pub async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => Ok(listener),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -111,6 +108,10 @@ pub mod http01 {
 
             let mut buf = vec![0u8; 4096];
             let n = stream.read(&mut buf).await?;
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "tokio AsyncReadExt::read contract: n <= buf.len()"
+            )]
             let request = String::from_utf8_lossy(&buf[..n]);
 
             if request.contains(&path) {
@@ -136,7 +137,7 @@ pub mod http01 {
 // ── DNS-01 (RFC 8555 §8.4) ─────────────────────────────────────────────────
 
 pub mod dns01 {
-    use super::*;
+    use super::{AccountKey, Digest, Engine, Sha256, URL_SAFE_NO_PAD, key_authorization};
 
     /// The value for the `_acme-challenge.<domain>` TXT record:
     ///   `base64url(SHA-256(keyAuthorization))`
@@ -182,12 +183,13 @@ pub mod dns_persist01 {
         policy: Option<&str>,
         persist_until: Option<u64>,
     ) -> String {
+        use std::fmt::Write as _;
         let mut value = format!("{issuer_domain_name}; accounturi={account_uri}");
         if let Some(p) = policy {
-            value.push_str(&format!("; policy={p}"));
+            let _ = write!(value, "; policy={p}");
         }
         if let Some(ts) = persist_until {
-            value.push_str(&format!("; persistUntil={ts}"));
+            let _ = write!(value, "; persistUntil={ts}");
         }
         value
     }
@@ -201,7 +203,9 @@ pub mod dns_persist01 {
         persist_until: Option<u64>,
     ) {
         let name = record_name(domain);
-        let issuer = &issuer_domain_names[0];
+        let Some(issuer) = issuer_domain_names.first() else {
+            return;
+        };
         let value = txt_record_value(issuer, account_uri, policy, persist_until);
         println!();
         println!("=== DNS-PERSIST-01 Challenge ===");
@@ -226,7 +230,7 @@ pub mod dns_persist01 {
 // ── TLS-ALPN-01 (RFC 8737) ─────────────────────────────────────────────────
 
 pub mod tlsalpn01 {
-    use super::*;
+    use super::{AccountKey, Digest, Sha256, key_authorization};
 
     /// ALPN protocol identifier.
     #[allow(dead_code)]
@@ -252,8 +256,14 @@ pub mod tlsalpn01 {
 
     /// Print human-readable instructions for manual TLS-ALPN-01 setup.
     pub fn print_instructions(domain: &str, token: &str, account_key: &AccountKey) {
+        use std::fmt::Write as _;
         let value = acme_identifier_value(token, account_key);
-        let hex: String = value.iter().map(|b| format!("{b:02x}")).collect();
+        let hex = value
+            .iter()
+            .fold(String::with_capacity(value.len() * 2), |mut acc, b| {
+                let _ = write!(acc, "{b:02x}");
+                acc
+            });
         println!();
         println!("=== TLS-ALPN-01 Challenge ===");
         println!("Domain: {domain}");

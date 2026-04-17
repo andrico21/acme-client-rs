@@ -15,9 +15,8 @@ use tracing::info;
 use crate::client::{AcmeClient, compute_cert_id};
 use crate::jws::{AccountKey, KeyAlgorithm};
 use crate::types::{
-    AuthorizationStatus, Challenge, ChallengeStatus, Identifier, OrderStatus,
-    CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
-    CHALLENGE_TYPE_TLSALPN01, CHALLENGE_TYPE_DNS_PERSIST01,
+    AuthorizationStatus, CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
+    CHALLENGE_TYPE_TLSALPN01, Challenge, ChallengeStatus, Identifier, OrderStatus,
 };
 
 /// Output format for command results
@@ -55,7 +54,11 @@ impl std::fmt::Display for CertKeyAlgorithm {
 
 /// Simple ACME client for testing ACME flows (RFC 8555)
 #[derive(Parser)]
-#[command(name = "acme-client-rs", version, about, after_long_help = "\
+#[command(
+    name = "acme-client-rs",
+    version,
+    about,
+    after_long_help = "\
 Examples:
   # Generate a key and issue a certificate (standalone HTTP-01)
   acme-client-rs generate-key
@@ -72,18 +75,31 @@ Examples:
   # Use environment variables instead of flags
   export ACME_DIRECTORY_URL=https://acme-server/directory
   export ACME_ACCOUNT_KEY_FILE=/etc/acme/account.key
-  acme-client-rs run --contact you@example.com your.domain.com")]
+  acme-client-rs run --contact you@example.com your.domain.com"
+)]
 struct Cli {
     /// Path to a TOML config file
     #[arg(long, global = true, env = "ACME_CONFIG")]
     config: Option<PathBuf>,
 
     /// ACME server directory URL
-    #[arg(short = 'd', long, global = true, env = "ACME_DIRECTORY_URL", default_value = "https://localhost:14000/dir")]
+    #[arg(
+        short = 'd',
+        long,
+        global = true,
+        env = "ACME_DIRECTORY_URL",
+        default_value = "https://localhost:14000/dir"
+    )]
     directory: String,
 
     /// Path to the account key (PKCS#8 PEM)
-    #[arg(short = 'k', long, global = true, env = "ACME_ACCOUNT_KEY_FILE", default_value = "account.key")]
+    #[arg(
+        short = 'k',
+        long,
+        global = true,
+        env = "ACME_ACCOUNT_KEY_FILE",
+        default_value = "account.key"
+    )]
     account_key: PathBuf,
 
     /// Account URL (required after account creation)
@@ -107,6 +123,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // CLI subcommand variants; bounded by clap's derive
 enum Commands {
     /// Generate a self-documented TOML config file template
     #[command(after_long_help = "\
@@ -557,8 +574,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
@@ -567,7 +583,7 @@ async fn main() {
 
     // Load config (skip for generate-config)
     let (loaded_config, config_mode) = if !matches!(cli.command, Commands::GenerateConfig) {
-        match load_config(&cli) {
+        match load_config(&cli).await {
             Ok(pair) => pair,
             Err(err) => {
                 eprintln!("Error: {err:#}");
@@ -607,15 +623,20 @@ async fn main() {
 /// `config_mode = true` means the user explicitly asked for a config file
 /// (via `--config` CLI flag or `ACME_CONFIG` env var) and env vars should be
 /// ignored for most fields.
-fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
+async fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
     if let Some(ref path) = cli.config {
-        Ok((Some(config::Config::load(path)?), true))
+        Ok((Some(config::Config::load(path).await?), true))
     } else {
         Ok((None, false))
     }
 }
 
-fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Config, config_mode: bool) {
+fn apply_config(
+    cli: &mut Cli,
+    matches: &clap::ArgMatches,
+    config: &config::Config,
+    config_mode: bool,
+) {
     use clap::parser::ValueSource;
 
     let cfg = &config.global;
@@ -627,8 +648,8 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         match source {
             Some(ValueSource::CommandLine) => false, // CLI always wins
             Some(ValueSource::EnvVariable) if config_mode => true, // config overrides env in config mode
-            Some(ValueSource::EnvVariable) => true,  // config also overrides env without config mode
-            Some(ValueSource::DefaultValue) => true,  // config overrides defaults
+            Some(ValueSource::EnvVariable) => true, // config also overrides env without config mode
+            Some(ValueSource::DefaultValue) => true, // config overrides defaults
             _ => true,
         }
     };
@@ -660,7 +681,8 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     if should_apply_config(matches.value_source("directory")) {
         if let Some(ref v) = cfg.directory {
             cli.directory = v.clone();
-        } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable) {
+        } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable)
+        {
             // Reset to default — env var is not allowed in config mode
             cli.directory = "https://localhost:14000/dir".to_string();
         }
@@ -670,7 +692,9 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     if should_apply_config(matches.value_source("account_key")) {
         if let Some(ref v) = cfg.account_key {
             cli.account_key = v.clone();
-        } else if config_mode && matches.value_source("account_key") == Some(ValueSource::EnvVariable) {
+        } else if config_mode
+            && matches.value_source("account_key") == Some(ValueSource::EnvVariable)
+        {
             cli.account_key = PathBuf::from("account.key");
         }
     }
@@ -679,7 +703,9 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     if should_apply_config(matches.value_source("account_url")) {
         if let Some(ref v) = cfg.account_url {
             cli.account_url = Some(v.clone());
-        } else if config_mode && matches.value_source("account_url") == Some(ValueSource::EnvVariable) {
+        } else if config_mode
+            && matches.value_source("account_url") == Some(ValueSource::EnvVariable)
+        {
             cli.account_url = None;
         }
     } else if cli.account_url.is_none() {
@@ -692,16 +718,20 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
             if v == "json" {
                 cli.output_format = OutputFormat::Json;
             }
-        } else if config_mode && matches.value_source("output_format") == Some(ValueSource::EnvVariable) {
+        } else if config_mode
+            && matches.value_source("output_format") == Some(ValueSource::EnvVariable)
+        {
             cli.output_format = OutputFormat::Text;
         }
     }
 
     // Global: insecure — ALLOWED from env even in config mode (secret/safety toggle)
-    if matches!(matches.value_source("insecure"), Some(ValueSource::DefaultValue) | None) {
-        if let Some(v) = cfg.insecure {
-            cli.insecure = v;
-        }
+    if matches!(
+        matches.value_source("insecure"),
+        Some(ValueSource::DefaultValue) | None
+    ) && let Some(v) = cfg.insecure
+    {
+        cli.insecure = v;
     }
     // In config mode, if env has ACME_INSECURE but config also sets it, config wins
     // (already handled above: config is applied for DefaultValue).
@@ -739,32 +769,31 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     {
         let cfg_run = &config.run;
         if let Some((_, sub_matches)) = matches.subcommand() {
-            if should_apply_config(sub_matches.value_source("challenge_type")) {
-                if let Some(ref v) = cfg_run.challenge_type {
-                    *challenge_type = v.clone();
-                }
+            if should_apply_config(sub_matches.value_source("challenge_type"))
+                && let Some(ref v) = cfg_run.challenge_type
+            {
+                *challenge_type = v.clone();
             }
-            if should_apply_config(sub_matches.value_source("http_port")) {
-                if let Some(v) = cfg_run.http_port {
-                    *http_port = v;
-                }
+            if should_apply_config(sub_matches.value_source("http_port"))
+                && let Some(v) = cfg_run.http_port
+            {
+                *http_port = v;
             }
-            if should_apply_config(sub_matches.value_source("cert_output")) {
-                if let Some(ref v) = cfg_run.cert_output {
-                    *cert_output = v.clone();
-                }
+            if should_apply_config(sub_matches.value_source("cert_output"))
+                && let Some(ref v) = cfg_run.cert_output
+            {
+                *cert_output = v.clone();
             }
-            if should_apply_config(sub_matches.value_source("key_output")) {
-                if let Some(ref v) = cfg_run.key_output {
-                    *key_output = v.clone();
-                }
+            if should_apply_config(sub_matches.value_source("key_output"))
+                && let Some(ref v) = cfg_run.key_output
+            {
+                *key_output = v.clone();
             }
-            if should_apply_config(sub_matches.value_source("cert_key_algorithm")) {
-                if let Some(ref v) = cfg_run.cert_key_algorithm {
-                    if let Ok(a) = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true) {
-                        *cert_key_algorithm = a;
-                    }
-                }
+            if should_apply_config(sub_matches.value_source("cert_key_algorithm"))
+                && let Some(ref v) = cfg_run.cert_key_algorithm
+                && let Ok(a) = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true)
+            {
+                *cert_key_algorithm = a;
             }
         }
 
@@ -773,7 +802,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
             if let Some(ref v) = cfg_run.domains {
                 *domains = v.clone();
             }
-        } else if config_mode && cfg_run.domains.as_ref().map_or(true, |d| d.is_empty()) {
+        } else if config_mode && cfg_run.domains.as_ref().is_none_or(Vec::is_empty) {
             // Domains from CLI but not in config — inform the user
             info!(
                 "Using domains from CLI: {:?} (not set in config file)",
@@ -782,32 +811,70 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         }
 
         // Option fields: simple merge (CLI wins if set)
-        if contact.is_none() { contact.clone_from(&cfg_run.contact); }
-        if challenge_dir.is_none() { challenge_dir.clone_from(&cfg_run.challenge_dir); }
-        if dns_hook.is_none() { dns_hook.clone_from(&cfg_run.dns_hook); }
-        if dns_wait.is_none() { *dns_wait = cfg_run.dns_wait; }
-        if *dns_propagation_concurrency == 5 {
-            if let Some(v) = cfg_run.dns_propagation_concurrency { *dns_propagation_concurrency = v; }
+        if contact.is_none() {
+            contact.clone_from(&cfg_run.contact);
         }
-        if *challenge_timeout == 300 {
-            if let Some(v) = cfg_run.challenge_timeout { *challenge_timeout = v; }
+        if challenge_dir.is_none() {
+            challenge_dir.clone_from(&cfg_run.challenge_dir);
         }
-        if days.is_none() { *days = cfg_run.days; }
-        if on_challenge_ready.is_none() { on_challenge_ready.clone_from(&cfg_run.on_challenge_ready); }
-        if on_cert_issued.is_none() { on_cert_issued.clone_from(&cfg_run.on_cert_issued); }
-        if !*pre_authorize { if cfg_run.pre_authorize == Some(true) { *pre_authorize = true; } }
-        if !*ari { if cfg_run.ari == Some(true) { *ari = true; } }
-        if !*reissue_on_mismatch && cfg_run.reissue_on_mismatch == Some(true) { *reissue_on_mismatch = true; }
-        if !*print_cert && cfg_run.print_cert == Some(true) { *print_cert = true; }
-        if persist_policy.is_none() { persist_policy.clone_from(&cfg_run.persist_policy); }
-        if persist_until.is_none() { *persist_until = cfg_run.persist_until; }
-        if profile.is_none() { profile.clone_from(&cfg_run.profile); }
+        if dns_hook.is_none() {
+            dns_hook.clone_from(&cfg_run.dns_hook);
+        }
+        if dns_wait.is_none() {
+            *dns_wait = cfg_run.dns_wait;
+        }
+        if *dns_propagation_concurrency == 5
+            && let Some(v) = cfg_run.dns_propagation_concurrency
+        {
+            *dns_propagation_concurrency = v;
+        }
+        if *challenge_timeout == 300
+            && let Some(v) = cfg_run.challenge_timeout
+        {
+            *challenge_timeout = v;
+        }
+        if days.is_none() {
+            *days = cfg_run.days;
+        }
+        if on_challenge_ready.is_none() {
+            on_challenge_ready.clone_from(&cfg_run.on_challenge_ready);
+        }
+        if on_cert_issued.is_none() {
+            on_cert_issued.clone_from(&cfg_run.on_cert_issued);
+        }
+        if !*pre_authorize && cfg_run.pre_authorize == Some(true) {
+            *pre_authorize = true;
+        }
+        if !*ari && cfg_run.ari == Some(true) {
+            *ari = true;
+        }
+        if !*reissue_on_mismatch && cfg_run.reissue_on_mismatch == Some(true) {
+            *reissue_on_mismatch = true;
+        }
+        if !*print_cert && cfg_run.print_cert == Some(true) {
+            *print_cert = true;
+        }
+        if persist_policy.is_none() {
+            persist_policy.clone_from(&cfg_run.persist_policy);
+        }
+        if persist_until.is_none() {
+            *persist_until = cfg_run.persist_until;
+        }
+        if profile.is_none() {
+            profile.clone_from(&cfg_run.profile);
+        }
 
         // Secrets ALLOWED from env even in config mode:
         //   key_password_file, eab_kid, eab_hmac_key
-        if key_password_file.is_none() { key_password_file.clone_from(&cfg_run.key_password_file); }
-        if eab_kid.is_none() { eab_kid.clone_from(&cfg_run.eab_kid); }
-        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_run.eab_hmac_key); }
+        if key_password_file.is_none() {
+            key_password_file.clone_from(&cfg_run.key_password_file);
+        }
+        if eab_kid.is_none() {
+            eab_kid.clone_from(&cfg_run.eab_kid);
+        }
+        if eab_hmac_key.is_none() {
+            eab_hmac_key.clone_from(&cfg_run.eab_hmac_key);
+        }
     }
 
     // Account subcommand options
@@ -819,35 +886,89 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     } = cli.command
     {
         let cfg_acct = &config.account;
-        if contact.is_empty() {
-            if let Some(ref v) = cfg_acct.contact {
-                *contact = v.clone();
-            }
+        if contact.is_empty()
+            && let Some(ref v) = cfg_acct.contact
+        {
+            *contact = v.clone();
         }
         // Secrets — allowed from env in config mode
-        if eab_kid.is_none() { eab_kid.clone_from(&cfg_acct.eab_kid); }
-        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_acct.eab_hmac_key); }
+        if eab_kid.is_none() {
+            eab_kid.clone_from(&cfg_acct.eab_kid);
+        }
+        if eab_hmac_key.is_none() {
+            eab_hmac_key.clone_from(&cfg_acct.eab_hmac_key);
+        }
     }
 }
 
-async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, config_mode: bool) -> Result<()> {
+async fn run(
+    cli: Cli,
+    loaded_config: Option<&config::Config>,
+    matches: &clap::ArgMatches,
+    config_mode: bool,
+) -> Result<()> {
     let fmt = cli.output_format;
     match &cli.command {
         Commands::GenerateConfig => cmd_generate_config(cli.silent),
-        Commands::ShowConfig { verbose } => cmd_show_config(&cli, loaded_config, matches, *verbose, config_mode),
-        Commands::GenerateKey { algorithm } => cmd_generate_key(&cli.account_key, *algorithm, fmt, cli.silent),
-        Commands::Account { contact, agree_tos, eab_kid, eab_hmac_key } => {
-            cmd_account(&cli, contact.clone(), *agree_tos, eab_kid.as_deref(), eab_hmac_key.as_deref()).await
+        Commands::ShowConfig { verbose } => {
+            cmd_show_config(&cli, loaded_config, matches, *verbose, config_mode)
         }
-        Commands::Order { domains, profile } => cmd_order(&cli, domains.clone(), profile.clone()).await,
+        Commands::GenerateKey { algorithm } => {
+            cmd_generate_key(&cli.account_key, *algorithm, fmt, cli.silent)
+        }
+        Commands::Account {
+            contact,
+            agree_tos,
+            eab_kid,
+            eab_hmac_key,
+        } => {
+            cmd_account(
+                &cli,
+                contact.clone(),
+                *agree_tos,
+                eab_kid.as_deref(),
+                eab_hmac_key.as_deref(),
+            )
+            .await
+        }
+        Commands::Order { domains, profile } => {
+            cmd_order(&cli, domains.clone(), profile.clone()).await
+        }
         Commands::GetAuthz { url } => cmd_get_authz(&cli, url).await,
         Commands::RespondChallenge { url } => cmd_respond_challenge(&cli, url).await,
-        Commands::ServeHttp01 { token, port, challenge_dir } => {
-            cmd_serve_http01(&cli.account_key, token, *port, challenge_dir.as_deref(), fmt, cli.silent).await
+        Commands::ServeHttp01 {
+            token,
+            port,
+            challenge_dir,
+        } => {
+            cmd_serve_http01(
+                &cli.account_key,
+                token,
+                *port,
+                challenge_dir.as_deref(),
+                fmt,
+                cli.silent,
+            )
+            .await
         }
-        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli.account_key, domain, token, fmt, cli.silent),
-        Commands::ShowDnsPersist01 { domain, issuer_domain_name, persist_policy, persist_until } => {
-            cmd_show_dns_persist01(&cli, &domain, issuer_domain_name, persist_policy.as_deref(), *persist_until, fmt).await
+        Commands::ShowDns01 { domain, token } => {
+            cmd_show_dns01(&cli.account_key, domain, token, fmt, cli.silent)
+        }
+        Commands::ShowDnsPersist01 {
+            domain,
+            issuer_domain_name,
+            persist_policy,
+            persist_until,
+        } => {
+            cmd_show_dns_persist01(
+                &cli,
+                domain,
+                issuer_domain_name,
+                persist_policy.as_deref(),
+                *persist_until,
+                fmt,
+            )
+            .await
         }
         Commands::Finalize {
             finalize_url,
@@ -855,21 +976,16 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             domains,
         } => cmd_finalize(&cli, finalize_url, domains, *cert_key_algorithm).await,
         Commands::PollOrder { url } => cmd_poll_order(&cli, url).await,
-        Commands::DownloadCert { url, output } => {
-            cmd_download_cert(&cli, url, output).await
-        }
+        Commands::DownloadCert { url, output } => cmd_download_cert(&cli, url, output).await,
         Commands::DeactivateAccount => cmd_deactivate(&cli).await,
         Commands::KeyRollover { new_key } => cmd_key_rollover(&cli, new_key).await,
-        Commands::RevokeCert { cert_path, reason } => {
-            cmd_revoke(&cli, cert_path, *reason).await
-        }
-        Commands::RenewalInfo { cert_path } => {
-            cmd_renewal_info(&cli, cert_path).await
-        }
+        Commands::RevokeCert { cert_path, reason } => cmd_revoke(&cli, cert_path, *reason).await,
+        Commands::RenewalInfo { cert_path } => cmd_renewal_info(&cli, cert_path).await,
         Commands::ListProfiles => cmd_list_profiles(&cli).await,
-        Commands::PreAuthorize { domain, challenge_type } => {
-            cmd_pre_authorize(&cli, domain, challenge_type).await
-        }
+        Commands::PreAuthorize {
+            domain,
+            challenge_type,
+        } => cmd_pre_authorize(&cli, domain, challenge_type).await,
         Commands::Run {
             domains,
             contact,
@@ -898,7 +1014,10 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             cert_key_algorithm,
             profile,
         } => {
-            anyhow::ensure!(!domains.is_empty(), "at least one domain is required (pass on CLI or set [run].domains in config)");
+            anyhow::ensure!(
+                !domains.is_empty(),
+                "at least one domain is required (pass on CLI or set [run].domains in config)"
+            );
             cmd_run(
                 &cli,
                 domains.clone(),
@@ -971,31 +1090,31 @@ fn cert_san_identifiers(path: &std::path::Path) -> Result<std::collections::BTre
     if let Some(ext) = san_ext
         && let ParsedExtension::SubjectAlternativeName(san) = ext.parsed_extension()
     {
-            for name in &san.general_names {
-                match name {
-                    GeneralName::DNSName(dns) => {
-                        ids.insert(dns.to_lowercase());
-                    }
-                    GeneralName::IPAddress(bytes) => {
-                        // IPv4 = 4 bytes, IPv6 = 16 bytes
-                        let ip: Option<std::net::IpAddr> = match bytes.len() {
-                            4 => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                                bytes[0], bytes[1], bytes[2], bytes[3],
-                            ))),
-                            16 => {
-                                let mut octets = [0u8; 16];
-                                octets.copy_from_slice(bytes);
-                                Some(std::net::IpAddr::V6(std::net::Ipv6Addr::from(octets)))
-                            }
-                            _ => None,
-                        };
-                        if let Some(addr) = ip {
-                            ids.insert(addr.to_string());
-                        }
-                    }
-                    _ => {} // Ignore other GeneralName types
+        for name in &san.general_names {
+            match name {
+                GeneralName::DNSName(dns) => {
+                    ids.insert(dns.to_lowercase());
                 }
+                GeneralName::IPAddress(bytes) => {
+                    // IPv4 = 4 bytes, IPv6 = 16 bytes
+                    let ip: Option<std::net::IpAddr> = match bytes.len() {
+                        4 => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
+                            bytes[0], bytes[1], bytes[2], bytes[3],
+                        ))),
+                        16 => {
+                            let mut octets = [0u8; 16];
+                            octets.copy_from_slice(bytes);
+                            Some(std::net::IpAddr::V6(std::net::Ipv6Addr::from(octets)))
+                        }
+                        _ => None,
+                    };
+                    if let Some(addr) = ip {
+                        ids.insert(addr.to_string());
+                    }
+                }
+                _ => {} // Ignore other GeneralName types
             }
+        }
     }
 
     Ok(ids)
@@ -1046,7 +1165,8 @@ fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, S
         CertKeyAlgorithm::EcP256 => KeyPair::generate(),
         CertKeyAlgorithm::EcP384 => KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384),
         CertKeyAlgorithm::Ed25519 => KeyPair::generate_for(&rcgen::PKCS_ED25519),
-    }.context("failed to generate CSR key pair")?;
+    }
+    .context("failed to generate CSR key pair")?;
     let key_pem = key_pair.serialize_pem();
     let csr = params
         .serialize_request(&key_pair)
@@ -1095,7 +1215,13 @@ fn cmd_generate_config(silent: bool) -> Result<()> {
     Ok(())
 }
 
-fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, verbose: bool, config_mode: bool) -> Result<()> {
+fn cmd_show_config(
+    cli: &Cli,
+    loaded_config: Option<&config::Config>,
+    matches: &clap::ArgMatches,
+    verbose: bool,
+    config_mode: bool,
+) -> Result<()> {
     if cli.silent {
         return Ok(());
     }
@@ -1103,11 +1229,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
 
     let json = cli.output_format == OutputFormat::Json;
 
-    let config_path = if let Some(ref p) = cli.config {
-        Some(p.display().to_string())
-    } else {
-        None
-    };
+    let config_path = cli.config.as_ref().map(|p| p.display().to_string());
     let has_config = loaded_config.is_some();
 
     // In the new model, sources are simpler:
@@ -1127,16 +1249,17 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
     };
 
     // Source for a [run] or [account] config-only field
-    let cfg_source = |has_val: bool| -> &'static str {
-        if has_val { "config" } else { "default" }
-    };
+    let cfg_source = |has_val: bool| -> &'static str { if has_val { "config" } else { "default" } };
 
     let cfg_g = loaded_config.map(|c| &c.global);
     let cfg_run = loaded_config.map(|c| &c.run);
     let cfg_acct = loaded_config.map(|c| &c.account);
 
     let opt_str = |v: &Option<String>| v.as_deref().unwrap_or("(not set)").to_string();
-    let opt_path = |v: &Option<PathBuf>| v.as_ref().map_or("(not set)".to_string(), |p| p.display().to_string());
+    let opt_path = |v: &Option<PathBuf>| {
+        v.as_ref()
+            .map_or("(not set)".to_string(), |p| p.display().to_string())
+    };
     let opt_u64 = |v: Option<u64>| v.map_or("(not set)".to_string(), |v| v.to_string());
     let opt_u32 = |v: Option<u32>| v.map_or("(not set)".to_string(), |v| v.to_string());
     let opt_u16 = |v: Option<u16>| v.map_or("80".to_string(), |v| v.to_string());
@@ -1158,11 +1281,26 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             "insecure": { "value": cli.insecure },
         });
         if verbose {
-            g["directory"]["source"] = serde_json::json!(global_source("directory", cfg_g.and_then(|c| c.directory.as_ref()).is_some()));
-            g["account_key"]["source"] = serde_json::json!(global_source("account_key", cfg_g.and_then(|c| c.account_key.as_ref()).is_some()));
-            g["account_url"]["source"] = serde_json::json!(global_source("account_url", cfg_g.and_then(|c| c.account_url.as_ref()).is_some()));
-            g["output_format"]["source"] = serde_json::json!(global_source("output_format", cfg_g.and_then(|c| c.output_format.as_ref()).is_some()));
-            g["insecure"]["source"] = serde_json::json!(global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some()));
+            g["directory"]["source"] = serde_json::json!(global_source(
+                "directory",
+                cfg_g.and_then(|c| c.directory.as_ref()).is_some()
+            ));
+            g["account_key"]["source"] = serde_json::json!(global_source(
+                "account_key",
+                cfg_g.and_then(|c| c.account_key.as_ref()).is_some()
+            ));
+            g["account_url"]["source"] = serde_json::json!(global_source(
+                "account_url",
+                cfg_g.and_then(|c| c.account_url.as_ref()).is_some()
+            ));
+            g["output_format"]["source"] = serde_json::json!(global_source(
+                "output_format",
+                cfg_g.and_then(|c| c.output_format.as_ref()).is_some()
+            ));
+            g["insecure"]["source"] = serde_json::json!(global_source(
+                "insecure",
+                cfg_g.and_then(|c| c.insecure).is_some()
+            ));
         }
         obj["global"] = g;
 
@@ -1195,15 +1333,33 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "profile": { "value": r.profile },
             });
             if verbose {
-                for key in ["domains", "contact", "challenge_type", "http_port", "challenge_dir",
-                    "dns_hook", "dns_wait", "dns_propagation_concurrency",
-                    "challenge_timeout", "cert_output", "key_output", "days",
-                    "key_password_file", "on_challenge_ready", "on_cert_issued",
-                    "eab_kid", "eab_hmac_key", "pre_authorize", "ari",
-                    "reissue_on_mismatch", "print_cert",
-                    "persist_policy", "persist_until", "cert_key_algorithm",
-                    "profile"]
-                {
+                for key in [
+                    "domains",
+                    "contact",
+                    "challenge_type",
+                    "http_port",
+                    "challenge_dir",
+                    "dns_hook",
+                    "dns_wait",
+                    "dns_propagation_concurrency",
+                    "challenge_timeout",
+                    "cert_output",
+                    "key_output",
+                    "days",
+                    "key_password_file",
+                    "on_challenge_ready",
+                    "on_cert_issued",
+                    "eab_kid",
+                    "eab_hmac_key",
+                    "pre_authorize",
+                    "ari",
+                    "reissue_on_mismatch",
+                    "print_cert",
+                    "persist_policy",
+                    "persist_until",
+                    "cert_key_algorithm",
+                    "profile",
+                ] {
                     let has = !rv[key]["value"].is_null()
                         && rv[key]["value"] != serde_json::json!(false)
                         && rv[key]["value"] != serde_json::json!("http-01")
@@ -1227,7 +1383,8 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             if verbose {
                 av["contact"]["source"] = serde_json::json!(cfg_source(a.contact.is_some()));
                 av["eab_kid"]["source"] = serde_json::json!(cfg_source(a.eab_kid.is_some()));
-                av["eab_hmac_key"]["source"] = serde_json::json!(cfg_source(a.eab_hmac_key.is_some()));
+                av["eab_hmac_key"]["source"] =
+                    serde_json::json!(cfg_source(a.eab_hmac_key.is_some()));
             }
             obj["account"] = av;
         }
@@ -1247,49 +1404,187 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
         }
         println!();
 
-        let src = |s: &str| if verbose { format!("  ({s})") } else { String::new() };
+        let src = |s: &str| {
+            if verbose {
+                format!("  ({s})")
+            } else {
+                String::new()
+            }
+        };
 
-        let dir_src = global_source("directory", cfg_g.and_then(|c| c.directory.as_ref()).is_some());
-        let key_src = global_source("account_key", cfg_g.and_then(|c| c.account_key.as_ref()).is_some());
-        let url_src = global_source("account_url", cfg_g.and_then(|c| c.account_url.as_ref()).is_some());
-        let fmt_src = global_source("output_format", cfg_g.and_then(|c| c.output_format.as_ref()).is_some());
+        let dir_src = global_source(
+            "directory",
+            cfg_g.and_then(|c| c.directory.as_ref()).is_some(),
+        );
+        let key_src = global_source(
+            "account_key",
+            cfg_g.and_then(|c| c.account_key.as_ref()).is_some(),
+        );
+        let url_src = global_source(
+            "account_url",
+            cfg_g.and_then(|c| c.account_url.as_ref()).is_some(),
+        );
+        let fmt_src = global_source(
+            "output_format",
+            cfg_g.and_then(|c| c.output_format.as_ref()).is_some(),
+        );
         let ins_src = global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some());
 
         println!("[global]");
         println!("  directory     = {}{}", cli.directory, src(dir_src));
-        println!("  account_key   = {}{}", cli.account_key.display(), src(key_src));
-        println!("  account_url   = {}{}", opt_str(&cli.account_url), src(url_src));
-        println!("  output_format = {}{}", if cli.output_format == OutputFormat::Json { "json" } else { "text" }, src(fmt_src));
+        println!(
+            "  account_key   = {}{}",
+            cli.account_key.display(),
+            src(key_src)
+        );
+        println!(
+            "  account_url   = {}{}",
+            opt_str(&cli.account_url),
+            src(url_src)
+        );
+        println!(
+            "  output_format = {}{}",
+            if cli.output_format == OutputFormat::Json {
+                "json"
+            } else {
+                "text"
+            },
+            src(fmt_src)
+        );
         println!("  insecure      = {}{}", cli.insecure, src(ins_src));
 
         if let Some(r) = cfg_run {
             println!();
             println!("[run]");
-            println!("  domains            = {:?}{}", r.domains.as_deref().unwrap_or(&[]), src(cfg_source(r.domains.is_some())));
-            println!("  contact            = {}{}", opt_str(&r.contact), src(cfg_source(r.contact.is_some())));
-            println!("  challenge_type     = {}{}", r.challenge_type.as_deref().unwrap_or("http-01"), src(cfg_source(r.challenge_type.is_some())));
-            println!("  http_port          = {}{}", opt_u16(r.http_port), src(cfg_source(r.http_port.is_some())));
-            println!("  challenge_dir      = {}{}", opt_path(&r.challenge_dir), src(cfg_source(r.challenge_dir.is_some())));
-            println!("  dns_hook           = {}{}", opt_path(&r.dns_hook), src(cfg_source(r.dns_hook.is_some())));
-            println!("  dns_wait           = {}{}", opt_u64(r.dns_wait), src(cfg_source(r.dns_wait.is_some())));
-            println!("  dns_propagation_concurrency = {}{}", r.dns_propagation_concurrency.unwrap_or(5), src(cfg_source(r.dns_propagation_concurrency.is_some())));
-            println!("  challenge_timeout  = {}{}", r.challenge_timeout.unwrap_or(300), src(cfg_source(r.challenge_timeout.is_some())));
-            println!("  cert_output        = {}{}", r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()), src(cfg_source(r.cert_output.is_some())));
-            println!("  key_output         = {}{}", r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()), src(cfg_source(r.key_output.is_some())));
-            println!("  days               = {}{}", opt_u32(r.days), src(cfg_source(r.days.is_some())));
-            println!("  key_password_file  = {}{}", opt_path(&r.key_password_file), src(cfg_source(r.key_password_file.is_some())));
-            println!("  on_challenge_ready = {}{}", opt_path(&r.on_challenge_ready), src(cfg_source(r.on_challenge_ready.is_some())));
-            println!("  on_cert_issued     = {}{}", opt_path(&r.on_cert_issued), src(cfg_source(r.on_cert_issued.is_some())));
-            println!("  eab_kid            = {}{}", opt_str(&r.eab_kid), src(cfg_source(r.eab_kid.is_some())));
-            println!("  eab_hmac_key       = {}{}", opt_str(&r.eab_hmac_key), src(cfg_source(r.eab_hmac_key.is_some())));
-            println!("  pre_authorize      = {}{}", opt_bool(r.pre_authorize), src(cfg_source(r.pre_authorize.is_some())));
-            println!("  ari                = {}{}", opt_bool(r.ari), src(cfg_source(r.ari.is_some())));
-            println!("  reissue_on_mismatch = {}{}", opt_bool(r.reissue_on_mismatch), src(cfg_source(r.reissue_on_mismatch.is_some())));
-            println!("  print_cert         = {}{}", opt_bool(r.print_cert), src(cfg_source(r.print_cert.is_some())));
-            println!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
-            println!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
-            println!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
-            println!("  profile            = {}{}", opt_str(&r.profile), src(cfg_source(r.profile.is_some())));
+            println!(
+                "  domains            = {:?}{}",
+                r.domains.as_deref().unwrap_or(&[]),
+                src(cfg_source(r.domains.is_some()))
+            );
+            println!(
+                "  contact            = {}{}",
+                opt_str(&r.contact),
+                src(cfg_source(r.contact.is_some()))
+            );
+            println!(
+                "  challenge_type     = {}{}",
+                r.challenge_type.as_deref().unwrap_or("http-01"),
+                src(cfg_source(r.challenge_type.is_some()))
+            );
+            println!(
+                "  http_port          = {}{}",
+                opt_u16(r.http_port),
+                src(cfg_source(r.http_port.is_some()))
+            );
+            println!(
+                "  challenge_dir      = {}{}",
+                opt_path(&r.challenge_dir),
+                src(cfg_source(r.challenge_dir.is_some()))
+            );
+            println!(
+                "  dns_hook           = {}{}",
+                opt_path(&r.dns_hook),
+                src(cfg_source(r.dns_hook.is_some()))
+            );
+            println!(
+                "  dns_wait           = {}{}",
+                opt_u64(r.dns_wait),
+                src(cfg_source(r.dns_wait.is_some()))
+            );
+            println!(
+                "  dns_propagation_concurrency = {}{}",
+                r.dns_propagation_concurrency.unwrap_or(5),
+                src(cfg_source(r.dns_propagation_concurrency.is_some()))
+            );
+            println!(
+                "  challenge_timeout  = {}{}",
+                r.challenge_timeout.unwrap_or(300),
+                src(cfg_source(r.challenge_timeout.is_some()))
+            );
+            println!(
+                "  cert_output        = {}{}",
+                r.cert_output
+                    .as_ref()
+                    .map_or("certificate.pem".to_string(), |p| p.display().to_string()),
+                src(cfg_source(r.cert_output.is_some()))
+            );
+            println!(
+                "  key_output         = {}{}",
+                r.key_output
+                    .as_ref()
+                    .map_or("private.key".to_string(), |p| p.display().to_string()),
+                src(cfg_source(r.key_output.is_some()))
+            );
+            println!(
+                "  days               = {}{}",
+                opt_u32(r.days),
+                src(cfg_source(r.days.is_some()))
+            );
+            println!(
+                "  key_password_file  = {}{}",
+                opt_path(&r.key_password_file),
+                src(cfg_source(r.key_password_file.is_some()))
+            );
+            println!(
+                "  on_challenge_ready = {}{}",
+                opt_path(&r.on_challenge_ready),
+                src(cfg_source(r.on_challenge_ready.is_some()))
+            );
+            println!(
+                "  on_cert_issued     = {}{}",
+                opt_path(&r.on_cert_issued),
+                src(cfg_source(r.on_cert_issued.is_some()))
+            );
+            println!(
+                "  eab_kid            = {}{}",
+                opt_str(&r.eab_kid),
+                src(cfg_source(r.eab_kid.is_some()))
+            );
+            println!(
+                "  eab_hmac_key       = {}{}",
+                opt_str(&r.eab_hmac_key),
+                src(cfg_source(r.eab_hmac_key.is_some()))
+            );
+            println!(
+                "  pre_authorize      = {}{}",
+                opt_bool(r.pre_authorize),
+                src(cfg_source(r.pre_authorize.is_some()))
+            );
+            println!(
+                "  ari                = {}{}",
+                opt_bool(r.ari),
+                src(cfg_source(r.ari.is_some()))
+            );
+            println!(
+                "  reissue_on_mismatch = {}{}",
+                opt_bool(r.reissue_on_mismatch),
+                src(cfg_source(r.reissue_on_mismatch.is_some()))
+            );
+            println!(
+                "  print_cert         = {}{}",
+                opt_bool(r.print_cert),
+                src(cfg_source(r.print_cert.is_some()))
+            );
+            println!(
+                "  persist_policy     = {}{}",
+                opt_str(&r.persist_policy),
+                src(cfg_source(r.persist_policy.is_some()))
+            );
+            println!(
+                "  persist_until      = {}{}",
+                opt_u64(r.persist_until),
+                src(cfg_source(r.persist_until.is_some()))
+            );
+            println!(
+                "  cert_key_algorithm = {}{}",
+                r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"),
+                src(cfg_source(r.cert_key_algorithm.is_some()))
+            );
+            println!(
+                "  profile            = {}{}",
+                opt_str(&r.profile),
+                src(cfg_source(r.profile.is_some()))
+            );
         } else if !has_config {
             println!();
             println!("[run]");
@@ -1299,26 +1594,46 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
         if let Some(a) = cfg_acct {
             println!();
             println!("[account]");
-            println!("  contact      = {:?}{}", a.contact.as_deref().unwrap_or(&[]), src(cfg_source(a.contact.is_some())));
-            println!("  eab_kid      = {}{}", opt_str(&a.eab_kid), src(cfg_source(a.eab_kid.is_some())));
-            println!("  eab_hmac_key = {}{}", opt_str(&a.eab_hmac_key), src(cfg_source(a.eab_hmac_key.is_some())));
+            println!(
+                "  contact      = {:?}{}",
+                a.contact.as_deref().unwrap_or(&[]),
+                src(cfg_source(a.contact.is_some()))
+            );
+            println!(
+                "  eab_kid      = {}{}",
+                opt_str(&a.eab_kid),
+                src(cfg_source(a.eab_kid.is_some()))
+            );
+            println!(
+                "  eab_hmac_key = {}{}",
+                opt_str(&a.eab_hmac_key),
+                src(cfg_source(a.eab_hmac_key.is_some()))
+            );
         }
     }
     Ok(())
 }
 
-fn cmd_generate_key(path: &PathBuf, algorithm: KeyAlgorithm, fmt: OutputFormat, silent: bool) -> Result<()> {
+fn cmd_generate_key(
+    path: &PathBuf,
+    algorithm: KeyAlgorithm,
+    fmt: OutputFormat,
+    silent: bool,
+) -> Result<()> {
     let key = AccountKey::generate(algorithm)?;
     let pem = key.to_pkcs8_pem()?;
     std::fs::write(path, pem.as_bytes())
         .with_context(|| format!("failed to write key to {}", path.display()))?;
     if !silent {
         if fmt == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "generate-key",
-                "algorithm": format!("{algorithm}"),
-                "path": path.display().to_string(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "generate-key",
+                    "algorithm": format!("{algorithm}"),
+                    "path": path.display().to_string(),
+                })
+            );
         } else {
             println!("{algorithm} account key saved to {}", path.display());
         }
@@ -1340,15 +1655,20 @@ async fn cmd_account(
         Some(contact.into_iter().map(|c| format!("mailto:{c}")).collect())
     };
     let eab = parse_eab(eab_kid, eab_hmac_key)?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key.as_slice()));
+    let eab_ref = eab
+        .as_ref()
+        .map(|(kid, key)| (kid.as_str(), key.as_slice()));
     let account = client.create_account(contact, agree_tos, eab_ref).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "account",
-                "status": format!("{}", account.status),
-                "url": client.account_url(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "account",
+                    "status": format!("{}", account.status),
+                    "url": client.account_url(),
+                })
+            );
         } else {
             println!("Account status: {}", account.status);
             if let Some(url) = client.account_url() {
@@ -1362,28 +1682,30 @@ async fn cmd_account(
 async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> Result<()> {
     let mut client = build_client(cli).await?;
     // Validate profile against advertised list (draft-ietf-acme-profiles-01 §4)
-    if let Some(ref p) = profile {
-        if let Some(available) = client.available_profiles() {
-            if !available.contains_key(p) {
-                tracing::warn!(
-                    "Profile \"{p}\" is not advertised by the server (available: {})",
-                    available.keys().cloned().collect::<Vec<_>>().join(", ")
-                );
-            }
-        }
+    if let Some(ref p) = profile
+        && let Some(available) = client.available_profiles()
+        && !available.contains_key(p)
+    {
+        tracing::warn!(
+            "Profile \"{p}\" is not advertised by the server (available: {})",
+            available.keys().cloned().collect::<Vec<_>>().join(", ")
+        );
     }
-    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+    let ids: Vec<Identifier> = domains.iter().map(Identifier::from_str_auto).collect();
     let (order, order_url) = client.new_order(ids, profile).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "order",
-                "order_url": order_url,
-                "status": format!("{}", order.status),
-                "finalize_url": order.finalize,
-                "authorizations": order.authorizations,
-                "profile": order.profile,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "order",
+                    "order_url": order_url,
+                    "status": format!("{}", order.status),
+                    "finalize_url": order.finalize,
+                    "authorizations": order.authorizations,
+                    "profile": order.profile,
+                })
+            );
         } else {
             println!("Order URL:    {order_url}");
             println!("Status:       {}", order.status);
@@ -1420,10 +1742,13 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     match profiles {
         Some(profiles) if !cli.silent => {
             if cli.output_format == OutputFormat::Json {
-                println!("{}", serde_json::json!({
-                    "command": "list-profiles",
-                    "profiles": profiles,
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "command": "list-profiles",
+                        "profiles": profiles,
+                    })
+                );
             } else {
                 println!("Available certificate profiles:");
                 for (name, description) in profiles {
@@ -1433,10 +1758,13 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
         }
         None if !cli.silent => {
             if cli.output_format == OutputFormat::Json {
-                println!("{}", serde_json::json!({
-                    "command": "list-profiles",
-                    "profiles": null,
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "command": "list-profiles",
+                        "profiles": null,
+                    })
+                );
             } else {
                 println!("Server does not advertise any profiles.");
             }
@@ -1451,18 +1779,21 @@ async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
     let authz = client.get_authorization(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "get-authz",
-                "identifier": authz.identifier.value,
-                "identifier_type": authz.identifier.identifier_type,
-                "status": format!("{}", authz.status),
-                "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
-                    "type": ch.challenge_type,
-                    "status": format!("{}", ch.status),
-                    "url": ch.url,
-                    "token": ch.token,
-                })).collect::<Vec<_>>(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "get-authz",
+                    "identifier": authz.identifier.value,
+                    "identifier_type": authz.identifier.identifier_type,
+                    "status": format!("{}", authz.status),
+                    "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
+                        "type": ch.challenge_type,
+                        "status": format!("{}", ch.status),
+                        "url": ch.url,
+                        "token": ch.token,
+                    })).collect::<Vec<_>>(),
+                })
+            );
         } else {
             println!(
                 "Identifier: {} ({})",
@@ -1470,10 +1801,7 @@ async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
             );
             println!("Status:     {}", authz.status);
             for ch in &authz.challenges {
-                println!(
-                    "  {} [{}] url={}",
-                    ch.challenge_type, ch.status, ch.url
-                );
+                println!("  {} [{}] url={}", ch.challenge_type, ch.status, ch.url);
                 if let Some(ref t) = ch.token {
                     println!("    token: {t}");
                 }
@@ -1488,10 +1816,13 @@ async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
     let ch = client.respond_to_challenge(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "respond-challenge",
-                "status": format!("{}", ch.status),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "respond-challenge",
+                    "status": format!("{}", ch.status),
+                })
+            );
         } else {
             println!("Challenge status: {}", ch.status);
         }
@@ -1509,40 +1840,52 @@ async fn cmd_serve_http01(
 ) -> Result<()> {
     let key = load_account_key(key_path)?;
     if let Some(dir) = challenge_dir {
-        let file = challenge::http01::write_challenge_file(dir, token, &key)?;
+        let file = challenge::http01::write_challenge_file(dir, token, &key).await?;
         if !silent {
             if fmt == OutputFormat::Json {
-                println!("{}", serde_json::json!({
-                    "command": "serve-http01",
-                    "mode": "challenge-dir",
-                    "path": file.display().to_string(),
-                }));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "command": "serve-http01",
+                        "mode": "challenge-dir",
+                        "path": file.display().to_string(),
+                    })
+                );
             } else {
                 println!("Challenge file written to {}", file.display());
             }
             println!("Press Enter after validation to clean up...");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
-        challenge::http01::cleanup_challenge_file(&file);
+        challenge::http01::cleanup_challenge_file(&file).await;
         Ok(())
     } else {
         challenge::http01::serve(token, &key, port).await
     }
 }
 
-fn cmd_show_dns01(key_path: &PathBuf, domain: &str, token: &str, fmt: OutputFormat, silent: bool) -> Result<()> {
+fn cmd_show_dns01(
+    key_path: &PathBuf,
+    domain: &str,
+    token: &str,
+    fmt: OutputFormat,
+    silent: bool,
+) -> Result<()> {
     let key = load_account_key(key_path)?;
     if !silent {
         if fmt == OutputFormat::Json {
             let name = challenge::dns01::record_name(domain);
             let value = challenge::dns01::txt_record_value(token, &key);
-            println!("{}", serde_json::json!({
-                "command": "show-dns01",
-                "domain": domain,
-                "record_name": name,
-                "record_type": "TXT",
-                "record_value": value,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "show-dns01",
+                    "domain": domain,
+                    "record_name": name,
+                    "record_type": "TXT",
+                    "record_value": value,
+                })
+            );
         } else {
             challenge::dns01::print_instructions(domain, token, &key);
         }
@@ -1564,49 +1907,68 @@ async fn cmd_show_dns_persist01(
     if client.account_url().is_none() {
         client.create_account(None, true, None).await?;
     }
-    let account_uri = client.account_url()
+    let account_uri = client
+        .account_url()
         .context("account URL not known")?
         .to_string();
 
     let name = challenge::dns_persist01::record_name(domain);
     let value = challenge::dns_persist01::txt_record_value(
-        issuer_domain_name, &account_uri, persist_policy, persist_until,
+        issuer_domain_name,
+        &account_uri,
+        persist_policy,
+        persist_until,
     );
 
     if !cli.silent {
         if fmt == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "show-dns-persist01",
-                "domain": domain,
-                "record_name": name,
-                "record_type": "TXT",
-                "record_value": value,
-                "issuer_domain_name": issuer_domain_name,
-                "account_uri": account_uri,
-                "persist_policy": persist_policy,
-                "persist_until": persist_until,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "show-dns-persist01",
+                    "domain": domain,
+                    "record_name": name,
+                    "record_type": "TXT",
+                    "record_value": value,
+                    "issuer_domain_name": issuer_domain_name,
+                    "account_uri": account_uri,
+                    "persist_policy": persist_policy,
+                    "persist_until": persist_until,
+                })
+            );
         } else {
             let issuer_names = vec![issuer_domain_name.to_string()];
             challenge::dns_persist01::print_instructions(
-                domain, &issuer_names, &account_uri, persist_policy, persist_until,
+                domain,
+                &issuer_names,
+                &account_uri,
+                persist_policy,
+                persist_until,
             );
         }
     }
     Ok(())
 }
 
-async fn cmd_finalize(cli: &Cli, finalize_url: &str, domains: &[String], cert_key_alg: CertKeyAlgorithm) -> Result<()> {
+async fn cmd_finalize(
+    cli: &Cli,
+    finalize_url: &str,
+    domains: &[String],
+    cert_key_alg: CertKeyAlgorithm,
+) -> Result<()> {
     let mut client = build_client(cli).await?;
     let (csr_der, _key_pem) = generate_csr(domains, cert_key_alg)?;
     let order = client.finalize_order(finalize_url, &csr_der).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "finalize",
-                "status": format!("{}", order.status),
-                "certificate_url": order.certificate,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "finalize",
+                    "status": format!("{}", order.status),
+                    "certificate_url": order.certificate,
+                })
+            );
         } else {
             println!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
@@ -1622,11 +1984,14 @@ async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
     let order = client.poll_order(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "poll-order",
-                "status": format!("{}", order.status),
-                "certificate_url": order.certificate,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "poll-order",
+                    "status": format!("{}", order.status),
+                    "certificate_url": order.certificate,
+                })
+            );
         } else {
             println!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
@@ -1644,10 +2009,13 @@ async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) -> Result<()>
         .with_context(|| format!("failed to write certificate to {}", output.display()))?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "download-cert",
-                "path": output.display().to_string(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "download-cert",
+                    "path": output.display().to_string(),
+                })
+            );
         } else {
             println!("Certificate saved to {}", output.display());
         }
@@ -1660,10 +2028,13 @@ async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     let account = client.deactivate_account().await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "deactivate-account",
-                "status": format!("{}", account.status),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "deactivate-account",
+                    "status": format!("{}", account.status),
+                })
+            );
         } else {
             println!("Account status: {}", account.status);
         }
@@ -1683,10 +2054,13 @@ async fn cmd_key_rollover(cli: &Cli, new_key_path: &PathBuf) -> Result<()> {
     client.key_change(&new_key).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "key-rollover",
-                "new_key": new_key_path.display().to_string(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "key-rollover",
+                    "new_key": new_key_path.display().to_string(),
+                })
+            );
         } else {
             println!("Account key rolled over successfully");
             println!("From now on, use the new key: {}", new_key_path.display());
@@ -1710,11 +2084,14 @@ async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8>) -> Resul
     client.revoke_certificate(&cert_der, reason).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "revoke-cert",
-                "path": cert_path.display().to_string(),
-                "reason": reason,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "revoke-cert",
+                    "path": cert_path.display().to_string(),
+                    "reason": reason,
+                })
+            );
         } else {
             println!("Certificate revoked");
         }
@@ -1738,15 +2115,18 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
 
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "renewal-info",
-                "cert_id": cert_id,
-                "suggested_window": {
-                    "start": info.suggested_window.start,
-                    "end": info.suggested_window.end,
-                },
-                "retry_after": retry_after,
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "renewal-info",
+                    "cert_id": cert_id,
+                    "suggested_window": {
+                        "start": info.suggested_window.start,
+                        "end": info.suggested_window.end,
+                    },
+                    "retry_after": retry_after,
+                })
+            );
         } else {
             println!("CertID:   {cert_id}");
             println!("Suggested renewal window:");
@@ -1769,7 +2149,10 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
                         println!("Status:   renewal recommended (within window)");
                     } else {
                         let until = start - now;
-                        println!("Status:   not yet due ({} days until window opens)", until.whole_days());
+                        println!(
+                            "Status:   not yet due ({} days until window opens)",
+                            until.whole_days()
+                        );
                     }
                 }
             }
@@ -1794,22 +2177,28 @@ async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Res
 
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
-                "command": "pre-authorize",
-                "identifier": authz.identifier.value,
-                "identifier_type": authz.identifier.identifier_type,
-                "status": format!("{}", authz.status),
-                "authz_url": authz_url,
-                "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
-                    "type": ch.challenge_type,
-                    "status": format!("{}", ch.status),
-                    "url": ch.url,
-                    "token": ch.token,
-                })).collect::<Vec<_>>(),
-            }));
+            println!(
+                "{}",
+                serde_json::json!({
+                    "command": "pre-authorize",
+                    "identifier": authz.identifier.value,
+                    "identifier_type": authz.identifier.identifier_type,
+                    "status": format!("{}", authz.status),
+                    "authz_url": authz_url,
+                    "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
+                        "type": ch.challenge_type,
+                        "status": format!("{}", ch.status),
+                        "url": ch.url,
+                        "token": ch.token,
+                    })).collect::<Vec<_>>(),
+                })
+            );
         } else {
             println!("Authorization URL: {authz_url}");
-            println!("Identifier:  {} ({})", authz.identifier.value, authz.identifier.identifier_type);
+            println!(
+                "Identifier:  {} ({})",
+                authz.identifier.value, authz.identifier.identifier_type
+            );
             println!("Status:      {}", authz.status);
             for ch in &authz.challenges {
                 if ch.challenge_type == challenge_type {
@@ -1861,12 +2250,9 @@ async fn dns_txt_check(name: &str, expected: &str) -> Result<bool> {
 // ── EAB helper ──────────────────────────────────────────────────────────────
 
 /// Decode the base64url EAB HMAC key and return `(kid, decoded_key)`.
-fn parse_eab(
-    kid: Option<&str>,
-    hmac_key_b64: Option<&str>,
-) -> Result<Option<(String, Vec<u8>)>> {
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+fn parse_eab(kid: Option<&str>, hmac_key_b64: Option<&str>) -> Result<Option<(String, Vec<u8>)>> {
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
     match (kid, hmac_key_b64) {
         (Some(kid), Some(key_b64)) => {
@@ -1882,10 +2268,7 @@ fn parse_eab(
 
 // ── Hook helper ─────────────────────────────────────────────────────────────
 
-fn run_hook(
-    script: &std::path::Path,
-    env_vars: &[(&str, &str)],
-) -> Result<()> {
+fn run_hook(script: &std::path::Path, env_vars: &[(&str, &str)]) -> Result<()> {
     let mut cmd = std::process::Command::new(script);
     for &(key, val) in env_vars {
         cmd.env(key, val);
@@ -1901,6 +2284,269 @@ fn run_hook(
 
 // ── Full automated flow ─────────────────────────────────────────────────────
 
+/// Outcome of the pre-issuance renewal / domain-mismatch check.
+///
+/// Carries forward state that `cmd_run` needs when proceeding with issuance:
+/// - `ari_cert_id`: present if ARI indicated the current cert should be replaced
+///   (used for the `replaces` field on newOrder).
+/// - `early_client`: the `AcmeClient` built during the ARI check, reused to
+///   avoid a second directory+account fetch.
+struct RenewalDecision {
+    ari_cert_id: Option<String>,
+    early_client: Option<AcmeClient>,
+}
+
+/// Performs the §0 pre-issuance checks: domain mismatch, ARI (RFC 9702), and
+/// days-based threshold. Returns `Ok(None)` to signal `cmd_run` should exit
+/// without issuing (renewal skipped); returns `Ok(Some(_))` to proceed.
+async fn check_renewal_status(
+    cli: &Cli,
+    cert_output: &std::path::Path,
+    domains: &[String],
+    ari: bool,
+    days: Option<u32>,
+    reissue_on_mismatch: bool,
+) -> Result<Option<RenewalDecision>> {
+    let json = cli.output_format == OutputFormat::Json;
+    let silent = cli.silent;
+
+    let mut ari_cert_id: Option<String> = None;
+    let mut early_client: Option<AcmeClient> = None;
+
+    if !cert_output.exists() {
+        return Ok(Some(RenewalDecision {
+            ari_cert_id,
+            early_client,
+        }));
+    }
+
+    // ── 0pre. Domain mismatch check ────────────────────────────────
+    let mut skip_renewal_checks = false;
+
+    let requested: std::collections::BTreeSet<String> =
+        domains.iter().map(|d| normalize_identifier(d)).collect();
+
+    match cert_san_identifiers(cert_output) {
+        Ok(cert_sans) => {
+            if requested != cert_sans {
+                let added: Vec<&str> = requested
+                    .difference(&cert_sans)
+                    .map(|s| s.as_str())
+                    .collect();
+                let removed: Vec<&str> = cert_sans
+                    .difference(&requested)
+                    .map(|s| s.as_str())
+                    .collect();
+
+                if reissue_on_mismatch {
+                    if !silent {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "command": "run",
+                                    "action": "reissue",
+                                    "reason": "domain_mismatch",
+                                    "cert_domains": cert_sans,
+                                    "requested_domains": requested,
+                                    "added": added,
+                                    "removed": removed,
+                                })
+                            );
+                        } else {
+                            println!(
+                                "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
+                                added.join(", "),
+                                removed.join(", "),
+                            );
+                        }
+                    }
+                    // Skip ARI/days checks — proceed directly to issuance
+                    // (ari_cert_id stays None: this is reissuance, not renewal)
+                    skip_renewal_checks = true;
+                } else {
+                    if !silent {
+                        if json {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "command": "run",
+                                    "action": "skip",
+                                    "reason": "domain_mismatch",
+                                    "hint": "use --reissue-on-mismatch to override",
+                                    "cert_domains": cert_sans,
+                                    "requested_domains": requested,
+                                    "added": added,
+                                    "removed": removed,
+                                })
+                            );
+                        } else {
+                            println!(
+                                "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
+                                 Use --reissue-on-mismatch to override.",
+                                cert_sans
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                requested
+                                    .iter()
+                                    .map(|s| s.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                                added.join(", "),
+                                removed.join(", "),
+                            );
+                        }
+                    }
+                    return Ok(None);
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Could not read SANs from {}: {e} — skipping domain mismatch check",
+                cert_output.display()
+            );
+        }
+    }
+
+    if !skip_renewal_checks {
+        // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
+        if ari {
+            match std::fs::read_to_string(cert_output) {
+                Ok(pem_data) => {
+                    match pem_to_der(&pem_data) {
+                        Ok(cert_der) => {
+                            // Build client early so we reuse directory + account for step 1
+                            let mut ari_client = build_client(cli).await?;
+                            // ARI uses POST-as-GET, needs KID
+                            ari_client.create_account(None, true, None).await?;
+
+                            if ari_client.supports_ari() {
+                                match ari_client.get_renewal_info(&cert_der).await {
+                                    Ok((info, _retry_after)) => {
+                                        let now = time::OffsetDateTime::now_utc();
+                                        if let Ok(start) = time::OffsetDateTime::parse(
+                                            &info.suggested_window.start,
+                                            &time::format_description::well_known::Rfc3339,
+                                        ) {
+                                            if now < start {
+                                                if !silent {
+                                                    if json {
+                                                        println!(
+                                                            "{}",
+                                                            serde_json::json!({
+                                                                "command": "run",
+                                                                "action": "skip",
+                                                                "reason": "ari",
+                                                                "window_start": info.suggested_window.start,
+                                                                "window_end": info.suggested_window.end,
+                                                                "cert_path": cert_output.display().to_string(),
+                                                            })
+                                                        );
+                                                    } else {
+                                                        println!(
+                                                            "ARI: renewal window starts {} - skipping renewal",
+                                                            info.suggested_window.start
+                                                        );
+                                                    }
+                                                }
+                                                return Ok(None);
+                                            }
+                                            if !json && !silent {
+                                                println!(
+                                                    "ARI: renewal window is open ({} - {}), renewing...",
+                                                    info.suggested_window.start,
+                                                    info.suggested_window.end
+                                                );
+                                            }
+                                        }
+                                        // Set cert_id for replaceOrder
+                                        if let Ok(cid) = compute_cert_id(&cert_der) {
+                                            ari_cert_id = Some(cid);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "ARI check failed: {e} - falling back to --days check"
+                                        );
+                                    }
+                                }
+                            } else {
+                                tracing::warn!(
+                                    "Server does not support ARI - falling back to --days check"
+                                );
+                            }
+                            early_client = Some(ari_client);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Could not parse certificate {}: {e}",
+                                cert_output.display()
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Could not read certificate {}: {e}", cert_output.display());
+                }
+            }
+        }
+
+        // ── 0b. Days-based renewal check (fallback / standalone) ────────
+        if ari_cert_id.is_none()
+            && let Some(threshold) = days
+        {
+            match cert_days_remaining(cert_output) {
+                Ok(remaining) if remaining > threshold as i64 => {
+                    if json {
+                        if !silent {
+                            println!(
+                                "{}",
+                                serde_json::json!({
+                                    "command": "run",
+                                    "action": "skip",
+                                    "reason": "days",
+                                    "days_remaining": remaining,
+                                    "threshold": threshold,
+                                    "cert_path": cert_output.display().to_string(),
+                                })
+                            );
+                        }
+                    } else if !silent {
+                        println!(
+                            "Certificate {} has {remaining} days remaining (threshold: {threshold}), skipping renewal",
+                            cert_output.display()
+                        );
+                    }
+                    return Ok(None);
+                }
+                Ok(remaining) => {
+                    if !json && !silent {
+                        println!(
+                            "Certificate {} expires in {remaining} days (threshold: {threshold}), renewing...",
+                            cert_output.display()
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Could not read certificate {}: {e} - proceeding with renewal",
+                        cert_output.display()
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(Some(RenewalDecision {
+        ari_cert_id,
+        early_client,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)] // TODO: Phase 2 — refactor to RunOpts struct
 async fn cmd_run(
     cli: &Cli,
     domains: Vec<String>,
@@ -1934,204 +2580,13 @@ async fn cmd_run(
     let json = cli.output_format == OutputFormat::Json;
     let silent = cli.silent;
 
-    // Track cert ID for ARI replaceOrder (set during ARI check)
-    let mut ari_cert_id: Option<String> = None;
-
-    // Reuse client built during ARI check to avoid double directory+account fetch
-    let mut early_client: Option<AcmeClient> = None;
-
-    if cert_output.exists() {
-        // ── 0pre. Domain mismatch check ────────────────────────────────
-        let mut skip_renewal_checks = false;
-
-        let requested: std::collections::BTreeSet<String> = domains
-            .iter()
-            .map(|d| normalize_identifier(d))
-            .collect();
-
-        match cert_san_identifiers(cert_output) {
-            Ok(cert_sans) => {
-                if requested != cert_sans {
-                    let added: Vec<&str> = requested
-                        .difference(&cert_sans)
-                        .map(|s| s.as_str())
-                        .collect();
-                    let removed: Vec<&str> = cert_sans
-                        .difference(&requested)
-                        .map(|s| s.as_str())
-                        .collect();
-
-                    if reissue_on_mismatch {
-                        if !silent {
-                            if json {
-                                println!("{}", serde_json::json!({
-                                    "command": "run",
-                                    "action": "reissue",
-                                    "reason": "domain_mismatch",
-                                    "cert_domains": cert_sans,
-                                    "requested_domains": requested,
-                                    "added": added,
-                                    "removed": removed,
-                                }));
-                            } else {
-                                println!(
-                                    "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
-                                    added.join(", "),
-                                    removed.join(", "),
-                                );
-                            }
-                        }
-                        // Skip ARI/days checks — proceed directly to issuance
-                        // (ari_cert_id stays None: this is reissuance, not renewal)
-                        skip_renewal_checks = true;
-                    } else {
-                        if !silent {
-                            if json {
-                                println!("{}", serde_json::json!({
-                                    "command": "run",
-                                    "action": "skip",
-                                    "reason": "domain_mismatch",
-                                    "hint": "use --reissue-on-mismatch to override",
-                                    "cert_domains": cert_sans,
-                                    "requested_domains": requested,
-                                    "added": added,
-                                    "removed": removed,
-                                }));
-                            } else {
-                                println!(
-                                    "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
-                                     Use --reissue-on-mismatch to override.",
-                                    cert_sans.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
-                                    requested.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
-                                    added.join(", "),
-                                    removed.join(", "),
-                                );
-                            }
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!("Could not read SANs from {}: {e} — skipping domain mismatch check", cert_output.display());
-            }
-        }
-
-        if !skip_renewal_checks {
-        // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
-        if ari {
-            match std::fs::read_to_string(cert_output) {
-                Ok(pem_data) => {
-                    match pem_to_der(&pem_data) {
-                        Ok(cert_der) => {
-                            // Build client early so we reuse directory + account for step 1
-                            let mut ari_client = build_client(cli).await?;
-                            // ARI uses POST-as-GET, needs KID
-                            ari_client.create_account(None, true, None).await?;
-
-                            if ari_client.supports_ari() {
-                                match ari_client.get_renewal_info(&cert_der).await {
-                                    Ok((info, _retry_after)) => {
-                                        let now = time::OffsetDateTime::now_utc();
-                                        if let Ok(start) = time::OffsetDateTime::parse(
-                                            &info.suggested_window.start,
-                                            &time::format_description::well_known::Rfc3339,
-                                        ) {
-                                            if now < start {
-                                                if !silent {
-                                                    if json {
-                                                        println!("{}", serde_json::json!({
-                                                            "command": "run",
-                                                            "action": "skip",
-                                                            "reason": "ari",
-                                                            "window_start": info.suggested_window.start,
-                                                            "window_end": info.suggested_window.end,
-                                                            "cert_path": cert_output.display().to_string(),
-                                                        }));
-                                                    } else {
-                                                        println!(
-                                                            "ARI: renewal window starts {} - skipping renewal",
-                                                            info.suggested_window.start
-                                                        );
-                                                    }
-                                                }
-                                                return Ok(());
-                                            }
-                                            if !json && !silent {
-                                                println!(
-                                                    "ARI: renewal window is open ({} - {}), renewing...",
-                                                    info.suggested_window.start, info.suggested_window.end
-                                                );
-                                            }
-                                        }
-                                        // Set cert_id for replaceOrder
-                                        if let Ok(cid) = compute_cert_id(&cert_der) {
-                                            ari_cert_id = Some(cid);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("ARI check failed: {e} - falling back to --days check");
-                                    }
-                                }
-                            } else {
-                                tracing::warn!("Server does not support ARI - falling back to --days check");
-                            }
-                            early_client = Some(ari_client);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Could not parse certificate {}: {e}", cert_output.display());
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Could not read certificate {}: {e}", cert_output.display());
-                }
-            }
-        }
-
-        // ── 0b. Days-based renewal check (fallback / standalone) ────────
-        if ari_cert_id.is_none() {
-            if let Some(threshold) = days {
-                match cert_days_remaining(cert_output) {
-                    Ok(remaining) if remaining > threshold as i64 => {
-                        if json {
-                            if !silent {
-                                println!("{}", serde_json::json!({
-                                    "command": "run",
-                                    "action": "skip",
-                                    "reason": "days",
-                                    "days_remaining": remaining,
-                                    "threshold": threshold,
-                                    "cert_path": cert_output.display().to_string(),
-                                }));
-                            }
-                        } else if !silent {
-                            println!(
-                                "Certificate {} has {remaining} days remaining (threshold: {threshold}), skipping renewal",
-                                cert_output.display()
-                            );
-                        }
-                        return Ok(());
-                    }
-                    Ok(remaining) => {
-                        if !json && !silent {
-                            println!(
-                                "Certificate {} expires in {remaining} days (threshold: {threshold}), renewing...",
-                                cert_output.display()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Could not read certificate {}: {e} - proceeding with renewal",
-                            cert_output.display()
-                        );
-                    }
-                }
-            }
-        }
-        } // if !skip_renewal_checks
-    }
+    let Some(RenewalDecision {
+        ari_cert_id,
+        mut early_client,
+    }) = check_renewal_status(cli, cert_output, &domains, ari, days, reissue_on_mismatch).await?
+    else {
+        return Ok(());
+    };
 
     // ── 1. Account ──────────────────────────────────────────────────────
     info!("Step 1: Creating / looking up account");
@@ -2141,7 +2596,9 @@ async fn cmd_run(
     };
     let contact_list = contact.map(|c| vec![format!("mailto:{c}")]);
     let eab = parse_eab(eab_kid, eab_hmac_key)?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key.as_slice()));
+    let eab_ref = eab
+        .as_ref()
+        .map(|(kid, key)| (kid.as_str(), key.as_slice()));
     let account = client.create_account(contact_list, true, eab_ref).await?;
     if !json && !silent {
         println!("Account status: {}", account.status);
@@ -2150,12 +2607,15 @@ async fn cmd_run(
     // ── 2. Pre-authorization (optional, RFC 8555 §7.4.1) ───────────────
     if pre_authorize {
         info!("Step 2: Pre-authorizing identifiers via newAuthz");
-        let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+        let ids: Vec<Identifier> = domains.iter().map(Identifier::from_str_auto).collect();
         for id in ids {
             let domain_display = id.value.clone();
             let (authz, authz_url) = client.new_authorization(id).await?;
             if !json && !silent {
-                println!("Pre-authorization for {} - status: {}", domain_display, authz.status);
+                println!(
+                    "Pre-authorization for {} - status: {}",
+                    domain_display, authz.status
+                );
                 println!("  Authz URL: {authz_url}");
             }
 
@@ -2170,12 +2630,7 @@ async fn cmd_run(
                 .challenges
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
-                .with_context(|| {
-                    format!(
-                        "no {challenge_type} challenge for {}",
-                        domain_display
-                    )
-                })?;
+                .with_context(|| format!("no {challenge_type} challenge for {}", domain_display))?;
             let token = if challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
                 ch.token.as_deref().context("challenge has no token")?
             } else {
@@ -2191,8 +2646,11 @@ async fn cmd_run(
                 CHALLENGE_TYPE_HTTP01 => {
                     if let Some(dir) = challenge_dir {
                         let file = challenge::http01::write_challenge_file(
-                            dir, token, client.account_key(),
-                        )?;
+                            dir,
+                            token,
+                            client.account_key(),
+                        )
+                        .await?;
                         if !json && !silent {
                             println!("  Challenge file written to {}", file.display());
                         }
@@ -2217,12 +2675,17 @@ async fn cmd_run(
                                 if req.contains(&path) {
                                     let resp = format!(
                                         "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
-                                        auth.len(), auth
+                                        auth.len(),
+                                        auth
                                     );
                                     stream.write_all(resp.as_bytes()).await?;
                                     return Ok(());
                                 }
-                                stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n").await?;
+                                stream
+                                    .write_all(
+                                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+                                    )
+                                    .await?;
                             }
                         }));
                     }
@@ -2247,13 +2710,17 @@ async fn cmd_run(
                             .env("ACME_TXT_VALUE", &txt_value)
                             .env("ACME_ACTION", "create")
                             .status()
-                            .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
+                            .with_context(|| {
+                                format!("failed to run DNS hook: {}", hook.display())
+                            })?;
                         if !status.success() {
                             anyhow::bail!("DNS hook (create) exited with {status}");
                         }
                     } else if !silent {
                         challenge::dns01::print_instructions(
-                            &authz.identifier.value, token, client.account_key(),
+                            &authz.identifier.value,
+                            token,
+                            client.account_key(),
                         );
                     }
                     if let Some(timeout_secs) = dns_wait {
@@ -2276,7 +2743,9 @@ async fn cmd_run(
                                     .env("ACME_ACTION", "cleanup")
                                     .status()
                                 {
-                                    Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+                                    Ok(s) if !s.success() => {
+                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
+                                    }
                                     Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                                     _ => {}
                                 }
@@ -2292,15 +2761,19 @@ async fn cmd_run(
                     if let Some(script) = on_challenge_ready {
                         let key_auth = challenge::key_authorization(token, client.account_key());
                         let txt_name_ref = challenge::dns01::record_name(&authz.identifier.value);
-                        let txt_value_ref = challenge::dns01::txt_record_value(token, client.account_key());
-                        run_hook(script, &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", challenge_type),
-                            ("ACME_TOKEN", token),
-                            ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", &txt_name_ref),
-                            ("ACME_TXT_VALUE", &txt_value_ref),
-                        ])?;
+                        let txt_value_ref =
+                            challenge::dns01::txt_record_value(token, client.account_key());
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TOKEN", token),
+                                ("ACME_KEY_AUTH", &key_auth),
+                                ("ACME_TXT_NAME", &txt_name_ref),
+                                ("ACME_TXT_VALUE", &txt_value_ref),
+                            ],
+                        )?;
                     }
                     dns_cleanup_info = Some((txt_name, txt_value));
                     client.respond_to_challenge(&challenge_url).await?;
@@ -2312,17 +2785,25 @@ async fn cmd_run(
                             authz.identifier.value
                         );
                     }
-                    let issuer_names = ch.issuer_domain_names.as_ref()
+                    let issuer_names = ch
+                        .issuer_domain_names
+                        .as_ref()
                         .context("dns-persist-01 challenge has no issuer-domain-names")?;
                     if issuer_names.is_empty() || issuer_names.len() > 10 {
-                        anyhow::bail!("malformed dns-persist-01: issuer-domain-names must have 1-10 entries");
+                        anyhow::bail!(
+                            "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
+                        );
                     }
-                    let account_uri = client.account_url()
+                    let account_uri = client
+                        .account_url()
                         .context("account URL not known - cannot construct dns-persist-01 record")?
                         .to_string();
                     let txt_name = challenge::dns_persist01::record_name(&authz.identifier.value);
                     let txt_value = challenge::dns_persist01::txt_record_value(
-                        &issuer_names[0], &account_uri, persist_policy, persist_until,
+                        &issuer_names[0],
+                        &account_uri,
+                        persist_policy,
+                        persist_until,
                     );
                     if let Some(hook) = dns_hook {
                         let status = std::process::Command::new(hook)
@@ -2331,14 +2812,19 @@ async fn cmd_run(
                             .env("ACME_TXT_VALUE", &txt_value)
                             .env("ACME_ACTION", "create")
                             .status()
-                            .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
+                            .with_context(|| {
+                                format!("failed to run DNS hook: {}", hook.display())
+                            })?;
                         if !status.success() {
                             anyhow::bail!("DNS hook (create) exited with {status}");
                         }
                     } else if !silent {
                         challenge::dns_persist01::print_instructions(
-                            &authz.identifier.value, issuer_names, &account_uri,
-                            persist_policy, persist_until,
+                            &authz.identifier.value,
+                            issuer_names,
+                            &account_uri,
+                            persist_policy,
+                            persist_until,
                         );
                     }
                     if let Some(timeout_secs) = dns_wait {
@@ -2361,7 +2847,9 @@ async fn cmd_run(
                                     .env("ACME_ACTION", "cleanup")
                                     .status()
                                 {
-                                    Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+                                    Ok(s) if !s.success() => {
+                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
+                                    }
                                     Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                                     _ => {}
                                 }
@@ -2375,12 +2863,15 @@ async fn cmd_run(
                         let _ = std::io::stdin().read_line(&mut String::new());
                     }
                     if let Some(script) = on_challenge_ready {
-                        run_hook(script, &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", challenge_type),
-                            ("ACME_TXT_NAME", &txt_name),
-                            ("ACME_TXT_VALUE", &txt_value),
-                        ])?;
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TXT_NAME", &txt_name),
+                                ("ACME_TXT_VALUE", &txt_value),
+                            ],
+                        )?;
                     }
                     dns_cleanup_info = Some((txt_name, txt_value));
                     client.respond_to_challenge(&challenge_url).await?;
@@ -2388,19 +2879,24 @@ async fn cmd_run(
                 CHALLENGE_TYPE_TLSALPN01 => {
                     if !silent {
                         challenge::tlsalpn01::print_instructions(
-                            &authz.identifier.value, token, client.account_key(),
+                            &authz.identifier.value,
+                            token,
+                            client.account_key(),
                         );
                         println!("Press Enter once the TLS server is configured...");
                         let _ = std::io::stdin().read_line(&mut String::new());
                     }
                     if let Some(script) = on_challenge_ready {
                         let key_auth = challenge::key_authorization(token, client.account_key());
-                        run_hook(script, &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", challenge_type),
-                            ("ACME_TOKEN", token),
-                            ("ACME_KEY_AUTH", &key_auth),
-                        ])?;
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TOKEN", token),
+                                ("ACME_KEY_AUTH", &key_auth),
+                            ],
+                        )?;
                     }
                     client.respond_to_challenge(&challenge_url).await?;
                 }
@@ -2412,8 +2908,12 @@ async fn cmd_run(
                 std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
             loop {
                 if std::time::Instant::now() > poll_deadline {
-                    if let Some(handle) = serve_task.take() { handle.abort(); }
-                    if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
+                    if let Some(handle) = serve_task.take() {
+                        handle.abort();
+                    }
+                    if let Some(ref f) = challenge_file {
+                        challenge::http01::cleanup_challenge_file(f).await;
+                    }
                     anyhow::bail!(
                         "pre-authorization for {} did not complete within {challenge_timeout}s",
                         domain_display
@@ -2424,11 +2924,23 @@ async fn cmd_run(
                 if !json && !silent {
                     println!("  Authorization status: {}", a.status);
                 }
-                if let Some(ch) = a.challenges.iter().find(|c| c.challenge_type == challenge_type) {
+                if let Some(ch) = a
+                    .challenges
+                    .iter()
+                    .find(|c| c.challenge_type == challenge_type)
+                {
                     if is_challenge_terminal(ch) {
-                        if let Some(handle) = serve_task.take() { handle.abort(); }
-                        if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
-                        let detail = ch.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default();
+                        if let Some(handle) = serve_task.take() {
+                            handle.abort();
+                        }
+                        if let Some(ref f) = challenge_file {
+                            challenge::http01::cleanup_challenge_file(f).await;
+                        }
+                        let detail = ch
+                            .error
+                            .as_ref()
+                            .map(|e| format!(": {e}"))
+                            .unwrap_or_default();
                         anyhow::bail!("challenge validation failed for {}{detail}", domain_display);
                     } else if let Some(ref err) = ch.error {
                         tracing::debug!(
@@ -2440,9 +2952,15 @@ async fn cmd_run(
                 match a.status {
                     AuthorizationStatus::Valid => break,
                     AuthorizationStatus::Invalid => {
-                        if let Some(handle) = serve_task.take() { handle.abort(); }
-                        if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
-                        let detail = a.challenges.iter()
+                        if let Some(handle) = serve_task.take() {
+                            handle.abort();
+                        }
+                        if let Some(ref f) = challenge_file {
+                            challenge::http01::cleanup_challenge_file(f).await;
+                        }
+                        let detail = a
+                            .challenges
+                            .iter()
                             .find(|c| c.challenge_type == challenge_type)
                             .and_then(|c| c.error.as_ref())
                             .map(|e| format!(": {e}"))
@@ -2454,23 +2972,29 @@ async fn cmd_run(
             }
 
             // Clean up DNS hook if applicable (dns-01 and dns-persist-01)
-            if let Some((ref txt_name, ref txt_value)) = dns_cleanup_info {
-                if let Some(hook) = dns_hook {
-                    let status = std::process::Command::new(hook)
-                        .env("ACME_DOMAIN", &domain_display)
-                        .env("ACME_TXT_NAME", txt_name)
-                        .env("ACME_TXT_VALUE", txt_value)
-                        .env("ACME_ACTION", "cleanup")
-                        .status();
-                    match status {
-                        Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
-                        Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                        _ => {}
+            if let Some((ref txt_name, ref txt_value)) = dns_cleanup_info
+                && let Some(hook) = dns_hook
+            {
+                let status = std::process::Command::new(hook)
+                    .env("ACME_DOMAIN", &domain_display)
+                    .env("ACME_TXT_NAME", txt_name)
+                    .env("ACME_TXT_VALUE", txt_value)
+                    .env("ACME_ACTION", "cleanup")
+                    .status();
+                match status {
+                    Ok(s) if !s.success() => {
+                        tracing::warn!("DNS hook (cleanup) exited with {s}")
                     }
+                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
+                    _ => {}
                 }
             }
-            if let Some(handle) = serve_task.take() { handle.abort(); }
-            if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
+            if let Some(handle) = serve_task.take() {
+                handle.abort();
+            }
+            if let Some(ref f) = challenge_file {
+                challenge::http01::cleanup_challenge_file(f).await;
+            }
         }
         if !json && !silent {
             println!("All identifiers pre-authorized");
@@ -2481,20 +3005,21 @@ async fn cmd_run(
     info!("Step {}: Placing order", if pre_authorize { 3 } else { 2 });
     let profile_owned = profile.map(String::from);
     // Validate profile against advertised list (draft-ietf-acme-profiles-01 §4)
-    if let Some(ref p) = profile_owned {
-        if let Some(available) = client.available_profiles() {
-            if !available.contains_key(p) {
-                tracing::warn!(
-                    "Profile \"{p}\" is not advertised by the server (available: {})",
-                    available.keys().cloned().collect::<Vec<_>>().join(", ")
-                );
-            }
-        }
+    if let Some(ref p) = profile_owned
+        && let Some(available) = client.available_profiles()
+        && !available.contains_key(p)
+    {
+        tracing::warn!(
+            "Profile \"{p}\" is not advertised by the server (available: {})",
+            available.keys().cloned().collect::<Vec<_>>().join(", ")
+        );
     }
-    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+    let ids: Vec<Identifier> = domains.iter().map(Identifier::from_str_auto).collect();
     let (order, order_url) = if let Some(ref cert_id) = ari_cert_id {
         info!("Using ARI replaces field (certID: {cert_id})");
-        client.new_order_replacing(ids, cert_id.clone(), profile_owned).await?
+        client
+            .new_order_replacing(ids, cert_id.clone(), profile_owned)
+            .await?
     } else {
         client.new_order(ids, profile_owned).await?
     };
@@ -2507,7 +3032,10 @@ async fn cmd_run(
     }
 
     // ── Authorizations ──────────────────────────────────────────────────
-    info!("Step {}: Completing authorizations", if pre_authorize { 4 } else { 3 });
+    info!(
+        "Step {}: Completing authorizations",
+        if pre_authorize { 4 } else { 3 }
+    );
 
     // DNS challenges with a hook benefit from parallel propagation waiting:
     // all TXT records are created first, then all propagation checks run
@@ -2526,7 +3054,7 @@ async fn cmd_run(
             txt_name: String,
             txt_value: String,
         }
-        let hook = dns_hook.unwrap(); // safe: checked above
+        let hook = dns_hook.expect("dns_hook presence verified above by use_parallel_dns check");
 
         // Phase 1: Fetch all authorizations and create DNS records
         let mut pending: Vec<DnsPending> = Vec::new();
@@ -2539,7 +3067,9 @@ async fn cmd_run(
                 );
             }
             if authz.status == AuthorizationStatus::Valid {
-                if !json && !silent { println!("  Already valid, skipping"); }
+                if !json && !silent {
+                    println!("  Already valid, skipping");
+                }
                 continue;
             }
 
@@ -2548,7 +3078,10 @@ async fn cmd_run(
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
                 .with_context(|| {
-                    format!("no {challenge_type} challenge for {}", authz.identifier.value)
+                    format!(
+                        "no {challenge_type} challenge for {}",
+                        authz.identifier.value
+                    )
                 })?;
 
             let (token, txt_name, txt_value) = if challenge_type == CHALLENGE_TYPE_DNS01 {
@@ -2558,7 +3091,11 @@ async fn cmd_run(
                         authz.identifier.value
                     );
                 }
-                let t = ch.token.as_deref().context("challenge has no token")?.to_string();
+                let t = ch
+                    .token
+                    .as_deref()
+                    .context("challenge has no token")?
+                    .to_string();
                 let name = challenge::dns01::record_name(&authz.identifier.value);
                 let value = challenge::dns01::txt_record_value(&t, client.account_key());
                 (t, name, value)
@@ -2570,23 +3107,35 @@ async fn cmd_run(
                         authz.identifier.value
                     );
                 }
-                let issuer_names = ch.issuer_domain_names.as_ref()
+                let issuer_names = ch
+                    .issuer_domain_names
+                    .as_ref()
                     .context("dns-persist-01 challenge has no issuer-domain-names")?;
                 if issuer_names.is_empty() || issuer_names.len() > 10 {
-                    anyhow::bail!("malformed dns-persist-01: issuer-domain-names must have 1-10 entries");
+                    anyhow::bail!(
+                        "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
+                    );
                 }
-                let account_uri = client.account_url()
+                let account_uri = client
+                    .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
                 let name = challenge::dns_persist01::record_name(&authz.identifier.value);
                 let value = challenge::dns_persist01::txt_record_value(
-                    &issuer_names[0], &account_uri, persist_policy, persist_until,
+                    &issuer_names[0],
+                    &account_uri,
+                    persist_policy,
+                    persist_until,
                 );
                 (String::new(), name, value)
             };
 
             // Run create hook
-            info!("Calling DNS hook (create): {} for {}", hook.display(), authz.identifier.value);
+            info!(
+                "Calling DNS hook (create): {} for {}",
+                hook.display(),
+                authz.identifier.value
+            );
             let status = std::process::Command::new(hook)
                 .env("ACME_DOMAIN", &authz.identifier.value)
                 .env("ACME_TXT_NAME", &txt_name)
@@ -2630,9 +3179,8 @@ async fn cmd_run(
                     info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
                 }
 
-                let semaphore = std::sync::Arc::new(
-                    tokio::sync::Semaphore::new(dns_propagation_concurrency),
-                );
+                let semaphore =
+                    std::sync::Arc::new(tokio::sync::Semaphore::new(dns_propagation_concurrency));
                 let mut set = tokio::task::JoinSet::new();
                 for p in &pending {
                     let name = p.txt_name.clone();
@@ -2640,8 +3188,7 @@ async fn cmd_run(
                     let domain = p.domain.clone();
                     let sem = semaphore.clone();
                     set.spawn(async move {
-                        let _permit = sem.acquire().await
-                            .expect("semaphore closed unexpectedly");
+                        let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout_secs);
                         while std::time::Instant::now() < deadline {
@@ -2676,7 +3223,9 @@ async fn cmd_run(
                             .env("ACME_ACTION", "cleanup")
                             .status()
                         {
-                            Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+                            Ok(s) if !s.success() => {
+                                tracing::warn!("DNS hook (cleanup) exited with {s}")
+                            }
                             Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
                             _ => {}
                         }
@@ -2693,21 +3242,27 @@ async fn cmd_run(
                 if let Some(script) = on_challenge_ready {
                     if challenge_type == CHALLENGE_TYPE_DNS01 {
                         let key_auth = challenge::key_authorization(&p.token, client.account_key());
-                        run_hook(script, &[
-                            ("ACME_DOMAIN", p.domain.as_str()),
-                            ("ACME_CHALLENGE_TYPE", challenge_type),
-                            ("ACME_TOKEN", &p.token),
-                            ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", &p.txt_name),
-                            ("ACME_TXT_VALUE", &p.txt_value),
-                        ])?;
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", p.domain.as_str()),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TOKEN", &p.token),
+                                ("ACME_KEY_AUTH", &key_auth),
+                                ("ACME_TXT_NAME", &p.txt_name),
+                                ("ACME_TXT_VALUE", &p.txt_value),
+                            ],
+                        )?;
                     } else {
-                        run_hook(script, &[
-                            ("ACME_DOMAIN", p.domain.as_str()),
-                            ("ACME_CHALLENGE_TYPE", challenge_type),
-                            ("ACME_TXT_NAME", &p.txt_name),
-                            ("ACME_TXT_VALUE", &p.txt_value),
-                        ])?;
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", p.domain.as_str()),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TXT_NAME", &p.txt_name),
+                                ("ACME_TXT_VALUE", &p.txt_value),
+                            ],
+                        )?;
                     }
                 }
                 client.respond_to_challenge(&p.challenge_url).await?;
@@ -2756,11 +3311,12 @@ async fn cmd_run(
                                     .env("ACME_ACTION", "cleanup")
                                     .status();
                             }
-                            let detail = ch.error.as_ref().map(|e| format!(": {e}")).unwrap_or_default();
-                            anyhow::bail!(
-                                "challenge validation failed for {}{detail}",
-                                p.domain
-                            );
+                            let detail = ch
+                                .error
+                                .as_ref()
+                                .map(|e| format!(": {e}"))
+                                .unwrap_or_default();
+                            anyhow::bail!("challenge validation failed for {}{detail}", p.domain);
                         } else if let Some(ref err) = ch.error {
                             tracing::debug!(
                                 "Challenge has error but status is {} (will keep polling): {err}",
@@ -2787,10 +3343,7 @@ async fn cmd_run(
                                 .and_then(|c| c.error.as_ref())
                                 .map(|e| format!(": {e}"))
                                 .unwrap_or_default();
-                            anyhow::bail!(
-                                "authorization failed for {}{detail}",
-                                p.domain
-                            );
+                            anyhow::bail!("authorization failed for {}{detail}", p.domain);
                         }
                         _ => continue,
                     }
@@ -2799,7 +3352,11 @@ async fn cmd_run(
 
             // Phase 5: Cleanup all DNS records
             for p in &pending {
-                info!("Calling DNS hook (cleanup): {} for {}", hook.display(), p.domain);
+                info!(
+                    "Calling DNS hook (cleanup): {} for {}",
+                    hook.display(),
+                    p.domain
+                );
                 match std::process::Command::new(hook)
                     .env("ACME_DOMAIN", &p.domain)
                     .env("ACME_TXT_NAME", &p.txt_name)
@@ -2814,370 +3371,391 @@ async fn cmd_run(
             }
         }
     } else {
-    // ── Sequential authorization (HTTP-01, TLS-ALPN-01, manual DNS) ─────
-    for authz_url in &order.authorizations {
-        let authz = client.get_authorization(authz_url).await?;
-        if !json && !silent {
-            println!(
-                "Authorization for {} - status: {}",
-                authz.identifier.value, authz.status
-            );
-        }
-
-        if authz.status == AuthorizationStatus::Valid {
+        // ── Sequential authorization (HTTP-01, TLS-ALPN-01, manual DNS) ─────
+        for authz_url in &order.authorizations {
+            let authz = client.get_authorization(authz_url).await?;
             if !json && !silent {
-                println!("  Already valid, skipping");
-            }
-            continue;
-        }
-
-        let ch = authz
-            .challenges
-            .iter()
-            .find(|c| c.challenge_type == challenge_type)
-            .with_context(|| {
-                format!(
-                    "no {challenge_type} challenge for {}",
-                    authz.identifier.value
-                )
-            })?;
-        let token = if challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
-            ch.token.as_deref().context("challenge has no token")?
-        } else {
-            "" // dns-persist-01 has no token
-        };
-        let challenge_url = ch.url.clone();
-
-        // Track challenge file for cleanup (file mode only)
-        let mut challenge_file: Option<std::path::PathBuf> = None;
-        // Background HTTP server handle (standalone mode only)
-        let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
-
-        match challenge_type {
-            CHALLENGE_TYPE_HTTP01 => {
-                let validation_url = format!(
-                    "http://{}/.well-known/acme-challenge/{}",
-                    authz.identifier.value, token
+                println!(
+                    "Authorization for {} - status: {}",
+                    authz.identifier.value, authz.status
                 );
-                info!("ACME server will validate via: {validation_url}");
+            }
 
-                if let Some(dir) = challenge_dir {
-                    // File mode: write token file for an existing web server
-                    let file = challenge::http01::write_challenge_file(
-                        dir,
-                        token,
-                        client.account_key(),
-                    )?;
+            if authz.status == AuthorizationStatus::Valid {
                 if !json && !silent {
-                    println!("  Challenge file written to {}", file.display());
+                    println!("  Already valid, skipping");
                 }
-                    challenge_file = Some(file);
-                } else {
-                    // Standalone mode: bind a TCP server
-                    if http_port != 80 {
-                        tracing::warn!(
-                            "HTTP-01 validation (RFC 8555 §8.3) always targets port 80.\n  \
-                             Your server is listening on port {http_port}.\n  \
-                             Ensure traffic to port 80 is forwarded to port {http_port}, \
-                             or use --challenge-dir with an existing web server."
-                        );
-                    }
-                    let auth = challenge::http01::response_body(
-                        token,
-                        client.account_key(),
-                    );
-                    let path = challenge::http01::challenge_path(token);
-
-                    let listener =
-                        challenge::http01::bind_or_suggest(http_port).await?;
-                    info!("HTTP-01 server listening on 0.0.0.0:{http_port}");
-
-                    serve_task = Some(tokio::spawn(async move {
-                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                        loop {
-                            let (mut stream, addr) = listener.accept().await?;
-                            tracing::debug!("HTTP-01: connection from {addr}");
-                            let mut buf = vec![0u8; 4096];
-                            let n = stream.read(&mut buf).await?;
-                            let req = String::from_utf8_lossy(&buf[..n]);
-                            if req.contains(&path) {
-                                let resp = format!(
-                                    "HTTP/1.1 200 OK\r\n\
-                                     Content-Type: application/octet-stream\r\n\
-                                     Content-Length: {}\r\n\r\n{}",
-                                    auth.len(),
-                                    auth
-                                );
-                                stream.write_all(resp.as_bytes()).await?;
-                                info!("HTTP-01: served challenge response to {addr}");
-                                return Ok(());
-                            }
-                            let not_found =
-                                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
-                            stream.write_all(not_found.as_bytes()).await?;
-                        }
-                    }));
-                }
-
-                // Yield briefly so the HTTP-01 server task is ready
-                // before telling the CA to validate.
-                tokio::task::yield_now().await;
-
-                let ch_resp = client.respond_to_challenge(&challenge_url).await?;
-                if let Some(ref err) = ch_resp.error {
-                    // Some CAs (e.g. step-ca) validate synchronously during the
-                    // challenge POST and may return an error on a still-pending
-                    // challenge. Per RFC 8555 §7.5.1 this is just a failed
-                    // attempt — the authorization may still succeed on retry.
-                    // Log a warning and let the polling loop handle it.
-                    tracing::warn!(
-                        "HTTP-01 challenge returned error (will keep polling): {err}\n  \
-                         Validation URL: {validation_url}"
-                    );
-                }
-                if !json && !silent {
-                    println!("  Challenge response sent - waiting for validation...");
-                }
-            }
-            CHALLENGE_TYPE_DNS01 => {
-                if authz.identifier.is_ip() {
-                    anyhow::bail!(
-                        "dns-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value
-                    );
-                }
-                let txt_name = challenge::dns01::record_name(&authz.identifier.value);
-                let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
-
-                // No hook: print instructions for manual setup
-                if !silent {
-                    challenge::dns01::print_instructions(
-                        &authz.identifier.value,
-                        token,
-                        client.account_key(),
-                    );
-                }
-
-                if let Some(timeout_secs) = dns_wait {
-                    // Poll DNS propagation
-                    info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
-                    let deadline = std::time::Instant::now()
-                        + std::time::Duration::from_secs(timeout_secs);
-                    let mut found = false;
-                    while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&txt_name, &txt_value).await? {
-                            info!("DNS TXT record found");
-                            found = true;
-                            break;
-                        }
-                        tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                    if !found {
-                        anyhow::bail!(
-                            "DNS TXT record for {txt_name} not found within {timeout_secs}s"
-                        );
-                    }
-                } else if !silent {
-                    // Interactive: wait for Enter
-                    println!("Press Enter once the record has propagated...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-
-                if let Some(script) = on_challenge_ready {
-                    let key_auth = challenge::key_authorization(token, client.account_key());
-                    let txt_name_ref = challenge::dns01::record_name(&authz.identifier.value);
-                    let txt_value_ref = challenge::dns01::txt_record_value(token, client.account_key());
-                    run_hook(script, &[
-                        ("ACME_DOMAIN", &authz.identifier.value),
-                        ("ACME_CHALLENGE_TYPE", challenge_type),
-                        ("ACME_TOKEN", token),
-                        ("ACME_KEY_AUTH", &key_auth),
-                        ("ACME_TXT_NAME", &txt_name_ref),
-                        ("ACME_TXT_VALUE", &txt_value_ref),
-                    ])?;
-                }
-
-                client.respond_to_challenge(&challenge_url).await?;
-            }
-            CHALLENGE_TYPE_DNS_PERSIST01 => {
-                if authz.identifier.is_ip() {
-                    anyhow::bail!(
-                        "dns-persist-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value
-                    );
-                }
-                let issuer_names = ch.issuer_domain_names.as_ref()
-                    .context("dns-persist-01 challenge has no issuer-domain-names")?;
-                if issuer_names.is_empty() || issuer_names.len() > 10 {
-                    anyhow::bail!("malformed dns-persist-01: issuer-domain-names must have 1-10 entries");
-                }
-                let account_uri = client.account_url()
-                    .context("account URL not known - cannot construct dns-persist-01 record")?
-                    .to_string();
-                let txt_name = challenge::dns_persist01::record_name(&authz.identifier.value);
-                let txt_value = challenge::dns_persist01::txt_record_value(
-                    &issuer_names[0], &account_uri, persist_policy, persist_until,
-                );
-
-                // No hook: print instructions for manual setup
-                if !silent {
-                    challenge::dns_persist01::print_instructions(
-                        &authz.identifier.value, issuer_names, &account_uri,
-                        persist_policy, persist_until,
-                    );
-                }
-
-                if let Some(timeout_secs) = dns_wait {
-                    info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
-                    let deadline = std::time::Instant::now()
-                        + std::time::Duration::from_secs(timeout_secs);
-                    let mut found = false;
-                    while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&txt_name, &txt_value).await? {
-                            info!("DNS TXT record found");
-                            found = true;
-                            break;
-                        }
-                        tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    }
-                    if !found {
-                        anyhow::bail!(
-                            "DNS TXT record for {txt_name} not found within {timeout_secs}s"
-                        );
-                    }
-                } else if !silent {
-                    println!("Press Enter once the record has propagated...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-
-                if let Some(script) = on_challenge_ready {
-                    run_hook(script, &[
-                        ("ACME_DOMAIN", &authz.identifier.value),
-                        ("ACME_CHALLENGE_TYPE", challenge_type),
-                        ("ACME_TXT_NAME", &txt_name),
-                        ("ACME_TXT_VALUE", &txt_value),
-                    ])?;
-                }
-
-                client.respond_to_challenge(&challenge_url).await?;
-            }
-            CHALLENGE_TYPE_TLSALPN01 => {
-                if !silent {
-                    challenge::tlsalpn01::print_instructions(
-                        &authz.identifier.value,
-                        token,
-                        client.account_key(),
-                    );
-                    println!("Press Enter once the TLS server is configured...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
-                }
-
-                if let Some(script) = on_challenge_ready {
-                    let key_auth = challenge::key_authorization(token, client.account_key());
-                    run_hook(script, &[
-                        ("ACME_DOMAIN", &authz.identifier.value),
-                        ("ACME_CHALLENGE_TYPE", challenge_type),
-                        ("ACME_TOKEN", token),
-                        ("ACME_KEY_AUTH", &key_auth),
-                    ])?;
-                }
-
-                client.respond_to_challenge(&challenge_url).await?;
-            }
-            other => anyhow::bail!("unsupported challenge type: {other}"),
-        }
-
-        // Poll authorization until terminal (max challenge_timeout)
-        let poll_deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
-        loop {
-            if std::time::Instant::now() > poll_deadline {
-                if let Some(handle) = serve_task.take() {
-                    handle.abort();
-                }
-                if let Some(ref f) = challenge_file {
-                    challenge::http01::cleanup_challenge_file(f);
-                }
-                anyhow::bail!(
-                    "authorization for {} did not complete within {challenge_timeout}s",
-                    authz.identifier.value
-                );
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            let a = client.get_authorization(authz_url).await?;
-            if !json && !silent {
-                println!("  Authorization status: {}", a.status);
+                continue;
             }
 
-            // Surface challenge-level errors early (only if terminal)
-            if let Some(ch) = a
+            let ch = authz
                 .challenges
                 .iter()
                 .find(|c| c.challenge_type == challenge_type)
-            {
-                if is_challenge_terminal(ch) {
-                    if let Some(handle) = serve_task.take() {
-                        handle.abort();
+                .with_context(|| {
+                    format!(
+                        "no {challenge_type} challenge for {}",
+                        authz.identifier.value
+                    )
+                })?;
+            let token = if challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
+                ch.token.as_deref().context("challenge has no token")?
+            } else {
+                "" // dns-persist-01 has no token
+            };
+            let challenge_url = ch.url.clone();
+
+            // Track challenge file for cleanup (file mode only)
+            let mut challenge_file: Option<std::path::PathBuf> = None;
+            // Background HTTP server handle (standalone mode only)
+            let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
+
+            match challenge_type {
+                CHALLENGE_TYPE_HTTP01 => {
+                    let validation_url = format!(
+                        "http://{}/.well-known/acme-challenge/{}",
+                        authz.identifier.value, token
+                    );
+                    info!("ACME server will validate via: {validation_url}");
+
+                    if let Some(dir) = challenge_dir {
+                        // File mode: write token file for an existing web server
+                        let file = challenge::http01::write_challenge_file(
+                            dir,
+                            token,
+                            client.account_key(),
+                        )
+                        .await?;
+                        if !json && !silent {
+                            println!("  Challenge file written to {}", file.display());
+                        }
+                        challenge_file = Some(file);
+                    } else {
+                        // Standalone mode: bind a TCP server
+                        if http_port != 80 {
+                            tracing::warn!(
+                                "HTTP-01 validation (RFC 8555 §8.3) always targets port 80.\n  \
+                             Your server is listening on port {http_port}.\n  \
+                             Ensure traffic to port 80 is forwarded to port {http_port}, \
+                             or use --challenge-dir with an existing web server."
+                            );
+                        }
+                        let auth = challenge::http01::response_body(token, client.account_key());
+                        let path = challenge::http01::challenge_path(token);
+
+                        let listener = challenge::http01::bind_or_suggest(http_port).await?;
+                        info!("HTTP-01 server listening on 0.0.0.0:{http_port}");
+
+                        serve_task = Some(tokio::spawn(async move {
+                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                            loop {
+                                let (mut stream, addr) = listener.accept().await?;
+                                tracing::debug!("HTTP-01: connection from {addr}");
+                                let mut buf = vec![0u8; 4096];
+                                let n = stream.read(&mut buf).await?;
+                                let req = String::from_utf8_lossy(&buf[..n]);
+                                if req.contains(&path) {
+                                    let resp = format!(
+                                        "HTTP/1.1 200 OK\r\n\
+                                     Content-Type: application/octet-stream\r\n\
+                                     Content-Length: {}\r\n\r\n{}",
+                                        auth.len(),
+                                        auth
+                                    );
+                                    stream.write_all(resp.as_bytes()).await?;
+                                    info!("HTTP-01: served challenge response to {addr}");
+                                    return Ok(());
+                                }
+                                let not_found =
+                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                                stream.write_all(not_found.as_bytes()).await?;
+                            }
+                        }));
                     }
-                    if let Some(ref f) = challenge_file {
-                        challenge::http01::cleanup_challenge_file(f);
+
+                    // Yield briefly so the HTTP-01 server task is ready
+                    // before telling the CA to validate.
+                    tokio::task::yield_now().await;
+
+                    let ch_resp = client.respond_to_challenge(&challenge_url).await?;
+                    if let Some(ref err) = ch_resp.error {
+                        // Some CAs (e.g. step-ca) validate synchronously during the
+                        // challenge POST and may return an error on a still-pending
+                        // challenge. Per RFC 8555 §7.5.1 this is just a failed
+                        // attempt — the authorization may still succeed on retry.
+                        // Log a warning and let the polling loop handle it.
+                        tracing::warn!(
+                            "HTTP-01 challenge returned error (will keep polling): {err}\n  \
+                         Validation URL: {validation_url}"
+                        );
                     }
-                    let detail = ch
-                        .error
+                    if !json && !silent {
+                        println!("  Challenge response sent - waiting for validation...");
+                    }
+                }
+                CHALLENGE_TYPE_DNS01 => {
+                    if authz.identifier.is_ip() {
+                        anyhow::bail!(
+                            "dns-01 challenges are not supported for IP identifiers ({})",
+                            authz.identifier.value
+                        );
+                    }
+                    let txt_name = challenge::dns01::record_name(&authz.identifier.value);
+                    let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
+
+                    // No hook: print instructions for manual setup
+                    if !silent {
+                        challenge::dns01::print_instructions(
+                            &authz.identifier.value,
+                            token,
+                            client.account_key(),
+                        );
+                    }
+
+                    if let Some(timeout_secs) = dns_wait {
+                        // Poll DNS propagation
+                        info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_secs(timeout_secs);
+                        let mut found = false;
+                        while std::time::Instant::now() < deadline {
+                            if dns_txt_check(&txt_name, &txt_value).await? {
+                                info!("DNS TXT record found");
+                                found = true;
+                                break;
+                            }
+                            tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        if !found {
+                            anyhow::bail!(
+                                "DNS TXT record for {txt_name} not found within {timeout_secs}s"
+                            );
+                        }
+                    } else if !silent {
+                        // Interactive: wait for Enter
+                        println!("Press Enter once the record has propagated...");
+                        let _ = std::io::stdin().read_line(&mut String::new());
+                    }
+
+                    if let Some(script) = on_challenge_ready {
+                        let key_auth = challenge::key_authorization(token, client.account_key());
+                        let txt_name_ref = challenge::dns01::record_name(&authz.identifier.value);
+                        let txt_value_ref =
+                            challenge::dns01::txt_record_value(token, client.account_key());
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TOKEN", token),
+                                ("ACME_KEY_AUTH", &key_auth),
+                                ("ACME_TXT_NAME", &txt_name_ref),
+                                ("ACME_TXT_VALUE", &txt_value_ref),
+                            ],
+                        )?;
+                    }
+
+                    client.respond_to_challenge(&challenge_url).await?;
+                }
+                CHALLENGE_TYPE_DNS_PERSIST01 => {
+                    if authz.identifier.is_ip() {
+                        anyhow::bail!(
+                            "dns-persist-01 challenges are not supported for IP identifiers ({})",
+                            authz.identifier.value
+                        );
+                    }
+                    let issuer_names = ch
+                        .issuer_domain_names
                         .as_ref()
-                        .map(|e| format!(": {e}"))
-                        .unwrap_or_default();
-                    anyhow::bail!(
-                        "challenge validation failed for {}{detail}",
-                        authz.identifier.value
+                        .context("dns-persist-01 challenge has no issuer-domain-names")?;
+                    if issuer_names.is_empty() || issuer_names.len() > 10 {
+                        anyhow::bail!(
+                            "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
+                        );
+                    }
+                    let account_uri = client
+                        .account_url()
+                        .context("account URL not known - cannot construct dns-persist-01 record")?
+                        .to_string();
+                    let txt_name = challenge::dns_persist01::record_name(&authz.identifier.value);
+                    let txt_value = challenge::dns_persist01::txt_record_value(
+                        &issuer_names[0],
+                        &account_uri,
+                        persist_policy,
+                        persist_until,
                     );
-                } else if let Some(ref err) = ch.error {
-                    tracing::debug!(
-                        "Challenge has error but status is {} (will keep polling): {err}",
-                        ch.status
-                    );
+
+                    // No hook: print instructions for manual setup
+                    if !silent {
+                        challenge::dns_persist01::print_instructions(
+                            &authz.identifier.value,
+                            issuer_names,
+                            &account_uri,
+                            persist_policy,
+                            persist_until,
+                        );
+                    }
+
+                    if let Some(timeout_secs) = dns_wait {
+                        info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
+                        let deadline = std::time::Instant::now()
+                            + std::time::Duration::from_secs(timeout_secs);
+                        let mut found = false;
+                        while std::time::Instant::now() < deadline {
+                            if dns_txt_check(&txt_name, &txt_value).await? {
+                                info!("DNS TXT record found");
+                                found = true;
+                                break;
+                            }
+                            tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
+                            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        }
+                        if !found {
+                            anyhow::bail!(
+                                "DNS TXT record for {txt_name} not found within {timeout_secs}s"
+                            );
+                        }
+                    } else if !silent {
+                        println!("Press Enter once the record has propagated...");
+                        let _ = std::io::stdin().read_line(&mut String::new());
+                    }
+
+                    if let Some(script) = on_challenge_ready {
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TXT_NAME", &txt_name),
+                                ("ACME_TXT_VALUE", &txt_value),
+                            ],
+                        )?;
+                    }
+
+                    client.respond_to_challenge(&challenge_url).await?;
                 }
+                CHALLENGE_TYPE_TLSALPN01 => {
+                    if !silent {
+                        challenge::tlsalpn01::print_instructions(
+                            &authz.identifier.value,
+                            token,
+                            client.account_key(),
+                        );
+                        println!("Press Enter once the TLS server is configured...");
+                        let _ = std::io::stdin().read_line(&mut String::new());
+                    }
+
+                    if let Some(script) = on_challenge_ready {
+                        let key_auth = challenge::key_authorization(token, client.account_key());
+                        run_hook(
+                            script,
+                            &[
+                                ("ACME_DOMAIN", &authz.identifier.value),
+                                ("ACME_CHALLENGE_TYPE", challenge_type),
+                                ("ACME_TOKEN", token),
+                                ("ACME_KEY_AUTH", &key_auth),
+                            ],
+                        )?;
+                    }
+
+                    client.respond_to_challenge(&challenge_url).await?;
+                }
+                other => anyhow::bail!("unsupported challenge type: {other}"),
             }
 
-            match a.status {
-                AuthorizationStatus::Valid => break,
-                AuthorizationStatus::Invalid => {
+            // Poll authorization until terminal (max challenge_timeout)
+            let poll_deadline =
+                std::time::Instant::now() + std::time::Duration::from_secs(challenge_timeout);
+            loop {
+                if std::time::Instant::now() > poll_deadline {
                     if let Some(handle) = serve_task.take() {
                         handle.abort();
                     }
                     if let Some(ref f) = challenge_file {
-                        challenge::http01::cleanup_challenge_file(f);
+                        challenge::http01::cleanup_challenge_file(f).await;
                     }
-                    let detail = a
-                        .challenges
-                        .iter()
-                        .find(|c| c.challenge_type == challenge_type)
-                        .and_then(|c| c.error.as_ref())
-                        .map(|e| format!(": {e}"))
-                        .unwrap_or_default();
                     anyhow::bail!(
-                        "authorization failed for {}{detail}",
+                        "authorization for {} did not complete within {challenge_timeout}s",
                         authz.identifier.value
                     );
                 }
-                _ => continue,
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let a = client.get_authorization(authz_url).await?;
+                if !json && !silent {
+                    println!("  Authorization status: {}", a.status);
+                }
+
+                // Surface challenge-level errors early (only if terminal)
+                if let Some(ch) = a
+                    .challenges
+                    .iter()
+                    .find(|c| c.challenge_type == challenge_type)
+                {
+                    if is_challenge_terminal(ch) {
+                        if let Some(handle) = serve_task.take() {
+                            handle.abort();
+                        }
+                        if let Some(ref f) = challenge_file {
+                            challenge::http01::cleanup_challenge_file(f).await;
+                        }
+                        let detail = ch
+                            .error
+                            .as_ref()
+                            .map(|e| format!(": {e}"))
+                            .unwrap_or_default();
+                        anyhow::bail!(
+                            "challenge validation failed for {}{detail}",
+                            authz.identifier.value
+                        );
+                    } else if let Some(ref err) = ch.error {
+                        tracing::debug!(
+                            "Challenge has error but status is {} (will keep polling): {err}",
+                            ch.status
+                        );
+                    }
+                }
+
+                match a.status {
+                    AuthorizationStatus::Valid => break,
+                    AuthorizationStatus::Invalid => {
+                        if let Some(handle) = serve_task.take() {
+                            handle.abort();
+                        }
+                        if let Some(ref f) = challenge_file {
+                            challenge::http01::cleanup_challenge_file(f).await;
+                        }
+                        let detail = a
+                            .challenges
+                            .iter()
+                            .find(|c| c.challenge_type == challenge_type)
+                            .and_then(|c| c.error.as_ref())
+                            .map(|e| format!(": {e}"))
+                            .unwrap_or_default();
+                        anyhow::bail!(
+                            "authorization failed for {}{detail}",
+                            authz.identifier.value
+                        );
+                    }
+                    _ => continue,
+                }
+            }
+
+            // Clean up after successful validation
+            if let Some(handle) = serve_task.take() {
+                handle.abort();
+            }
+            if let Some(ref f) = challenge_file {
+                challenge::http01::cleanup_challenge_file(f).await;
             }
         }
-
-        // Clean up after successful validation
-        if let Some(handle) = serve_task.take() {
-            handle.abort();
-        }
-        if let Some(ref f) = challenge_file {
-            challenge::http01::cleanup_challenge_file(f);
-        }
-    }
     } // end sequential authorization
 
     // ── Finalize ────────────────────────────────────────────────────────
-    info!("Step {}: Finalizing order", if pre_authorize { 5 } else { 4 });
+    info!(
+        "Step {}: Finalizing order",
+        if pre_authorize { 5 } else { 4 }
+    );
     let (csr_der, key_pem) = generate_csr(&domains, cert_key_alg)?;
     let finalize_url = order.finalize.clone();
     let mut order = client.finalize_order(&finalize_url, &csr_der).await?;
@@ -3186,7 +3764,10 @@ async fn cmd_run(
     }
 
     // ── Poll order ──────────────────────────────────────────────────────
-    info!("Step {}: Waiting for certificate issuance", if pre_authorize { 6 } else { 5 });
+    info!(
+        "Step {}: Waiting for certificate issuance",
+        if pre_authorize { 6 } else { 5 }
+    );
     while order.status != OrderStatus::Valid {
         if order.status == OrderStatus::Invalid {
             anyhow::bail!("order became invalid");
@@ -3199,7 +3780,10 @@ async fn cmd_run(
     }
 
     // ── Download certificate ────────────────────────────────────────────
-    info!("Step {}: Downloading certificate", if pre_authorize { 7 } else { 6 });
+    info!(
+        "Step {}: Downloading certificate",
+        if pre_authorize { 7 } else { 6 }
+    );
     let cert_url = order
         .certificate
         .context("order is valid but has no certificate URL")?;
@@ -3210,7 +3794,11 @@ async fn cmd_run(
     } else if let Some(path) = key_password_file {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read password file: {}", path.display()))?;
-        content.lines().next().map(|line| line.trim().to_string()).filter(|pw| !pw.is_empty())
+        content
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .filter(|pw| !pw.is_empty())
     } else {
         None
     };
@@ -3234,15 +3822,18 @@ async fn cmd_run(
     std::fs::write(cert_output, &cert)
         .with_context(|| format!("failed to write certificate to {}", cert_output.display()))?;
     if json && !silent {
-        println!("{}", serde_json::json!({
-            "command": "run",
-            "action": "issued",
-            "domains": domains,
-            "cert_path": cert_output.display().to_string(),
-            "key_path": key_output.display().to_string(),
-            "key_encrypted": key_encrypted,
-            "profile": profile,
-        }));
+        println!(
+            "{}",
+            serde_json::json!({
+                "command": "run",
+                "action": "issued",
+                "domains": domains,
+                "cert_path": cert_output.display().to_string(),
+                "key_path": key_output.display().to_string(),
+                "key_encrypted": key_encrypted,
+                "profile": profile,
+            })
+        );
     } else if !silent {
         println!("Certificate saved to {}", cert_output.display());
         if print_cert {
@@ -3252,12 +3843,18 @@ async fn cmd_run(
 
     if let Some(script) = on_cert_issued {
         let domains_joined = domains.join(",");
-        run_hook(script, &[
-            ("ACME_DOMAINS", &domains_joined),
-            ("ACME_CERT_PATH", &cert_output.display().to_string()),
-            ("ACME_KEY_PATH", &key_output.display().to_string()),
-            ("ACME_KEY_ENCRYPTED", if key_encrypted { "true" } else { "false" }),
-        ])?;
+        run_hook(
+            script,
+            &[
+                ("ACME_DOMAINS", &domains_joined),
+                ("ACME_CERT_PATH", &cert_output.display().to_string()),
+                ("ACME_KEY_PATH", &key_output.display().to_string()),
+                (
+                    "ACME_KEY_ENCRYPTED",
+                    if key_encrypted { "true" } else { "false" },
+                ),
+            ],
+        )?;
     }
 
     Ok(())
@@ -3336,4 +3933,3 @@ mod tests {
         assert!(!is_challenge_terminal(&ch));
     }
 }
-

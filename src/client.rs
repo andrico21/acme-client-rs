@@ -3,14 +3,18 @@
 //! Every mutating request is a signed JWS POST.  Nonces are cached from
 //! response headers and a single automatic retry is performed on `badNonce`.
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, info, warn};
 
 use crate::jws::AccountKey;
-use crate::types::*;
+use crate::types::{
+    Account, AcmeError, Authorization, Challenge, DeactivateAccountRequest, Directory,
+    FinalizeRequest, Identifier, NewAccountRequest, NewAuthorizationRequest, NewOrderRequest,
+    Order, RenewalInfo, RevokeCertRequest,
+};
 
 use std::collections::HashMap;
 
@@ -28,13 +32,12 @@ struct AcmeResponse {
 
 impl AcmeResponse {
     fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
-        serde_json::from_slice(&self.body)
-            .with_context(|| {
-                format!(
-                    "failed to parse response body: {}",
-                    String::from_utf8_lossy(&self.body)
-                )
-            })
+        serde_json::from_slice(&self.body).with_context(|| {
+            format!(
+                "failed to parse response body: {}",
+                String::from_utf8_lossy(&self.body)
+            )
+        })
     }
 
     fn location(&self) -> Result<String> {
@@ -85,6 +88,7 @@ impl AcmeClient {
     ) -> Result<Self> {
         let http = reqwest::Client::builder()
             .user_agent(USER_AGENT_VALUE)
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .danger_accept_invalid_certs(danger_accept_invalid_certs)
             .build()
             .context("failed to build HTTP client")?;
@@ -99,9 +103,7 @@ impl AcmeClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            bail!(
-                "ACME directory request failed (HTTP {status}): {body}",
-            );
+            bail!("ACME directory request failed (HTTP {status}): {body}");
         }
 
         let directory: Directory = resp.json().await.context("failed to parse directory")?;
@@ -164,10 +166,10 @@ impl AcmeClient {
     }
 
     fn save_nonce(&mut self, headers: &reqwest::header::HeaderMap) {
-        if let Some(val) = headers.get("replay-nonce") {
-            if let Ok(s) = val.to_str() {
-                self.nonce = Some(s.to_string());
-            }
+        if let Some(val) = headers.get("replay-nonce")
+            && let Ok(s) = val.to_str()
+        {
+            self.nonce = Some(s.to_string());
         }
     }
 
@@ -178,9 +180,7 @@ impl AcmeClient {
             let nonce = self.get_nonce().await?;
 
             let body = match self.account_url {
-                Some(ref kid) => {
-                    self.account_key.sign_with_kid(payload, &nonce, url, kid)?
-                }
+                Some(ref kid) => self.account_key.sign_with_kid(payload, &nonce, url, kid)?,
                 None => self.account_key.sign_with_jwk(payload, &nonce, url)?,
             };
 
@@ -201,15 +201,13 @@ impl AcmeClient {
             let body_bytes = resp.bytes().await?.to_vec();
 
             // On first attempt, check for badNonce and retry (RFC 8555 §6.5)
-            if attempt == 0 && status == reqwest::StatusCode::BAD_REQUEST {
-                if let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes) {
-                    if err.error_type.as_deref()
-                        == Some("urn:ietf:params:acme:error:badNonce")
-                    {
-                        warn!("Received badNonce - retrying with fresh nonce");
-                        continue;
-                    }
-                }
+            if attempt == 0
+                && status == reqwest::StatusCode::BAD_REQUEST
+                && let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes)
+                && err.error_type.as_deref() == Some("urn:ietf:params:acme:error:badNonce")
+            {
+                warn!("Received badNonce - retrying with fresh nonce");
+                continue;
             }
 
             return Ok(AcmeResponse {
@@ -306,7 +304,8 @@ impl AcmeClient {
         replaces: String,
         profile: Option<String>,
     ) -> Result<(Order, String)> {
-        self.new_order_inner(identifiers, Some(replaces), profile).await
+        self.new_order_inner(identifiers, Some(replaces), profile)
+            .await
     }
 
     async fn new_order_inner(
@@ -338,11 +337,7 @@ impl AcmeClient {
     }
 
     /// Finalize an order by submitting a CSR (RFC 8555 §7.4).
-    pub async fn finalize_order(
-        &mut self,
-        finalize_url: &str,
-        csr_der: &[u8],
-    ) -> Result<Order> {
+    pub async fn finalize_order(&mut self, finalize_url: &str, csr_der: &[u8]) -> Result<Order> {
         info!("Finalizing order");
         let payload = serde_json::to_string(&FinalizeRequest {
             csr: URL_SAFE_NO_PAD.encode(csr_der),
@@ -373,10 +368,7 @@ impl AcmeClient {
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
     ///
     /// The payload is an empty JSON object `{}`.
-    pub async fn respond_to_challenge(
-        &mut self,
-        challenge_url: &str,
-    ) -> Result<Challenge> {
+    pub async fn respond_to_challenge(&mut self, challenge_url: &str) -> Result<Challenge> {
         info!("Responding to challenge: {challenge_url}");
         let resp = self.signed_request(challenge_url, "{}").await?;
         resp.ensure_success()?;
@@ -438,7 +430,10 @@ impl AcmeClient {
             .new_authz
             .clone()
             .context("server does not support pre-authorization (no newAuthz in directory)")?;
-        info!("Pre-authorizing identifier: {} ({})", identifier.value, identifier.identifier_type);
+        info!(
+            "Pre-authorizing identifier: {} ({})",
+            identifier.value, identifier.identifier_type
+        );
         let payload = serde_json::to_string(&NewAuthorizationRequest { identifier })?;
         let resp = self.signed_request(&url, &payload).await?;
         resp.ensure_success()?;
@@ -448,11 +443,7 @@ impl AcmeClient {
     }
 
     /// Revoke a certificate (RFC 8555 §7.6).
-    pub async fn revoke_certificate(
-        &mut self,
-        cert_der: &[u8],
-        reason: Option<u8>,
-    ) -> Result<()> {
+    pub async fn revoke_certificate(&mut self, cert_der: &[u8], reason: Option<u8>) -> Result<()> {
         info!("Revoking certificate");
         let payload = serde_json::to_string(&RevokeCertRequest {
             certificate: URL_SAFE_NO_PAD.encode(cert_der),
@@ -531,6 +522,10 @@ pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
         .find(|ext| ext.oid == oid_registry::OID_X509_EXT_AUTHORITY_KEY_IDENTIFIER)
         .context("certificate has no Authority Key Identifier extension")?;
 
+    #[allow(
+        clippy::wildcard_enum_match_arm,
+        reason = "x509-parser ParsedExtension is upstream non-exhaustive; only AuthorityKeyIdentifier is relevant here"
+    )]
     let aki = match aki_ext.parsed_extension() {
         ParsedExtension::AuthorityKeyIdentifier(aki) => aki
             .key_identifier

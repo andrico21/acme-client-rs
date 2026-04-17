@@ -4,6 +4,30 @@ version = "1.9.2"
 edition = "2024"
 license = "Apache-2.0"
 
+# ── Lint posture ──────────────────────────────────────────────────────────────
+# Enforces the project's Rust guidelines. See RUST_GUIDELINES.md.
+[lints.clippy]
+all        = { level = "deny",  priority = -1 }
+pedantic   = { level = "warn",  priority = -1 }
+# Error handling — no implicit panics in library code.
+unwrap_used        = "deny"
+expect_used        = "warn"
+panic              = "deny"
+todo               = "deny"
+unimplemented      = "deny"
+# Type safety / defensive programming.
+indexing_slicing        = "warn"
+wildcard_enum_match_arm = "warn"
+fallible_impl_from      = "warn"
+# Ownership / performance.
+redundant_clone       = "warn"
+needless_pass_by_value = "warn"
+clone_on_ref_ptr       = "warn"
+# Pedantic lints that are noisy for this CLI — relax individually when justified.
+module_name_repetitions = "allow"
+missing_errors_doc      = "allow"
+missing_panics_doc      = "allow"
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"

@@ -30,7 +30,7 @@ jobs:
     name: Build & Test (Linux)
     runs-on: ubuntu-24.04
     container:
-      image: rust:1.94.1-alpine
+      image: rust:1.95.0-alpine
     steps:
       - uses: actions/checkout@v6
 
@@ -63,7 +63,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.94.1
+          toolchain: 1.95.0
 
       - name: Build
         env:

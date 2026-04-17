@@ -110,8 +110,9 @@ pub struct AccountConfig {
 impl Config {
     /// Load a config file from the given path. Returns an error if the file
     /// cannot be read or parsed.
-    pub fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
+    pub async fn load(path: &Path) -> Result<Self> {
+        let content = tokio::fs::read_to_string(path)
+            .await
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         let config: Config = toml::from_str(&content)
             .with_context(|| format!("failed to parse config file: {}", path.display()))?;
@@ -127,6 +128,10 @@ impl Config {
 // ── Self-documented template ────────────────────────────────────────────────
 
 /// Return a fully commented TOML config template.
+#[allow(
+    clippy::too_many_lines,
+    reason = "embedded documentation; splitting would fragment the TOML template"
+)]
 pub fn generate_template() -> &'static str {
     r#"# acme-client-rs configuration file
 # All fields are optional. CLI flags always override config file values.

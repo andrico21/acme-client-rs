@@ -9,11 +9,11 @@
 //! - ES384 (ECDSA P-384 + SHA-384)
 //! - ES512 (ECDSA P-521 + SHA-512)
 //! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256)
-//! - EdDSA (Ed25519)
+//! - `EdDSA` (Ed25519)
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ecdsa::signature::Signer;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -35,7 +35,7 @@ pub enum KeyAlgorithm {
     Rsa2048,
     /// RSA 4096-bit + PKCS#1 v1.5 + SHA-256
     Rsa4096,
-    /// Ed25519 (EdDSA)
+    /// Ed25519 (`EdDSA`)
     Ed25519,
 }
 
@@ -211,6 +211,16 @@ impl AccountKey {
     }
 
     /// Build the JWK (public-key only) as a JSON value (RFC 7517).
+    ///
+    /// # Panics
+    ///
+    /// The `.expect("valid EC point")` calls below are safe: every NIST
+    /// curve signing key constructed through `Self::generate` or
+    /// `Self::from_pkcs8_pem` is validated by the underlying crate, so its
+    /// verifying key always decompresses to an affine point with both x
+    /// and y coordinates present. The same applies to the P-521 detour via
+    /// `ecdsa::SigningKey::from_bytes`.
+    #[allow(clippy::expect_used, reason = "proven invariants documented above")]
     pub fn jwk(&self) -> serde_json::Value {
         match &self.inner {
             KeyInner::Es256(sk) => {
@@ -266,6 +276,13 @@ impl AccountKey {
     ///
     /// Used in key authorizations: `token || '.' || thumbprint`.
     /// Required members in lexicographic order per key type.
+    ///
+    /// # Panics
+    ///
+    /// See `jwk()` — the `expect` calls hold for any key produced by
+    /// `Self::generate` or `Self::from_pkcs8_pem`, which are the only
+    /// supported construction paths.
+    #[allow(clippy::expect_used, reason = "proven invariants documented above")]
     pub fn thumbprint(&self) -> String {
         let input = match &self.inner {
             KeyInner::Es256(sk) => {
@@ -355,8 +372,7 @@ impl AccountKey {
                 sig.to_bytes().to_vec()
             }
             KeyInner::Rs256(sk) => {
-                let signing_key =
-                    rsa::pkcs1v15::SigningKey::<Sha256>::new(sk.as_ref().clone());
+                let signing_key = rsa::pkcs1v15::SigningKey::<Sha256>::new(sk.as_ref().clone());
                 let sig: rsa::pkcs1v15::Signature = signing_key.sign(data);
                 let bytes: Box<[u8]> = sig.into();
                 bytes.to_vec()
@@ -378,8 +394,7 @@ impl AccountKey {
             "jwk": self.jwk(),
             "url": url,
         });
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
         let sig_bytes = self.sign_raw(signing_input.as_bytes());
@@ -397,12 +412,7 @@ impl AccountKey {
     ///
     /// The payload is the account's public JWK, signed with HMAC-SHA256
     /// using the EAB key provided by the CA.
-    pub fn sign_eab(
-        &self,
-        eab_kid: &str,
-        hmac_key: &[u8],
-        url: &str,
-    ) -> Result<serde_json::Value> {
+    pub fn sign_eab(&self, eab_kid: &str, hmac_key: &[u8], url: &str) -> Result<serde_json::Value> {
         use hmac::{Hmac, Mac};
         type HmacSha256 = Hmac<Sha256>;
 
@@ -411,17 +421,14 @@ impl AccountKey {
             "kid": eab_kid,
             "url": url,
         });
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
-        let payload_b64 =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk())?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk())?.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
 
-        let mut mac = HmacSha256::new_from_slice(hmac_key)
-            .context("invalid HMAC key length")?;
+        let mut mac = HmacSha256::new_from_slice(hmac_key).context("invalid HMAC key length")?;
         mac.update(signing_input.as_bytes());
         let sig = mac.finalize().into_bytes();
-        let sig_b64 = URL_SAFE_NO_PAD.encode(&sig);
+        let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
 
         Ok(serde_json::json!({
             "protected": protected,
@@ -432,8 +439,7 @@ impl AccountKey {
 
     /// Produce a JWS Flattened JSON Serialization.
     fn sign_jws(&self, header: &ProtectedHeader<'_>, payload: &str) -> Result<String> {
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(header)?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(header)?.as_bytes());
 
         let payload_b64 = if payload.is_empty() {
             String::new()
