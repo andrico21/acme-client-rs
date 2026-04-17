@@ -631,6 +631,7 @@ async fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
     }
 }
 
+#[allow(clippy::too_many_lines)] // straight-line config-merge logic; clearer as one fn than split
 fn apply_config(
     cli: &mut Cli,
     matches: &clap::ArgMatches,
@@ -897,6 +898,7 @@ fn apply_config(
     }
 }
 
+#[allow(clippy::too_many_lines)] // top-level command dispatcher
 async fn run(
     cli: Cli,
     loaded_config: Option<&config::Config>,
@@ -1067,6 +1069,7 @@ fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
 /// Parse a PEM certificate and return the set of SAN identifiers (DNS names + IPs).
 ///
 /// DNS names are lowercased; IP addresses are canonicalized via `std::net::IpAddr`.
+#[allow(clippy::wildcard_enum_match_arm)] // x509_parser::GeneralName has many variants; we only care about DNS/IP
 fn cert_san_identifiers(path: &std::path::Path) -> Result<std::collections::BTreeSet<String>> {
     use x509_parser::prelude::*;
 
@@ -1094,21 +1097,21 @@ fn cert_san_identifiers(path: &std::path::Path) -> Result<std::collections::BTre
                 GeneralName::IPAddress(bytes) => {
                     // IPv4 = 4 bytes, IPv6 = 16 bytes
                     let ip: Option<std::net::IpAddr> = match bytes.len() {
-                        4 => Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(
-                            bytes[0], bytes[1], bytes[2], bytes[3],
-                        ))),
-                        16 => {
-                            let mut octets = [0u8; 16];
-                            octets.copy_from_slice(bytes);
-                            Some(std::net::IpAddr::V6(std::net::Ipv6Addr::from(octets)))
-                        }
+                        4 => <[u8; 4]>::try_from(*bytes)
+                            .ok()
+                            .map(std::net::Ipv4Addr::from)
+                            .map(std::net::IpAddr::V4),
+                        16 => <[u8; 16]>::try_from(*bytes)
+                            .ok()
+                            .map(std::net::Ipv6Addr::from)
+                            .map(std::net::IpAddr::V6),
                         _ => None,
                     };
                     if let Some(addr) = ip {
                         ids.insert(addr.to_string());
                     }
                 }
-                _ => {} // Ignore other GeneralName types
+                _ => {} // Ignore other GeneralName types (RFC822, URI, etc.)
             }
         }
     }
@@ -1152,10 +1155,14 @@ async fn build_client(cli: &Cli) -> Result<AcmeClient> {
 fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, String)> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
+    let common_name = domains
+        .first()
+        .context("generate_csr requires at least one domain")?
+        .clone();
     let mut params =
         CertificateParams::new(domains.to_vec()).context("failed to create CSR parameters")?;
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, domains[0].clone());
+    dn.push(DnType::CommonName, common_name);
     params.distinguished_name = dn;
     let key_pair = match alg {
         CertKeyAlgorithm::EcP256 => KeyPair::generate(),
@@ -1204,6 +1211,7 @@ fn encrypt_private_key(key_pem: &str, password: &str) -> Result<String> {
 
 // ── Individual command handlers ─────────────────────────────────────────────
 
+#[allow(clippy::unnecessary_wraps)] // Result keeps signature uniform with other Commands handlers
 fn cmd_generate_config(silent: bool) -> Result<()> {
     if !silent {
         print!("{}", config::generate_template());
@@ -1211,7 +1219,10 @@ fn cmd_generate_config(silent: bool) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)] // CLI presentation; cohesive single-purpose printer
+#[allow(
+    clippy::too_many_lines, // CLI presentation; cohesive single-purpose printer
+    clippy::indexing_slicing // serde_json::Value indexing on locally constructed objects
+)]
 fn cmd_show_config(
     cli: &Cli,
     loaded_config: Option<&config::Config>,
@@ -2297,6 +2308,7 @@ struct RenewalDecision {
 /// Performs the §0 pre-issuance checks: domain mismatch, ARI (RFC 9702), and
 /// days-based threshold. Returns `Ok(None)` to signal `cmd_run` should exit
 /// without issuing (renewal skipped); returns `Ok(Some(_))` to proceed.
+#[allow(clippy::too_many_lines)] // pre-issuance §0 checks: cohesive single-purpose pipeline
 async fn check_renewal_status(
     cli: &Cli,
     cert_output: &std::path::Path,
@@ -2544,7 +2556,12 @@ async fn check_renewal_status(
     }))
 }
 
-#[allow(clippy::too_many_arguments)] // TODO: Phase 2 — refactor to RunOpts struct
+#[allow(
+    clippy::too_many_arguments, // TODO: Phase 2 — refactor to RunOpts struct
+    clippy::too_many_lines,     // TODO: Phase 2 — break into per-challenge helpers
+    clippy::fn_params_excessive_bools, // ditto: collapse flags into RunOpts struct
+    clippy::wildcard_enum_match_arm    // AuthorizationStatus: Pending/Processing/etc. all mean "keep polling"
+)]
 async fn cmd_run(
     cli: &Cli,
     domains: Vec<String>,
@@ -2669,6 +2686,8 @@ async fn cmd_run(
                                 let (mut stream, _addr) = listener.accept().await?;
                                 let mut buf = vec![0u8; 4096];
                                 let n = stream.read(&mut buf).await?;
+                                // AsyncRead contract: 0 <= n <= buf.len()
+                                #[allow(clippy::indexing_slicing)]
                                 let req = String::from_utf8_lossy(&buf[..n]);
                                 if req.contains(&path) {
                                     let resp = format!(
@@ -2787,18 +2806,19 @@ async fn cmd_run(
                         .issuer_domain_names
                         .as_ref()
                         .context("dns-persist-01 challenge has no issuer-domain-names")?;
-                    if issuer_names.is_empty() || issuer_names.len() > 10 {
-                        anyhow::bail!(
+                    let primary_issuer = match issuer_names.as_slice() {
+                        [first, rest @ ..] if rest.len() < 10 => first,
+                        _ => anyhow::bail!(
                             "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
-                        );
-                    }
+                        ),
+                    };
                     let account_uri = client
                         .account_url()
                         .context("account URL not known - cannot construct dns-persist-01 record")?
                         .to_string();
                     let txt_name = challenge::dns_persist01::record_name(&authz.identifier.value);
                     let txt_value = challenge::dns_persist01::txt_record_value(
-                        &issuer_names[0],
+                        primary_issuer,
                         &account_uri,
                         persist_policy,
                         persist_until,
@@ -3051,6 +3071,7 @@ async fn cmd_run(
             txt_name: String,
             txt_value: String,
         }
+        #[allow(clippy::expect_used)] // verified above by use_parallel_dns check
         let hook = dns_hook.expect("dns_hook presence verified above by use_parallel_dns check");
 
         // Phase 1: Fetch all authorizations and create DNS records
@@ -3108,18 +3129,19 @@ async fn cmd_run(
                     .issuer_domain_names
                     .as_ref()
                     .context("dns-persist-01 challenge has no issuer-domain-names")?;
-                if issuer_names.is_empty() || issuer_names.len() > 10 {
-                    anyhow::bail!(
+                let primary_issuer = match issuer_names.as_slice() {
+                    [first, rest @ ..] if rest.len() < 10 => first,
+                    _ => anyhow::bail!(
                         "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
-                    );
-                }
+                    ),
+                };
                 let account_uri = client
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
                 let name = challenge::dns_persist01::record_name(&authz.identifier.value);
                 let value = challenge::dns_persist01::txt_record_value(
-                    &issuer_names[0],
+                    primary_issuer,
                     &account_uri,
                     persist_policy,
                     persist_until,
@@ -3185,6 +3207,8 @@ async fn cmd_run(
                     let domain = p.domain.clone();
                     let sem = std::sync::Arc::clone(&semaphore);
                     set.spawn(async move {
+                        #[allow(clippy::expect_used)]
+                        // semaphore is owned by enclosing scope; never closed before tasks finish
                         let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout_secs);
@@ -3450,6 +3474,8 @@ async fn cmd_run(
                                 tracing::debug!("HTTP-01: connection from {addr}");
                                 let mut buf = vec![0u8; 4096];
                                 let n = stream.read(&mut buf).await?;
+                                // AsyncRead contract: 0 <= n <= buf.len()
+                                #[allow(clippy::indexing_slicing)]
                                 let req = String::from_utf8_lossy(&buf[..n]);
                                 if req.contains(&path) {
                                     let resp = format!(
@@ -3566,18 +3592,19 @@ async fn cmd_run(
                         .issuer_domain_names
                         .as_ref()
                         .context("dns-persist-01 challenge has no issuer-domain-names")?;
-                    if issuer_names.is_empty() || issuer_names.len() > 10 {
-                        anyhow::bail!(
+                    let primary_issuer = match issuer_names.as_slice() {
+                        [first, rest @ ..] if rest.len() < 10 => first,
+                        _ => anyhow::bail!(
                             "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
-                        );
-                    }
+                        ),
+                    };
                     let account_uri = client
                         .account_url()
                         .context("account URL not known - cannot construct dns-persist-01 record")?
                         .to_string();
                     let txt_name = challenge::dns_persist01::record_name(&authz.identifier.value);
                     let txt_value = challenge::dns_persist01::txt_record_value(
-                        &issuer_names[0],
+                        primary_issuer,
                         &account_uri,
                         persist_policy,
                         persist_until,
