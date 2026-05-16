@@ -197,7 +197,7 @@ done
 
 log_test "02" "Generate Key - File Already Exists (overwrite)"
 HASH1=$(sha256sum "${WORK_DIR}/tc01-account.key" | awk '{print $1}')
-OUTPUT=$(acme generate-key --account-key "${WORK_DIR}/tc01-account.key" 2>&1)
+OUTPUT=$(acme generate-key --account-key "${WORK_DIR}/tc01-account.key" --force 2>&1)
 HASH2=$(sha256sum "${WORK_DIR}/tc01-account.key" | awk '{print $1}')
 if [[ "${HASH1}" != "${HASH2}" ]]; then
   pass "Key file overwritten with new key (hash changed)"
