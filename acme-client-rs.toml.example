@@ -51,6 +51,32 @@
 # Default: 15
 # connect_timeout = 30
 
+# Allow contacting private/loopback/link-local IP addresses (RFC1918, 127/8,
+# 169.254/16, ::1, fc00::/7, fe80::/10, etc.). Default BLOCKS to prevent SSRF.
+# Implied by `insecure`. Set this for internal/on-prem ACME deployments.
+# CLI: --allow-private-network
+# Env: ACME_ALLOW_PRIVATE_NETWORK
+# Default: false
+# allow_private_network = true
+
+# Resolver strategy for DNS-01 propagation checks. One of:
+#   "authoritative" - query the zone's NS directly (bypasses caches, matches
+#                     CA-side reads). RECOMMENDED.
+#   "cached"        - use public resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9).
+#   "system"        - use the host's /etc/resolv.conf.
+# CLI: --dns-check-mode
+# Env: ACME_DNS_CHECK_MODE
+# Default: "authoritative"
+# dns_check_mode = "cached"
+
+# Enable DNSSEC validation on DNS-01 propagation checks. Off by default
+# (parent-zone DNSSEC misconfig outside our control would cause spurious
+# failures).
+# CLI: --dns-check-dnssec
+# Env: ACME_DNS_CHECK_DNSSEC
+# Default: false
+# dns_check_dnssec = true
+
 # Downgrade hook-script ownership/permission violations (SEC-13) from hard
 # errors to stderr warnings. By default the client refuses to run if any
 # configured hook script is not an absolute path, not owned by the running user
