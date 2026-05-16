@@ -33,7 +33,7 @@ ACME_SERVER="$1"
 TEST_DOMAIN="$2"
 INSECURE_FLAG=""
 if [[ "${3:-}" == "--insecure" ]]; then
-  INSECURE_FLAG="--insecure"
+  INSECURE_FLAG="--insecure --allow-private-network"
 fi
 
 # ── Derived domain names ─────────────────────────────────────────────────────
