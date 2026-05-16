@@ -122,7 +122,17 @@ fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
         }
         let dst = stat(dir).with_context(|| format!("stat({}) failed", dir.display()))?;
         let dmode = dst.st_mode & 0o7777;
-        if dmode & 0o022 != 0 {
+        // World/group-writable directories normally allow an attacker to swap
+        // the hook script via unlink+rename. POSIX, however, gives the sticky
+        // bit (0o1000) a precise meaning: in a sticky directory only the
+        // file's owner, the directory's owner, or root may unlink or rename a
+        // file. That is exactly the swap attack we are guarding against, so a
+        // sticky world/group-writable directory (the standard /tmp = 1777)
+        // does NOT in fact give the attacker unlink/rename capability and
+        // must not be flagged. Direct in-place writes by group members are
+        // already prevented by the file-permission check at line 105 above.
+        let sticky = dmode & 0o1000 != 0;
+        if dmode & 0o022 != 0 && !sticky {
             violations.push(format!(
                 "directory {} above hook {} has insecure permissions {:#o}; an \
                  unprivileged user can replace the hook script via unlink+rename",
@@ -261,6 +271,20 @@ mod tests {
         write_hook(&hook, 0o777);
         let err = validate_all_hooks(&[("dns_hook", Some(&hook))], false).unwrap_err();
         assert!(err.to_string().contains("refusing to run"));
+    }
+
+    #[test]
+    fn sticky_world_writable_parent_accepted() {
+        let dir = tempdir().unwrap();
+        set_permissions(dir.path(), Permissions::from_mode(0o1777)).unwrap();
+        let hook = dir.path().join("hook.sh");
+        write_hook(&hook, 0o755);
+        let res = check_hook_path(&hook).unwrap();
+        assert!(
+            matches!(res, HookCheck::Ok),
+            "sticky world-writable parent (1777) must not be flagged",
+        );
+        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
     }
 
     #[test]
