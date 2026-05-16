@@ -43,6 +43,9 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Test-script output-safety lint
+        run: bash tests/lint-output-safety.sh
+
   build-linux:
     name: Build & Test (Linux)
     runs-on: ubuntu-24.04
