@@ -906,6 +906,7 @@ if [[ -f "${RENEWAL_CERT}" ]]; then
     --cert-output "${RENEWAL_CERT}" \
     --key-output "${RENEWAL_PRIVKEY}" \
     --days 9999 \
+    --force \
     "${SINGLE_DOMAIN}" 2>&1)
 
   HASH_AFTER=$(sha256sum "${RENEWAL_CERT}" | awk '{print $1}')
