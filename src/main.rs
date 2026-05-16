@@ -3455,7 +3455,8 @@ async fn cmd_run(
 
                 let semaphore =
                     std::sync::Arc::new(tokio::sync::Semaphore::new(dns_propagation_concurrency));
-                let mut set = tokio::task::JoinSet::new();
+                let mut set: tokio::task::JoinSet<anyhow::Result<(String, bool)>> =
+                    tokio::task::JoinSet::new();
                 for p in &pending {
                     let name = p.txt_name.clone();
                     let value = p.txt_value.clone();
@@ -3470,7 +3471,11 @@ async fn cmd_run(
                             match dns_txt_check(&checker, &name, &value).await {
                                 Ok(true) => return Ok((domain, true)),
                                 Ok(false) => {}
-                                Err(e) => return Err(e),
+                                // Transient resolver errors (NXDOMAIN, SERVFAIL, timeout)
+                                // are treated as "not yet propagated" so the deadline path
+                                // runs and the cleanup hook fires. Bailing here would skip
+                                // cleanup and leak the TXT record (TC-40b/d regression).
+                                Err(_) => {}
                             }
                             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
                         }
