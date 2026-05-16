@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 // ── Challenge type constants (RFC 8555 §8) ──────────────────────────────────

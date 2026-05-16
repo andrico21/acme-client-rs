@@ -2,8 +2,8 @@
 //!
 //! Each sub-module computes the required proof material per RFC 8555 §8.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 use crate::jws::AccountKey;
@@ -18,7 +18,7 @@ pub fn key_authorization(token: &str, account_key: &AccountKey) -> String {
 
 pub mod http01 {
     use super::*;
-    use anyhow::{bail, Context, Result};
+    use anyhow::{Context, Result, bail};
     use std::path::{Path, PathBuf};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tracing::info;
@@ -113,9 +113,8 @@ pub mod http01 {
                 file_path.display()
             )
         })?;
-        f.write_all(auth.as_bytes()).with_context(|| {
-            format!("failed to write challenge file {}", file_path.display())
-        })?;
+        f.write_all(auth.as_bytes())
+            .with_context(|| format!("failed to write challenge file {}", file_path.display()))?;
         info!("HTTP-01: wrote challenge to {}", file_path.display());
         Ok(file_path)
     }
@@ -135,9 +134,7 @@ pub mod http01 {
     ///
     /// If the port is already in use, returns a user-friendly error
     /// suggesting `--challenge-dir`.
-    pub async fn bind_or_suggest(
-        port: u16,
-    ) -> Result<tokio::net::TcpListener> {
+    pub async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => Ok(listener),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {

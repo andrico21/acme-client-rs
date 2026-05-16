@@ -27,7 +27,7 @@
 //! DACL-based and does not map onto these POSIX bits); a single advisory is
 //! printed to stderr on first use.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// Outcome of validating a hook path. Callers decide how to act (fail vs warn).
@@ -69,7 +69,7 @@ fn windows_advisory_once() {
 #[cfg(unix)]
 fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
     use nix::sys::stat::stat;
-    use nix::unistd::{geteuid, Uid};
+    use nix::unistd::{Uid, geteuid};
     use std::os::unix::ffi::OsStrExt;
 
     let mut violations: Vec<String> = Vec::new();
@@ -179,7 +179,7 @@ pub fn validate_all_hooks(hooks: &[(&str, Option<&Path>)], unsafe_hooks: bool) -
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::fs::{set_permissions, File, Permissions};
+    use std::fs::{File, Permissions, set_permissions};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;

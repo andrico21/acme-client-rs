@@ -3,9 +3,9 @@
 //! Every mutating request is a signed JWS POST.  Nonces are cached from
 //! response headers and a single automatic retry is performed on `badNonce`.
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::CONTENT_TYPE;
 use tracing::{debug, info, warn};
 
@@ -54,8 +54,12 @@ fn is_private_or_special_ip(ip: IpAddr) -> bool {
 }
 
 fn is_private_or_special_ipv4(ip: Ipv4Addr) -> bool {
-    if ip.is_loopback() || ip.is_private() || ip.is_link_local()
-        || ip.is_multicast() || ip.is_broadcast() || ip.is_unspecified()
+    if ip.is_loopback()
+        || ip.is_private()
+        || ip.is_link_local()
+        || ip.is_multicast()
+        || ip.is_broadcast()
+        || ip.is_unspecified()
         || ip.is_documentation()
     {
         return true;
@@ -111,19 +115,20 @@ fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
 /// connect-time inside `SsrfSafeResolver`, which closes the DNS-rebinding
 /// race that synchronous resolution would leave open.
 pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
-    let parsed = reqwest::Url::parse(url)
-        .with_context(|| format!("invalid URL {url:?}"))?;
+    let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid URL {url:?}"))?;
     let scheme = parsed.scheme();
     if scheme != "https" && scheme != "http" {
         bail!("URL must use https:// (got scheme {scheme:?}); refusing {url:?}");
     }
     let host = parsed.host_str().unwrap_or("");
     let host_ip: Option<IpAddr> = host
-        .trim_start_matches('[').trim_end_matches(']')
-        .parse().ok();
-    let is_loopback_host = host_ip.map(|ip| ip.is_loopback()).unwrap_or_else(||
-        matches!(host, "localhost")
-    );
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse()
+        .ok();
+    let is_loopback_host = host_ip
+        .map(|ip| ip.is_loopback())
+        .unwrap_or_else(|| matches!(host, "localhost"));
     if scheme == "http" {
         if !insecure {
             bail!(
@@ -139,13 +144,14 @@ pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Resu
         }
     }
     let allow_private = allow_private || insecure;
-    if let Some(ip) = host_ip {
-        if !allow_private && is_private_or_special_ip(ip) {
-            bail!(
-                "refusing to contact private/loopback/special-purpose IP {ip} in {url:?}; \
+    if let Some(ip) = host_ip
+        && !allow_private
+        && is_private_or_special_ip(ip)
+    {
+        bail!(
+            "refusing to contact private/loopback/special-purpose IP {ip} in {url:?}; \
                  pass --allow-private-network to override (e.g. for an internal CA)"
-            );
-        }
+        );
     }
     Ok(())
 }
@@ -169,13 +175,13 @@ impl reqwest::dns::Resolve for SsrfSafeResolver {
         let allow_private = self.allow_private;
         Box::pin(async move {
             let host = name.as_str().to_owned();
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
-                .collect();
+            let addrs: Vec<SocketAddr> =
+                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
             let filtered: Vec<SocketAddr> = if allow_private {
                 addrs
             } else {
-                addrs.into_iter()
+                addrs
+                    .into_iter()
                     .filter(|sa| !is_private_or_special_ip(sa.ip()))
                     .collect()
             };
@@ -183,7 +189,8 @@ impl reqwest::dns::Resolve for SsrfSafeResolver {
                 let err: Box<dyn std::error::Error + Send + Sync> = format!(
                     "host {host:?} resolved only to private/loopback/special-purpose addresses; \
                      pass --allow-private-network to override"
-                ).into();
+                )
+                .into();
                 return Err(err);
             }
             let iter: reqwest::dns::Addrs = Box::new(filtered.into_iter());
@@ -223,7 +230,10 @@ pub fn build_http_client(
 pub fn validate_directory_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
     validate_acme_url(url, insecure, allow_private)
         .with_context(|| format!("invalid directory URL {url:?}"))?;
-    if reqwest::Url::parse(url).map(|u| u.scheme() == "http").unwrap_or(false) {
+    if reqwest::Url::parse(url)
+        .map(|u| u.scheme() == "http")
+        .unwrap_or(false)
+    {
         warn!("Using plain http:// for ACME directory (loopback only) — TESTING USE ONLY");
     }
     Ok(())
@@ -240,13 +250,12 @@ struct AcmeResponse {
 
 impl AcmeResponse {
     fn json<T: serde::de::DeserializeOwned>(&self) -> Result<T> {
-        serde_json::from_slice(&self.body)
-            .with_context(|| {
-                format!(
-                    "failed to parse response body: {}",
-                    String::from_utf8_lossy(&self.body)
-                )
-            })
+        serde_json::from_slice(&self.body).with_context(|| {
+            format!(
+                "failed to parse response body: {}",
+                String::from_utf8_lossy(&self.body)
+            )
+        })
     }
 
     fn location(&self) -> Result<String> {
@@ -298,7 +307,11 @@ impl AcmeClient {
         connect_timeout_secs: u64,
         allow_private_network: bool,
     ) -> Result<Self> {
-        let http = build_http_client(danger_accept_invalid_certs, connect_timeout_secs, allow_private_network)?;
+        let http = build_http_client(
+            danger_accept_invalid_certs,
+            connect_timeout_secs,
+            allow_private_network,
+        )?;
 
         info!("Fetching ACME directory from {}", directory_url);
         let resp = http
@@ -310,9 +323,7 @@ impl AcmeClient {
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            bail!(
-                "ACME directory request failed (HTTP {status}): {body}",
-            );
+            bail!("ACME directory request failed (HTTP {status}): {body}",);
         }
 
         let directory: Directory = resp.json().await.context("failed to parse directory")?;
@@ -375,10 +386,10 @@ impl AcmeClient {
     }
 
     fn save_nonce(&mut self, headers: &reqwest::header::HeaderMap) {
-        if let Some(val) = headers.get("replay-nonce") {
-            if let Ok(s) = val.to_str() {
-                self.nonce = Some(s.to_string());
-            }
+        if let Some(val) = headers.get("replay-nonce")
+            && let Ok(s) = val.to_str()
+        {
+            self.nonce = Some(s.to_string());
         }
     }
 
@@ -389,9 +400,7 @@ impl AcmeClient {
             let nonce = self.get_nonce().await?;
 
             let body = match self.account_url {
-                Some(ref kid) => {
-                    self.account_key.sign_with_kid(payload, &nonce, url, kid)?
-                }
+                Some(ref kid) => self.account_key.sign_with_kid(payload, &nonce, url, kid)?,
                 None => self.account_key.sign_with_jwk(payload, &nonce, url)?,
             };
 
@@ -412,15 +421,13 @@ impl AcmeClient {
             let body_bytes = resp.bytes().await?.to_vec();
 
             // On first attempt, check for badNonce and retry (RFC 8555 §6.5)
-            if attempt == 0 && status == reqwest::StatusCode::BAD_REQUEST {
-                if let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes) {
-                    if err.error_type.as_deref()
-                        == Some("urn:ietf:params:acme:error:badNonce")
-                    {
-                        warn!("Received badNonce - retrying with fresh nonce");
-                        continue;
-                    }
-                }
+            if attempt == 0
+                && status == reqwest::StatusCode::BAD_REQUEST
+                && let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes)
+                && err.error_type.as_deref() == Some("urn:ietf:params:acme:error:badNonce")
+            {
+                warn!("Received badNonce - retrying with fresh nonce");
+                continue;
             }
 
             return Ok(AcmeResponse {
@@ -517,7 +524,8 @@ impl AcmeClient {
         replaces: String,
         profile: Option<String>,
     ) -> Result<(Order, String)> {
-        self.new_order_inner(identifiers, Some(replaces), profile).await
+        self.new_order_inner(identifiers, Some(replaces), profile)
+            .await
     }
 
     async fn new_order_inner(
@@ -549,11 +557,7 @@ impl AcmeClient {
     }
 
     /// Finalize an order by submitting a CSR (RFC 8555 §7.4).
-    pub async fn finalize_order(
-        &mut self,
-        finalize_url: &str,
-        csr_der: &[u8],
-    ) -> Result<Order> {
+    pub async fn finalize_order(&mut self, finalize_url: &str, csr_der: &[u8]) -> Result<Order> {
         info!("Finalizing order");
         let payload = serde_json::to_string(&FinalizeRequest {
             csr: URL_SAFE_NO_PAD.encode(csr_der),
@@ -586,10 +590,7 @@ impl AcmeClient {
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
     ///
     /// The payload is an empty JSON object `{}`.
-    pub async fn respond_to_challenge(
-        &mut self,
-        challenge_url: &str,
-    ) -> Result<Challenge> {
+    pub async fn respond_to_challenge(&mut self, challenge_url: &str) -> Result<Challenge> {
         info!("Responding to challenge: {challenge_url}");
         let resp = self.signed_request(challenge_url, "{}").await?;
         resp.ensure_success()?;
@@ -651,7 +652,10 @@ impl AcmeClient {
             .new_authz
             .clone()
             .context("server does not support pre-authorization (no newAuthz in directory)")?;
-        info!("Pre-authorizing identifier: {} ({})", identifier.value, identifier.identifier_type);
+        info!(
+            "Pre-authorizing identifier: {} ({})",
+            identifier.value, identifier.identifier_type
+        );
         let payload = serde_json::to_string(&NewAuthorizationRequest { identifier })?;
         let resp = self.signed_request(&url, &payload).await?;
         resp.ensure_success()?;
@@ -662,11 +666,7 @@ impl AcmeClient {
     }
 
     /// Revoke a certificate (RFC 8555 §7.6).
-    pub async fn revoke_certificate(
-        &mut self,
-        cert_der: &[u8],
-        reason: Option<u8>,
-    ) -> Result<()> {
+    pub async fn revoke_certificate(&mut self, cert_der: &[u8], reason: Option<u8>) -> Result<()> {
         info!("Revoking certificate");
         let payload = serde_json::to_string(&RevokeCertRequest {
             certificate: URL_SAFE_NO_PAD.encode(cert_der),
@@ -769,14 +769,29 @@ mod tests {
 
     #[test]
     fn rejects_non_http_schemes() {
-        for url in ["file:///etc/passwd", "data:text/plain,x", "gopher://x", "ftp://x/"] {
-            assert!(validate_acme_url(url, true, true).is_err(), "{url} should be rejected");
+        for url in [
+            "file:///etc/passwd",
+            "data:text/plain,x",
+            "gopher://x",
+            "ftp://x/",
+        ] {
+            assert!(
+                validate_acme_url(url, true, true).is_err(),
+                "{url} should be rejected"
+            );
         }
     }
 
     #[test]
     fn https_public_host_ok() {
-        assert!(validate_acme_url("https://acme-v02.api.letsencrypt.org/directory", false, false).is_ok());
+        assert!(
+            validate_acme_url(
+                "https://acme-v02.api.letsencrypt.org/directory",
+                false,
+                false
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -786,8 +801,15 @@ mod tests {
 
     #[test]
     fn http_loopback_ok_with_insecure() {
-        for url in ["http://localhost/dir", "http://127.0.0.1:14000/dir", "http://[::1]/dir"] {
-            assert!(validate_acme_url(url, true, false).is_ok(), "{url} should pass");
+        for url in [
+            "http://localhost/dir",
+            "http://127.0.0.1:14000/dir",
+            "http://[::1]/dir",
+        ] {
+            assert!(
+                validate_acme_url(url, true, false).is_ok(),
+                "{url} should pass"
+            );
         }
     }
 
@@ -799,10 +821,16 @@ mod tests {
     #[test]
     fn private_ipv4_literal_rejected_by_default() {
         for url in [
-            "https://10.0.0.5/dir", "https://192.168.1.1/dir", "https://172.16.0.1/dir",
-            "https://169.254.169.254/latest/meta-data/", "https://100.64.0.1/dir",
+            "https://10.0.0.5/dir",
+            "https://192.168.1.1/dir",
+            "https://172.16.0.1/dir",
+            "https://169.254.169.254/latest/meta-data/",
+            "https://100.64.0.1/dir",
         ] {
-            assert!(validate_acme_url(url, false, false).is_err(), "{url} should be rejected");
+            assert!(
+                validate_acme_url(url, false, false).is_err(),
+                "{url} should be rejected"
+            );
         }
     }
 
@@ -813,8 +841,15 @@ mod tests {
 
     #[test]
     fn private_ipv6_literal_rejected() {
-        for url in ["https://[::1]/dir", "https://[fc00::1]/dir", "https://[fe80::1]/dir"] {
-            assert!(validate_acme_url(url, false, false).is_err(), "{url} should be rejected");
+        for url in [
+            "https://[::1]/dir",
+            "https://[fc00::1]/dir",
+            "https://[fe80::1]/dir",
+        ] {
+            assert!(
+                validate_acme_url(url, false, false).is_err(),
+                "{url} should be rejected"
+            );
         }
     }
 
@@ -826,11 +861,21 @@ mod tests {
 
     #[test]
     fn classifies_private_ips() {
-        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
-        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
-        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
-        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
-        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(104, 16, 0, 1))));
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
+            127, 0, 0, 1
+        ))));
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
+            100, 64, 0, 1
+        ))));
+        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
+            8, 8, 8, 8
+        ))));
+        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
+            104, 16, 0, 1
+        ))));
         assert!(is_private_or_special_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         assert!(is_private_or_special_ip("fc00::1".parse().unwrap()));
         assert!(is_private_or_special_ip("fe80::1".parse().unwrap()));

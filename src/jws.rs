@@ -11,9 +11,9 @@
 //! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256)
 //! - EdDSA (Ed25519)
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ecdsa::signature::Signer;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -440,7 +440,7 @@ impl AccountKey {
         let mut mac = HmacSha256::new_from_slice(hmac_key).context("invalid HMAC key length")?;
         mac.update(signing_input.as_bytes());
         let sig = mac.finalize().into_bytes();
-        let sig_b64 = URL_SAFE_NO_PAD.encode(&sig);
+        let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
 
         Ok(serde_json::json!({
             "protected": protected,

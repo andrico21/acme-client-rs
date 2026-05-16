@@ -15,16 +15,15 @@
 //! All modes compare TXT record values to the expected key authorization
 //! string (RFC 8555 §8.4) using **byte-exact equality**, not substring match.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::ValueEnum;
 use hickory_resolver::{
+    TokioResolver,
     config::{
-        LookupIpStrategy, NameServerConfig, ResolverConfig, ResolverOpts, CLOUDFLARE, GOOGLE,
-        QUAD9,
+        CLOUDFLARE, GOOGLE, LookupIpStrategy, NameServerConfig, QUAD9, ResolverConfig, ResolverOpts,
     },
     net::runtime::TokioRuntimeProvider,
     proto::rr::{Name, RData},
-    TokioResolver,
 };
 use std::net::IpAddr;
 use std::str::FromStr;
@@ -145,8 +144,10 @@ impl DnsChecker {
             ));
         }
 
-        let name_servers: Vec<NameServerConfig> =
-            ns_ips.into_iter().map(NameServerConfig::udp_and_tcp).collect();
+        let name_servers: Vec<NameServerConfig> = ns_ips
+            .into_iter()
+            .map(NameServerConfig::udp_and_tcp)
+            .collect();
         let config = ResolverConfig::from_parts(None, vec![], name_servers);
 
         let mut opts = ResolverOpts::default();
@@ -159,11 +160,10 @@ impl DnsChecker {
         opts.attempts = 2;
         opts.validate = self.dnssec;
 
-        let resolver =
-            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
-                .with_options(opts)
-                .build()
-                .context("failed to build authoritative resolver")?;
+        let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
+            .with_options(opts)
+            .build()
+            .context("failed to build authoritative resolver")?;
         Ok(resolver)
     }
 }
@@ -242,7 +242,10 @@ mod tests {
         let checker = DnsChecker::new(DnsCheckMode::Authoritative, false).unwrap();
         let expected = "v=spf1 include:_spf.google.com ~all";
         let found = checker.txt_matches("google.com", expected).await.unwrap();
-        assert!(found, "expected to find Google's SPF TXT record via authoritative NS");
+        assert!(
+            found,
+            "expected to find Google's SPF TXT record via authoritative NS"
+        );
     }
 
     #[tokio::test]
@@ -252,6 +255,9 @@ mod tests {
         // Substring of the real SPF record — old `dig | contains` impl would
         // falsely return true. Exact-match must reject it.
         let found = checker.txt_matches("google.com", "v=spf1").await.unwrap();
-        assert!(!found, "exact match must NOT accept a substring of a real TXT record");
+        assert!(
+            !found,
+            "exact match must NOT accept a substring of a real TXT record"
+        );
     }
 }

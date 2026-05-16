@@ -8,7 +8,7 @@
 //! - Refuses to overwrite an existing file unless `force = true`. This
 //!   prevents accidental clobbering of an in-use account or private key.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// Write `contents` to `path` with the secret-file guarantees above.
@@ -26,13 +26,13 @@ pub fn write_secret_file(path: &Path, contents: &[u8], force: bool) -> Result<()
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("failed to stat {}", path.display())),
         }
-    } else if let Ok(meta) = std::fs::symlink_metadata(path) {
-        if meta.file_type().is_symlink() {
-            bail!(
-                "refusing to overwrite symlink {} (remove it manually)",
-                path.display()
-            );
-        }
+    } else if let Ok(meta) = std::fs::symlink_metadata(path)
+        && meta.file_type().is_symlink()
+    {
+        bail!(
+            "refusing to overwrite symlink {} (remove it manually)",
+            path.display()
+        );
     }
 
     let parent = path
