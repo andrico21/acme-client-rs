@@ -1161,13 +1161,13 @@ acme-client-rs generate-key --account-key account.key
 
 ### 3. Test the Full Flow (automated)
 
-The default `--directory` points to `https://localhost:14000/dir` (Pebble's default), so no `--directory` flag is needed:
+The default `--directory` points to `https://localhost:14000/dir` (Pebble's default), so no `--directory` flag is needed. Pebble uses a self-signed certificate, so pass `--insecure` (or `export ACME_INSECURE=true`) to skip TLS verification:
 
 ```sh
-acme-client-rs run --contact test@example.com --challenge-type http-01 --http-port 5002 test.example.com
+acme-client-rs run --contact test@example.com --challenge-type http-01 --http-port 5002 --insecure test.example.com
 ```
 
-> **TLS note:** Pebble uses a self-signed certificate. Use the `--insecure` flag (or `ACME_INSECURE=true`) to skip TLS verification when testing against Pebble.
+> **TLS note:** `--insecure` (or `ACME_INSECURE=true`) is **required** when targeting Pebble or any ACME server with a self-signed certificate. Never use this flag against a production CA.
 
 ### 4. Test Step-by-Step (manual flow)
 
@@ -1177,6 +1177,7 @@ This walks through each ACME protocol step individually:
 # Set variables for convenience
 export ACME_DIRECTORY_URL=https://localhost:14000/dir
 export ACME_ACCOUNT_KEY_FILE=account.key
+export ACME_INSECURE=true   # required: Pebble uses a self-signed cert
 
 # a) Create an account
 acme-client-rs account --contact test@example.com

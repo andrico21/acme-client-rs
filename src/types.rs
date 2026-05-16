@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 // ── Challenge type constants (RFC 8555 §8) ──────────────────────────────────
@@ -76,13 +77,15 @@ impl Identifier {
         }
     }
 
-    /// Auto-detect whether `value` is an IP address or a DNS name.
+    /// Auto-detect whether `value` is an IP address or a DNS name, and
+    /// validate + normalize it for use as an ACME identifier per RFC 8555.
     ///
     /// - Bare IPv4 (`1.2.3.4`) → `ip` identifier
     /// - Bare IPv6 (`::1`, `2001:db8::1`) → `ip` identifier
     /// - Bracketed IPv6 (`[::1]`) → `ip` identifier (brackets stripped)
-    /// - Anything else → `dns` identifier
-    pub fn from_str_auto(value: impl Into<String>) -> Self {
+    /// - Anything else → `dns` identifier, run through
+    ///   [`validate_and_normalize_dns`]
+    pub fn from_str_auto(value: impl Into<String>) -> Result<Self> {
         let s = value.into();
         // Strip brackets for IPv6 literals like [::1]
         let candidate = if s.starts_with('[') && s.ends_with(']') {
@@ -91,15 +94,118 @@ impl Identifier {
             &s
         };
         if candidate.parse::<std::net::IpAddr>().is_ok() {
-            Self::ip(candidate)
+            Ok(Self::ip(candidate))
         } else {
-            Self::dns(s)
+            Ok(Self::dns(validate_and_normalize_dns(&s)?))
         }
     }
 
     /// Returns `true` if this is an IP identifier.
     pub fn is_ip(&self) -> bool {
         self.identifier_type == "ip"
+    }
+}
+
+/// Validate and normalize a DNS identifier per RFC 8555 §7.1.3 / §9.7.5
+/// and RFC 5280 §7 (which references RFC 1034 preferred name syntax).
+///
+/// Steps:
+/// 1. Strip a single trailing dot — RFC 1034 preferred name syntax used
+///    in certificates has no trailing dot (the dot is the zone-file
+///    convention for an absolute name).
+/// 2. Reject empty / whitespace-only input.
+/// 3. Validate wildcard form: `*` is allowed only as the leftmost label,
+///    exactly once, and must be followed by a base domain. Multiple `*`
+///    or `*` not in the leftmost position is malformed (RFC 8555 §7.1.3).
+/// 4. Run the base (non-wildcard) part through `idna::domain_to_ascii`
+///    which lowercases ASCII, validates the labels, and converts any
+///    U-labels to A-labels (`xn--…`) per RFC 5890. The wildcard prefix
+///    is re-attached after IDN conversion (idna does not accept `*`).
+pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
+    let trimmed = input.trim_end_matches('.');
+    if trimmed.is_empty() {
+        bail!("empty DNS identifier");
+    }
+
+    let (had_wildcard, base) = if let Some(rest) = trimmed.strip_prefix("*.") {
+        if rest.contains('*') {
+            bail!("wildcard '*' must appear only as the leftmost label (got {input:?})");
+        }
+        if rest.is_empty() {
+            bail!("wildcard requires a base domain (got {input:?})");
+        }
+        (true, rest)
+    } else {
+        if trimmed.contains('*') {
+            bail!("'*' is only allowed as the leftmost label (got {input:?})");
+        }
+        (false, trimmed)
+    };
+
+    let normalized_base = idna::domain_to_ascii(base)
+        .map_err(|e| anyhow::anyhow!("invalid DNS identifier {input:?}: {e}"))?;
+
+    if !normalized_base
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
+    {
+        bail!(
+            "DNS identifier {input:?} contains characters outside [A-Za-z0-9._-] after normalization"
+        );
+    }
+    for label in normalized_base.split('.') {
+        if label.is_empty() {
+            bail!("DNS identifier {input:?} contains an empty label");
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            bail!("DNS identifier {input:?} has a label that starts or ends with '-'");
+        }
+        if label.len() > 63 {
+            bail!("DNS identifier {input:?} has a label longer than 63 octets");
+        }
+    }
+    if normalized_base.len() > 253 {
+        bail!("DNS identifier {input:?} exceeds 253 octets");
+    }
+
+    Ok(if had_wildcard {
+        format!("*.{normalized_base}")
+    } else {
+        normalized_base
+    })
+}
+
+/// Validate an identifier we received from the ACME server.
+///
+/// Defense-in-depth (SEC-04): the CA controls the strings inside
+/// `Authorization.identifier`, and those values flow into `dig` argv,
+/// hook env vars, and DNS record names. A buggy or hostile CA could
+/// substitute a value containing shell metacharacters, leading dashes
+/// (which `dig` would parse as a flag), or non-DNS-safe bytes. We
+/// reject anything that doesn't survive our own normalization, and
+/// reject DNS values where normalization would change the string
+/// (the CA must echo back exactly what we sent — RFC 8555 §7.1.4).
+pub fn validate_server_identifier(id: &Identifier) -> Result<()> {
+    match id.identifier_type.as_str() {
+        "dns" => {
+            let normalized = validate_and_normalize_dns(&id.value).with_context(|| {
+                format!("server returned invalid DNS identifier {:?}", id.value)
+            })?;
+            if normalized != id.value {
+                bail!(
+                    "server returned DNS identifier {:?} that does not match its normalized form {normalized:?}",
+                    id.value
+                );
+            }
+            Ok(())
+        }
+        "ip" => {
+            id.value.parse::<std::net::IpAddr>().map_err(|e| {
+                anyhow::anyhow!("server returned invalid IP identifier {:?}: {e}", id.value)
+            })?;
+            Ok(())
+        }
+        other => bail!("server returned unknown identifier type {other:?}"),
     }
 }
 
@@ -352,4 +458,133 @@ pub struct RevokeCertRequest {
     pub certificate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<u8>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_normalize_lowercases_and_strips_trailing_dot() {
+        assert_eq!(
+            validate_and_normalize_dns("EXAMPLE.com.").unwrap(),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn dns_normalize_idn_to_punycode() {
+        assert_eq!(
+            validate_and_normalize_dns("café.example").unwrap(),
+            "xn--caf-dma.example"
+        );
+    }
+
+    #[test]
+    fn dns_normalize_accepts_simple_wildcard() {
+        assert_eq!(
+            validate_and_normalize_dns("*.example.com").unwrap(),
+            "*.example.com"
+        );
+    }
+
+    #[test]
+    fn dns_normalize_rejects_double_wildcard() {
+        assert!(validate_and_normalize_dns("**.example.com").is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_non_leftmost_wildcard() {
+        assert!(validate_and_normalize_dns("foo.*.example.com").is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_bare_wildcard_dot() {
+        assert!(validate_and_normalize_dns("*.").is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_empty() {
+        assert!(validate_and_normalize_dns("").is_err());
+        assert!(validate_and_normalize_dns(".").is_err());
+    }
+
+    #[test]
+    fn from_str_auto_routes_ip_vs_dns() {
+        let ip = Identifier::from_str_auto("1.2.3.4").unwrap();
+        assert!(ip.is_ip());
+        let dns = Identifier::from_str_auto("Example.COM").unwrap();
+        assert!(!dns.is_ip());
+        assert_eq!(dns.value, "example.com");
+    }
+
+    #[test]
+    fn server_identifier_accepts_normalized_dns() {
+        let id = Identifier::dns("example.com");
+        assert!(validate_server_identifier(&id).is_ok());
+    }
+
+    #[test]
+    fn server_identifier_rejects_uppercase_dns() {
+        let id = Identifier::dns("Example.COM");
+        assert!(validate_server_identifier(&id).is_err());
+    }
+
+    #[test]
+    fn server_identifier_rejects_dig_flag_injection() {
+        let id = Identifier::dns("-X");
+        assert!(validate_server_identifier(&id).is_err());
+    }
+
+    #[test]
+    fn server_identifier_rejects_shell_metacharacters() {
+        let id = Identifier::dns("foo;rm -rf /");
+        assert!(validate_server_identifier(&id).is_err());
+    }
+
+    #[test]
+    fn server_identifier_accepts_valid_ip() {
+        let id = Identifier::ip("192.0.2.1");
+        assert!(validate_server_identifier(&id).is_ok());
+    }
+
+    #[test]
+    fn server_identifier_rejects_invalid_ip() {
+        let id = Identifier::ip("not-an-ip");
+        assert!(validate_server_identifier(&id).is_err());
+    }
+
+    #[test]
+    fn server_identifier_rejects_unknown_type() {
+        let id = Identifier {
+            identifier_type: "evil".to_string(),
+            value: "anything".to_string(),
+        };
+        assert!(validate_server_identifier(&id).is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_label_with_leading_or_trailing_dash() {
+        assert!(validate_and_normalize_dns("foo-.example").is_err());
+        assert!(validate_and_normalize_dns("foo.-bar.example").is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_empty_label() {
+        assert!(validate_and_normalize_dns("foo..example").is_err());
+    }
+
+    #[test]
+    fn dns_normalize_rejects_label_over_63_chars() {
+        let long = "a".repeat(64);
+        assert!(validate_and_normalize_dns(&format!("{long}.example")).is_err());
+    }
+
+    #[test]
+    fn dns_normalize_accepts_underscore_label() {
+        assert_eq!(
+            validate_and_normalize_dns("_acme-challenge.example.com").unwrap(),
+            "_acme-challenge.example.com"
+        );
+    }
 }

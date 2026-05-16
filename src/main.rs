@@ -3,7 +3,12 @@
 mod challenge;
 mod client;
 mod config;
+mod dns_check;
+mod fs_secure;
+mod hook_check;
 mod jws;
+#[macro_use]
+mod output;
 mod types;
 
 use std::path::PathBuf;
@@ -13,6 +18,7 @@ use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use tracing::info;
 
 use crate::client::{AcmeClient, compute_cert_id};
+use crate::dns_check::{DnsChecker, DnsCheckMode};
 use crate::jws::{AccountKey, KeyAlgorithm};
 use crate::types::{
     AuthorizationStatus, Challenge, ChallengeStatus, Identifier, OrderStatus,
@@ -53,7 +59,7 @@ impl std::fmt::Display for CertKeyAlgorithm {
     }
 }
 
-/// Simple ACME client for testing ACME flows (RFC 8555)
+/// Production-ready ACME client for issuing and renewing X.509 certificates (RFC 8555)
 #[derive(Parser)]
 #[command(name = "acme-client-rs", version, about, after_long_help = "\
 Examples:
@@ -86,6 +92,14 @@ struct Cli {
     #[arg(short = 'k', long, global = true, env = "ACME_ACCOUNT_KEY_FILE", default_value = "account.key")]
     account_key: PathBuf,
 
+    /// Password to decrypt the account key (visible in process list - prefer --account-key-password-file)
+    #[arg(long, global = true, env = "ACME_ACCOUNT_KEY_PASSWORD", conflicts_with = "account_key_password_file")]
+    account_key_password: Option<String>,
+
+    /// Read the account key decryption password from a file (first non-empty line)
+    #[arg(long, global = true, env = "ACME_ACCOUNT_KEY_PASSWORD_FILE", conflicts_with = "account_key_password")]
+    account_key_password_file: Option<PathBuf>,
+
     /// Account URL (required after account creation)
     #[arg(short = 'a', long, global = true, env = "ACME_ACCOUNT_URL")]
     account_url: Option<String>,
@@ -97,6 +111,26 @@ struct Cli {
     /// Disable TLS certificate verification (for testing with self-signed CAs like Pebble)
     #[arg(long, global = true, env = "ACME_INSECURE")]
     insecure: bool,
+
+    /// HTTP connect timeout in seconds (TCP + TLS handshake). The whole-request timeout is fixed at 120s.
+    #[arg(long, global = true, default_value_t = 15, env = "ACME_CONNECT_TIMEOUT")]
+    connect_timeout: u64,
+
+    /// Allow contacting private/loopback/link-local IP addresses (RFC1918, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10, etc.). Default: BLOCK to prevent SSRF. Implied by --insecure. Set this for internal/on-prem ACME deployments.
+    #[arg(long, global = true, env = "ACME_ALLOW_PRIVATE_NETWORK")]
+    allow_private_network: bool,
+
+    /// Downgrade hook-script ownership/permission violations (SEC-13) from hard errors to stderr warnings. Default: refuse to run if any configured hook is not absolute, not owned by current user or root, group/world-writable, or sits in a group/world-writable directory. Set this only if you accept the privilege-escalation risk.
+    #[arg(long, global = true, env = "ACME_UNSAFE_HOOKS")]
+    unsafe_hooks: bool,
+
+    /// Resolver strategy for DNS-01 propagation checks. Default `authoritative` queries the zone's NS directly (bypasses caches, matches CA-side reads). `cached` uses public resolvers (1.1.1.1/8.8.8.8/9.9.9.9). `system` uses the host's resolv.conf.
+    #[arg(long, global = true, value_enum, default_value_t = DnsCheckMode::Authoritative, env = "ACME_DNS_CHECK_MODE")]
+    dns_check_mode: DnsCheckMode,
+
+    /// Enable DNSSEC validation on DNS-01 propagation checks. Off by default (parent-zone DNSSEC misconfig outside our control would cause spurious failures).
+    #[arg(long, global = true, env = "ACME_DNS_CHECK_DNSSEC")]
+    dns_check_dnssec: bool,
 
     /// Suppress all stdout output (exit codes still signal success/failure)
     #[arg(long, global = true)]
@@ -134,6 +168,9 @@ Use --verbose to see the source of each value (cli, env, config, default).\n\
         /// Show the source of each value (cli, env, config, default)
         #[arg(long)]
         verbose: bool,
+        /// Print EAB HMAC keys in clear (off by default — secrets are redacted)
+        #[arg(long)]
+        show_secrets: bool,
     },
 
     /// Generate a new account key pair
@@ -153,6 +190,9 @@ Examples:
         /// Key algorithm
         #[arg(long, value_enum, default_value_t = KeyAlgorithm::Es256)]
         algorithm: KeyAlgorithm,
+        /// Overwrite the account key file if it already exists.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Create (or look up) an ACME account
@@ -547,6 +587,9 @@ Examples:
         /// Certificate profile (draft-ietf-acme-profiles-01)
         #[arg(long, env = "ACME_PROFILE")]
         profile: Option<String>,
+        /// Overwrite the private key file if it already exists.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -636,8 +679,8 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     // In config mode, strip env values for global fields that are NOT in the
     // allowed-from-env list. The "allowed from env in config mode" set is:
     //   insecure (ACME_INSECURE)
-    // All others (directory, account_key, account_url, output_format) are
-    // config-only when config_mode is true.
+    // All others (directory, account_key, account_url, output_format,
+    // connect_timeout) are config-only when config_mode is true.
     if config_mode {
         // For fields where clap resolved an env value, warn at debug level
         // and let the config value (or default) take over.
@@ -646,6 +689,7 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
             ("account_key", "ACME_ACCOUNT_KEY_FILE"),
             ("account_url", "ACME_ACCOUNT_URL"),
             ("output_format", "ACME_OUTPUT_FORMAT"),
+            ("connect_timeout", "ACME_CONNECT_TIMEOUT"),
         ] {
             if matches.value_source(id) == Some(ValueSource::EnvVariable) {
                 tracing::debug!(
@@ -706,6 +750,45 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
     // In config mode, if env has ACME_INSECURE but config also sets it, config wins
     // (already handled above: config is applied for DefaultValue).
     // If env has it and config doesn't, env is allowed to survive for insecure.
+
+    // Global: connect_timeout
+    if should_apply_config(matches.value_source("connect_timeout")) {
+        if let Some(v) = cfg.connect_timeout {
+            cli.connect_timeout = v;
+        } else if config_mode && matches.value_source("connect_timeout") == Some(ValueSource::EnvVariable) {
+            cli.connect_timeout = 15;
+        }
+    }
+
+    if matches!(matches.value_source("allow_private_network"), Some(ValueSource::DefaultValue) | None) {
+        if let Some(v) = cfg.allow_private_network {
+            cli.allow_private_network = v;
+        }
+    }
+
+    if matches!(matches.value_source("unsafe_hooks"), Some(ValueSource::DefaultValue) | None) {
+        if let Some(v) = cfg.unsafe_hooks {
+            cli.unsafe_hooks = v;
+        }
+    }
+
+    if matches!(matches.value_source("dns_check_mode"), Some(ValueSource::DefaultValue) | None) {
+        if let Some(ref s) = cfg.dns_check_mode {
+            if let Ok(m) = <DnsCheckMode as clap::ValueEnum>::from_str(s, true) {
+                cli.dns_check_mode = m;
+            } else {
+                eprintln!(
+                    "warning: config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
+                );
+            }
+        }
+    }
+
+    if matches!(matches.value_source("dns_check_dnssec"), Some(ValueSource::DefaultValue) | None) {
+        if let Some(v) = cfg.dns_check_dnssec {
+            cli.dns_check_dnssec = v;
+        }
+    }
 
     // Run subcommand options
     if let Commands::Run {
@@ -807,7 +890,10 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         //   key_password_file, eab_kid, eab_hmac_key
         if key_password_file.is_none() { key_password_file.clone_from(&cfg_run.key_password_file); }
         if eab_kid.is_none() { eab_kid.clone_from(&cfg_run.eab_kid); }
-        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_run.eab_hmac_key); }
+        if eab_hmac_key.is_none() {
+            use secrecy::ExposeSecret;
+            *eab_hmac_key = cfg_run.eab_hmac_key.as_ref().map(|s| s.expose_secret().to_string());
+        }
     }
 
     // Account subcommand options
@@ -826,7 +912,10 @@ fn apply_config(cli: &mut Cli, matches: &clap::ArgMatches, config: &config::Conf
         }
         // Secrets — allowed from env in config mode
         if eab_kid.is_none() { eab_kid.clone_from(&cfg_acct.eab_kid); }
-        if eab_hmac_key.is_none() { eab_hmac_key.clone_from(&cfg_acct.eab_hmac_key); }
+        if eab_hmac_key.is_none() {
+            use secrecy::ExposeSecret;
+            *eab_hmac_key = cfg_acct.eab_hmac_key.as_ref().map(|s| s.expose_secret().to_string());
+        }
     }
 }
 
@@ -834,8 +923,14 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
     let fmt = cli.output_format;
     match &cli.command {
         Commands::GenerateConfig => cmd_generate_config(cli.silent),
-        Commands::ShowConfig { verbose } => cmd_show_config(&cli, loaded_config, matches, *verbose, config_mode),
-        Commands::GenerateKey { algorithm } => cmd_generate_key(&cli.account_key, *algorithm, fmt, cli.silent),
+        Commands::ShowConfig { verbose, show_secrets } => cmd_show_config(&cli, loaded_config, matches, *verbose, *show_secrets, config_mode),
+        Commands::GenerateKey { algorithm, force } => {
+            let pw = resolve_account_key_password(
+                cli.account_key_password.as_deref(),
+                cli.account_key_password_file.as_deref(),
+            )?;
+            cmd_generate_key(&cli.account_key, *algorithm, *force, fmt, cli.silent, pw.as_ref())
+        }
         Commands::Account { contact, agree_tos, eab_kid, eab_hmac_key } => {
             cmd_account(&cli, contact.clone(), *agree_tos, eab_kid.as_deref(), eab_hmac_key.as_deref()).await
         }
@@ -843,9 +938,9 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
         Commands::GetAuthz { url } => cmd_get_authz(&cli, url).await,
         Commands::RespondChallenge { url } => cmd_respond_challenge(&cli, url).await,
         Commands::ServeHttp01 { token, port, challenge_dir } => {
-            cmd_serve_http01(&cli.account_key, token, *port, challenge_dir.as_deref(), fmt, cli.silent).await
+            cmd_serve_http01(&cli, token, *port, challenge_dir.as_deref(), fmt, cli.silent).await
         }
-        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli.account_key, domain, token, fmt, cli.silent),
+        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli, domain, token, fmt, cli.silent),
         Commands::ShowDnsPersist01 { domain, issuer_domain_name, persist_policy, persist_until } => {
             cmd_show_dns_persist01(&cli, &domain, issuer_domain_name, persist_policy.as_deref(), *persist_until, fmt).await
         }
@@ -897,6 +992,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
             persist_until,
             cert_key_algorithm,
             profile,
+            force,
         } => {
             anyhow::ensure!(!domains.is_empty(), "at least one domain is required (pass on CLI or set [run].domains in config)");
             cmd_run(
@@ -927,6 +1023,7 @@ async fn run(cli: Cli, loaded_config: Option<&config::Config>, matches: &clap::A
                 *persist_until,
                 *cert_key_algorithm,
                 profile.as_deref(),
+                *force,
             )
             .await
         }
@@ -1017,24 +1114,70 @@ fn normalize_identifier(value: &str) -> String {
 }
 
 fn load_account_key(path: &PathBuf) -> Result<AccountKey> {
-    let pem = std::fs::read_to_string(path)
-        .with_context(|| format!("failed to read account key from {}", path.display()))?;
-    AccountKey::from_pkcs8_pem(&pem)
+    load_account_key_with_password(path, None)
+}
+
+fn load_account_key_with_password(
+    path: &PathBuf,
+    password: Option<&str>,
+) -> Result<AccountKey> {
+    // SEC-07: wrap PEM in Zeroizing so the on-heap key material is wiped
+    // when this function returns, even on the error path.
+    let pem = zeroize::Zeroizing::new(
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read account key from {}", path.display()))?,
+    );
+    AccountKey::from_pkcs8_pem_with_password(&pem, password)
+        .with_context(|| format!("failed to load account key from {}", path.display()))
+}
+
+/// SEC-08: resolve the account-key password from CLI flag or password file.
+/// Returns None when neither is provided (unencrypted-key path).
+fn resolve_account_key_password(
+    inline: Option<&str>,
+    file: Option<&std::path::Path>,
+) -> Result<Option<secrecy::SecretString>> {
+    if let Some(pw) = inline {
+        return Ok(Some(secrecy::SecretString::from(pw.to_string())));
+    }
+    if let Some(path) = file {
+        let content = zeroize::Zeroizing::new(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read account-key password file: {}", path.display()))?,
+        );
+        let pw = content
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .filter(|s: &String| !s.is_empty());
+        return Ok(pw.map(secrecy::SecretString::from));
+    }
+    Ok(None)
 }
 
 async fn build_client(cli: &Cli) -> Result<AcmeClient> {
-    let key = load_account_key(&cli.account_key)?;
+    use secrecy::ExposeSecret;
+    client::validate_directory_url(&cli.directory, cli.insecure, cli.allow_private_network)?;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(|s| s.expose_secret()),
+    )?;
     if cli.insecure {
         tracing::warn!("TLS certificate verification is disabled (--insecure)");
     }
-    let mut client = AcmeClient::new(&cli.directory, key, cli.insecure).await?;
+    let mut client = AcmeClient::new(&cli.directory, key, cli.insecure, cli.connect_timeout, cli.allow_private_network).await?;
     if let Some(ref url) = cli.account_url {
+        client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
         client.set_account_url(url.clone());
     }
     Ok(client)
 }
 
-fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, String)> {
+fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, zeroize::Zeroizing<String>)> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
     let mut params =
@@ -1047,7 +1190,7 @@ fn generate_csr(domains: &[String], alg: CertKeyAlgorithm) -> Result<(Vec<u8>, S
         CertKeyAlgorithm::EcP384 => KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384),
         CertKeyAlgorithm::Ed25519 => KeyPair::generate_for(&rcgen::PKCS_ED25519),
     }.context("failed to generate CSR key pair")?;
-    let key_pem = key_pair.serialize_pem();
+    let key_pem = zeroize::Zeroizing::new(key_pair.serialize_pem());
     let csr = params
         .serialize_request(&key_pair)
         .context("failed to serialize CSR")?;
@@ -1090,18 +1233,35 @@ fn encrypt_private_key(key_pem: &str, password: &str) -> Result<String> {
 
 fn cmd_generate_config(silent: bool) -> Result<()> {
     if !silent {
-        print!("{}", config::generate_template());
+        out!("{}", config::generate_template());
     }
     Ok(())
 }
 
-fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, verbose: bool, config_mode: bool) -> Result<()> {
+fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &clap::ArgMatches, verbose: bool, show_secrets: bool, config_mode: bool) -> Result<()> {
     if cli.silent {
         return Ok(());
     }
     use clap::parser::ValueSource;
 
     let json = cli.output_format == OutputFormat::Json;
+
+    let redact_secret = |v: &Option<secrecy::SecretString>| -> Option<String> {
+        use secrecy::ExposeSecret;
+        match v {
+            Some(_) if !show_secrets => Some("[REDACTED]".to_string()),
+            Some(s) => Some(s.expose_secret().to_string()),
+            None => None,
+        }
+    };
+    let opt_secret_string = |v: &Option<secrecy::SecretString>| -> String {
+        use secrecy::ExposeSecret;
+        match v {
+            Some(_) if !show_secrets => "[REDACTED]".to_string(),
+            Some(s) => s.expose_secret().to_string(),
+            None => "(not set)".to_string(),
+        }
+    };
 
     let config_path = if let Some(ref p) = cli.config {
         Some(p.display().to_string())
@@ -1156,6 +1316,11 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             "account_url": { "value": cli.account_url },
             "output_format": { "value": if cli.output_format == OutputFormat::Json { "json" } else { "text" } },
             "insecure": { "value": cli.insecure },
+            "connect_timeout": { "value": cli.connect_timeout },
+            "allow_private_network": { "value": cli.allow_private_network },
+            "dns_check_mode": { "value": format!("{:?}", cli.dns_check_mode).to_lowercase() },
+            "dns_check_dnssec": { "value": cli.dns_check_dnssec },
+            "unsafe_hooks": { "value": cli.unsafe_hooks },
         });
         if verbose {
             g["directory"]["source"] = serde_json::json!(global_source("directory", cfg_g.and_then(|c| c.directory.as_ref()).is_some()));
@@ -1163,6 +1328,11 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             g["account_url"]["source"] = serde_json::json!(global_source("account_url", cfg_g.and_then(|c| c.account_url.as_ref()).is_some()));
             g["output_format"]["source"] = serde_json::json!(global_source("output_format", cfg_g.and_then(|c| c.output_format.as_ref()).is_some()));
             g["insecure"]["source"] = serde_json::json!(global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some()));
+            g["connect_timeout"]["source"] = serde_json::json!(global_source("connect_timeout", cfg_g.and_then(|c| c.connect_timeout).is_some()));
+            g["allow_private_network"]["source"] = serde_json::json!(global_source("allow_private_network", cfg_g.and_then(|c| c.allow_private_network).is_some()));
+            g["dns_check_mode"]["source"] = serde_json::json!(global_source("dns_check_mode", cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some()));
+            g["dns_check_dnssec"]["source"] = serde_json::json!(global_source("dns_check_dnssec", cfg_g.and_then(|c| c.dns_check_dnssec).is_some()));
+            g["unsafe_hooks"]["source"] = serde_json::json!(global_source("unsafe_hooks", cfg_g.and_then(|c| c.unsafe_hooks).is_some()));
         }
         obj["global"] = g;
 
@@ -1184,7 +1354,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
                 "on_challenge_ready": { "value": r.on_challenge_ready.as_ref().map(|p| p.display().to_string()) },
                 "on_cert_issued": { "value": r.on_cert_issued.as_ref().map(|p| p.display().to_string()) },
                 "eab_kid": { "value": r.eab_kid },
-                "eab_hmac_key": { "value": r.eab_hmac_key },
+                "eab_hmac_key": { "value": redact_secret(&r.eab_hmac_key) },
                 "pre_authorize": { "value": r.pre_authorize.unwrap_or(false) },
                 "ari": { "value": r.ari.unwrap_or(false) },
                 "reissue_on_mismatch": { "value": r.reissue_on_mismatch.unwrap_or(false) },
@@ -1222,7 +1392,7 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             let mut av = serde_json::json!({
                 "contact": { "value": a.contact },
                 "eab_kid": { "value": a.eab_kid },
-                "eab_hmac_key": { "value": a.eab_hmac_key },
+                "eab_hmac_key": { "value": redact_secret(&a.eab_hmac_key) },
             });
             if verbose {
                 av["contact"]["source"] = serde_json::json!(cfg_source(a.contact.is_some()));
@@ -1231,21 +1401,21 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
             }
             obj["account"] = av;
         }
-        println!("{}", serde_json::to_string_pretty(&obj)?);
+        outln!("{}", serde_json::to_string_pretty(&obj)?);
     } else {
-        println!("# Effective configuration");
+        outln!("# Effective configuration");
         if config_mode {
-            println!("# Mode: config file (env vars ignored except secrets)");
+            outln!("# Mode: config file (env vars ignored except secrets)");
         }
         if verbose {
-            println!("# Source annotations: (cli) (env) (config) (default)");
+            outln!("# Source annotations: (cli) (env) (config) (default)");
         }
-        println!();
+        outln!();
         match &config_path {
-            Some(p) => println!("Config file: {p}"),
-            None => println!("Config file: (none)"),
+            Some(p) => outln!("Config file: {p}"),
+            None => outln!("Config file: (none)"),
         }
-        println!();
+        outln!();
 
         let src = |s: &str| if verbose { format!("  ({s})") } else { String::new() };
 
@@ -1254,73 +1424,92 @@ fn cmd_show_config(cli: &Cli, loaded_config: Option<&config::Config>, matches: &
         let url_src = global_source("account_url", cfg_g.and_then(|c| c.account_url.as_ref()).is_some());
         let fmt_src = global_source("output_format", cfg_g.and_then(|c| c.output_format.as_ref()).is_some());
         let ins_src = global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some());
+        let ct_src = global_source("connect_timeout", cfg_g.and_then(|c| c.connect_timeout).is_some());
 
-        println!("[global]");
-        println!("  directory     = {}{}", cli.directory, src(dir_src));
-        println!("  account_key   = {}{}", cli.account_key.display(), src(key_src));
-        println!("  account_url   = {}{}", opt_str(&cli.account_url), src(url_src));
-        println!("  output_format = {}{}", if cli.output_format == OutputFormat::Json { "json" } else { "text" }, src(fmt_src));
-        println!("  insecure      = {}{}", cli.insecure, src(ins_src));
+        outln!("[global]");
+        outln!("  directory       = {}{}", cli.directory, src(dir_src));
+        outln!("  account_key     = {}{}", cli.account_key.display(), src(key_src));
+        outln!("  account_url     = {}{}", opt_str(&cli.account_url), src(url_src));
+        outln!("  output_format   = {}{}", if cli.output_format == OutputFormat::Json { "json" } else { "text" }, src(fmt_src));
+        outln!("  insecure        = {}{}", cli.insecure, src(ins_src));
+        outln!("  connect_timeout = {}{}", cli.connect_timeout, src(ct_src));
 
         if let Some(r) = cfg_run {
-            println!();
-            println!("[run]");
-            println!("  domains            = {:?}{}", r.domains.as_deref().unwrap_or(&[]), src(cfg_source(r.domains.is_some())));
-            println!("  contact            = {}{}", opt_str(&r.contact), src(cfg_source(r.contact.is_some())));
-            println!("  challenge_type     = {}{}", r.challenge_type.as_deref().unwrap_or("http-01"), src(cfg_source(r.challenge_type.is_some())));
-            println!("  http_port          = {}{}", opt_u16(r.http_port), src(cfg_source(r.http_port.is_some())));
-            println!("  challenge_dir      = {}{}", opt_path(&r.challenge_dir), src(cfg_source(r.challenge_dir.is_some())));
-            println!("  dns_hook           = {}{}", opt_path(&r.dns_hook), src(cfg_source(r.dns_hook.is_some())));
-            println!("  dns_wait           = {}{}", opt_u64(r.dns_wait), src(cfg_source(r.dns_wait.is_some())));
-            println!("  dns_propagation_concurrency = {}{}", r.dns_propagation_concurrency.unwrap_or(5), src(cfg_source(r.dns_propagation_concurrency.is_some())));
-            println!("  challenge_timeout  = {}{}", r.challenge_timeout.unwrap_or(300), src(cfg_source(r.challenge_timeout.is_some())));
-            println!("  cert_output        = {}{}", r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()), src(cfg_source(r.cert_output.is_some())));
-            println!("  key_output         = {}{}", r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()), src(cfg_source(r.key_output.is_some())));
-            println!("  days               = {}{}", opt_u32(r.days), src(cfg_source(r.days.is_some())));
-            println!("  key_password_file  = {}{}", opt_path(&r.key_password_file), src(cfg_source(r.key_password_file.is_some())));
-            println!("  on_challenge_ready = {}{}", opt_path(&r.on_challenge_ready), src(cfg_source(r.on_challenge_ready.is_some())));
-            println!("  on_cert_issued     = {}{}", opt_path(&r.on_cert_issued), src(cfg_source(r.on_cert_issued.is_some())));
-            println!("  eab_kid            = {}{}", opt_str(&r.eab_kid), src(cfg_source(r.eab_kid.is_some())));
-            println!("  eab_hmac_key       = {}{}", opt_str(&r.eab_hmac_key), src(cfg_source(r.eab_hmac_key.is_some())));
-            println!("  pre_authorize      = {}{}", opt_bool(r.pre_authorize), src(cfg_source(r.pre_authorize.is_some())));
-            println!("  ari                = {}{}", opt_bool(r.ari), src(cfg_source(r.ari.is_some())));
-            println!("  reissue_on_mismatch = {}{}", opt_bool(r.reissue_on_mismatch), src(cfg_source(r.reissue_on_mismatch.is_some())));
-            println!("  print_cert         = {}{}", opt_bool(r.print_cert), src(cfg_source(r.print_cert.is_some())));
-            println!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
-            println!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
-            println!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
-            println!("  profile            = {}{}", opt_str(&r.profile), src(cfg_source(r.profile.is_some())));
+            outln!();
+            outln!("[run]");
+            outln!("  domains            = {:?}{}", r.domains.as_deref().unwrap_or(&[]), src(cfg_source(r.domains.is_some())));
+            outln!("  contact            = {}{}", opt_str(&r.contact), src(cfg_source(r.contact.is_some())));
+            outln!("  challenge_type     = {}{}", r.challenge_type.as_deref().unwrap_or("http-01"), src(cfg_source(r.challenge_type.is_some())));
+            outln!("  http_port          = {}{}", opt_u16(r.http_port), src(cfg_source(r.http_port.is_some())));
+            outln!("  challenge_dir      = {}{}", opt_path(&r.challenge_dir), src(cfg_source(r.challenge_dir.is_some())));
+            outln!("  dns_hook           = {}{}", opt_path(&r.dns_hook), src(cfg_source(r.dns_hook.is_some())));
+            outln!("  dns_wait           = {}{}", opt_u64(r.dns_wait), src(cfg_source(r.dns_wait.is_some())));
+            outln!("  dns_propagation_concurrency = {}{}", r.dns_propagation_concurrency.unwrap_or(5), src(cfg_source(r.dns_propagation_concurrency.is_some())));
+            outln!("  challenge_timeout  = {}{}", r.challenge_timeout.unwrap_or(300), src(cfg_source(r.challenge_timeout.is_some())));
+            outln!("  cert_output        = {}{}", r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()), src(cfg_source(r.cert_output.is_some())));
+            outln!("  key_output         = {}{}", r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()), src(cfg_source(r.key_output.is_some())));
+            outln!("  days               = {}{}", opt_u32(r.days), src(cfg_source(r.days.is_some())));
+            outln!("  key_password_file  = {}{}", opt_path(&r.key_password_file), src(cfg_source(r.key_password_file.is_some())));
+            outln!("  on_challenge_ready = {}{}", opt_path(&r.on_challenge_ready), src(cfg_source(r.on_challenge_ready.is_some())));
+            outln!("  on_cert_issued     = {}{}", opt_path(&r.on_cert_issued), src(cfg_source(r.on_cert_issued.is_some())));
+            outln!("  eab_kid            = {}{}", opt_str(&r.eab_kid), src(cfg_source(r.eab_kid.is_some())));
+            outln!("  eab_hmac_key       = {}{}", opt_secret_string(&r.eab_hmac_key), src(cfg_source(r.eab_hmac_key.is_some())));
+            outln!("  pre_authorize      = {}{}", opt_bool(r.pre_authorize), src(cfg_source(r.pre_authorize.is_some())));
+            outln!("  ari                = {}{}", opt_bool(r.ari), src(cfg_source(r.ari.is_some())));
+            outln!("  reissue_on_mismatch = {}{}", opt_bool(r.reissue_on_mismatch), src(cfg_source(r.reissue_on_mismatch.is_some())));
+            outln!("  print_cert         = {}{}", opt_bool(r.print_cert), src(cfg_source(r.print_cert.is_some())));
+            outln!("  persist_policy     = {}{}", opt_str(&r.persist_policy), src(cfg_source(r.persist_policy.is_some())));
+            outln!("  persist_until      = {}{}", opt_u64(r.persist_until), src(cfg_source(r.persist_until.is_some())));
+            outln!("  cert_key_algorithm = {}{}", r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"), src(cfg_source(r.cert_key_algorithm.is_some())));
+            outln!("  profile            = {}{}", opt_str(&r.profile), src(cfg_source(r.profile.is_some())));
         } else if !has_config {
-            println!();
-            println!("[run]");
-            println!("  (no config file loaded - all values from defaults)");
+            outln!();
+            outln!("[run]");
+            outln!("  (no config file loaded - all values from defaults)");
         }
 
         if let Some(a) = cfg_acct {
-            println!();
-            println!("[account]");
-            println!("  contact      = {:?}{}", a.contact.as_deref().unwrap_or(&[]), src(cfg_source(a.contact.is_some())));
-            println!("  eab_kid      = {}{}", opt_str(&a.eab_kid), src(cfg_source(a.eab_kid.is_some())));
-            println!("  eab_hmac_key = {}{}", opt_str(&a.eab_hmac_key), src(cfg_source(a.eab_hmac_key.is_some())));
+            outln!();
+            outln!("[account]");
+            outln!("  contact      = {:?}{}", a.contact.as_deref().unwrap_or(&[]), src(cfg_source(a.contact.is_some())));
+            outln!("  eab_kid      = {}{}", opt_str(&a.eab_kid), src(cfg_source(a.eab_kid.is_some())));
+            outln!("  eab_hmac_key = {}{}", opt_secret_string(&a.eab_hmac_key), src(cfg_source(a.eab_hmac_key.is_some())));
         }
     }
     Ok(())
 }
 
-fn cmd_generate_key(path: &PathBuf, algorithm: KeyAlgorithm, fmt: OutputFormat, silent: bool) -> Result<()> {
+fn cmd_generate_key(
+    path: &PathBuf,
+    algorithm: KeyAlgorithm,
+    force: bool,
+    fmt: OutputFormat,
+    silent: bool,
+    password: Option<&secrecy::SecretString>,
+) -> Result<()> {
+    use secrecy::ExposeSecret;
     let key = AccountKey::generate(algorithm)?;
-    let pem = key.to_pkcs8_pem()?;
-    std::fs::write(path, pem.as_bytes())
+    let pem = zeroize::Zeroizing::new(key.to_pkcs8_pem()?);
+    let encrypted = password.is_some();
+    let bytes_to_write = if let Some(pw) = password {
+        zeroize::Zeroizing::new(encrypt_private_key(&pem, pw.expose_secret())?)
+    } else {
+        zeroize::Zeroizing::new(pem.to_string())
+    };
+    fs_secure::write_secret_file(path, bytes_to_write.as_bytes(), force)
         .with_context(|| format!("failed to write key to {}", path.display()))?;
     if !silent {
         if fmt == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "generate-key",
                 "algorithm": format!("{algorithm}"),
                 "path": path.display().to_string(),
+                "encrypted": encrypted,
             }));
+        } else if encrypted {
+            outln!("{algorithm} account key saved to {} (encrypted)", path.display());
         } else {
-            println!("{algorithm} account key saved to {}", path.display());
+            outln!("{algorithm} account key saved to {}", path.display());
         }
     }
     Ok(())
@@ -1340,19 +1529,22 @@ async fn cmd_account(
         Some(contact.into_iter().map(|c| format!("mailto:{c}")).collect())
     };
     let eab = parse_eab(eab_kid, eab_hmac_key)?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key.as_slice()));
+    let eab_ref = eab.as_ref().map(|(kid, key)| {
+            use secrecy::ExposeSecret;
+            (kid.as_str(), key.expose_secret().as_slice())
+        });
     let account = client.create_account(contact, agree_tos, eab_ref).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "account",
                 "status": format!("{}", account.status),
                 "url": client.account_url(),
             }));
         } else {
-            println!("Account status: {}", account.status);
+            outln!("Account status: {}", account.status);
             if let Some(url) = client.account_url() {
-                println!("Account URL:    {url}");
+                outln!("Account URL:    {url}");
             }
         }
     }
@@ -1372,11 +1564,11 @@ async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> 
             }
         }
     }
-    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect::<Result<Vec<_>>>()?;
     let (order, order_url) = client.new_order(ids, profile).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "order",
                 "order_url": order_url,
                 "status": format!("{}", order.status),
@@ -1385,14 +1577,14 @@ async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> 
                 "profile": order.profile,
             }));
         } else {
-            println!("Order URL:    {order_url}");
-            println!("Status:       {}", order.status);
+            outln!("Order URL:    {order_url}");
+            outln!("Status:       {}", order.status);
             if let Some(ref p) = order.profile {
-                println!("Profile:      {p}");
+                outln!("Profile:      {p}");
             }
-            println!("Finalize URL: {}", order.finalize);
+            outln!("Finalize URL: {}", order.finalize);
             for url in &order.authorizations {
-                println!("  authz: {url}");
+                outln!("  authz: {url}");
             }
         }
     }
@@ -1400,12 +1592,8 @@ async fn cmd_order(cli: &Cli, domains: Vec<String>, profile: Option<String>) -> 
 }
 
 async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
-    // Only fetch the directory — no account key needed.
-    let http = reqwest::Client::builder()
-        .user_agent(concat!("acme-client-rs/", env!("CARGO_PKG_VERSION")))
-        .danger_accept_invalid_certs(cli.insecure)
-        .build()
-        .context("failed to build HTTP client")?;
+    client::validate_directory_url(&cli.directory, cli.insecure, cli.allow_private_network)?;
+    let http = client::build_http_client(cli.insecure, cli.connect_timeout, cli.allow_private_network)?;
     let resp = http
         .get(&cli.directory)
         .send()
@@ -1420,25 +1608,25 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     match profiles {
         Some(profiles) if !cli.silent => {
             if cli.output_format == OutputFormat::Json {
-                println!("{}", serde_json::json!({
+                outln!("{}", serde_json::json!({
                     "command": "list-profiles",
                     "profiles": profiles,
                 }));
             } else {
-                println!("Available certificate profiles:");
+                outln!("Available certificate profiles:");
                 for (name, description) in profiles {
-                    println!("  {name}: {description}");
+                    outln!("  {name}: {description}");
                 }
             }
         }
         None if !cli.silent => {
             if cli.output_format == OutputFormat::Json {
-                println!("{}", serde_json::json!({
+                outln!("{}", serde_json::json!({
                     "command": "list-profiles",
                     "profiles": null,
                 }));
             } else {
-                println!("Server does not advertise any profiles.");
+                outln!("Server does not advertise any profiles.");
             }
         }
         _ => {}
@@ -1447,11 +1635,12 @@ async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
 }
 
 async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
+    client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
     let mut client = build_client(cli).await?;
     let authz = client.get_authorization(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "get-authz",
                 "identifier": authz.identifier.value,
                 "identifier_type": authz.identifier.identifier_type,
@@ -1464,18 +1653,18 @@ async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
                 })).collect::<Vec<_>>(),
             }));
         } else {
-            println!(
+            outln!(
                 "Identifier: {} ({})",
                 authz.identifier.value, authz.identifier.identifier_type
             );
-            println!("Status:     {}", authz.status);
+            outln!("Status:     {}", authz.status);
             for ch in &authz.challenges {
-                println!(
+                outln!(
                     "  {} [{}] url={}",
                     ch.challenge_type, ch.status, ch.url
                 );
                 if let Some(ref t) = ch.token {
-                    println!("    token: {t}");
+                    outln!("    token: {t}");
                 }
             }
         }
@@ -1484,43 +1673,53 @@ async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
 }
 
 async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
+    client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
     let mut client = build_client(cli).await?;
     let ch = client.respond_to_challenge(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "respond-challenge",
                 "status": format!("{}", ch.status),
             }));
         } else {
-            println!("Challenge status: {}", ch.status);
+            outln!("Challenge status: {}", ch.status);
         }
     }
     Ok(())
 }
 
 async fn cmd_serve_http01(
-    key_path: &PathBuf,
+    cli: &Cli,
     token: &str,
     port: u16,
     challenge_dir: Option<&std::path::Path>,
     fmt: OutputFormat,
     silent: bool,
 ) -> Result<()> {
-    let key = load_account_key(key_path)?;
+    challenge::http01::validate_token(token)?;
+    use secrecy::ExposeSecret;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(|s| s.expose_secret()),
+    )?;
     if let Some(dir) = challenge_dir {
         let file = challenge::http01::write_challenge_file(dir, token, &key)?;
         if !silent {
             if fmt == OutputFormat::Json {
-                println!("{}", serde_json::json!({
+                outln!("{}", serde_json::json!({
                     "command": "serve-http01",
                     "mode": "challenge-dir",
                     "path": file.display().to_string(),
                 }));
             } else {
-                println!("Challenge file written to {}", file.display());
+                outln!("Challenge file written to {}", file.display());
             }
-            println!("Press Enter after validation to clean up...");
+            outln!("Press Enter after validation to clean up...");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
         challenge::http01::cleanup_challenge_file(&file);
@@ -1530,13 +1729,21 @@ async fn cmd_serve_http01(
     }
 }
 
-fn cmd_show_dns01(key_path: &PathBuf, domain: &str, token: &str, fmt: OutputFormat, silent: bool) -> Result<()> {
-    let key = load_account_key(key_path)?;
+fn cmd_show_dns01(cli: &Cli, domain: &str, token: &str, fmt: OutputFormat, silent: bool) -> Result<()> {
+    use secrecy::ExposeSecret;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(|s| s.expose_secret()),
+    )?;
     if !silent {
         if fmt == OutputFormat::Json {
             let name = challenge::dns01::record_name(domain);
             let value = challenge::dns01::txt_record_value(token, &key);
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "show-dns01",
                 "domain": domain,
                 "record_name": name,
@@ -1575,7 +1782,7 @@ async fn cmd_show_dns_persist01(
 
     if !cli.silent {
         if fmt == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "show-dns-persist01",
                 "domain": domain,
                 "record_name": name,
@@ -1597,20 +1804,25 @@ async fn cmd_show_dns_persist01(
 }
 
 async fn cmd_finalize(cli: &Cli, finalize_url: &str, domains: &[String], cert_key_alg: CertKeyAlgorithm) -> Result<()> {
+    client::validate_acme_url(finalize_url, cli.insecure, cli.allow_private_network)?;
+    let domains: Vec<String> = domains
+        .iter()
+        .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
+        .collect::<Result<Vec<_>>>()?;
     let mut client = build_client(cli).await?;
-    let (csr_der, _key_pem) = generate_csr(domains, cert_key_alg)?;
+    let (csr_der, _key_pem) = generate_csr(&domains, cert_key_alg)?;
     let order = client.finalize_order(finalize_url, &csr_der).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "finalize",
                 "status": format!("{}", order.status),
                 "certificate_url": order.certificate,
             }));
         } else {
-            println!("Order status: {}", order.status);
+            outln!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
-                println!("Certificate URL: {cert_url}");
+                outln!("Certificate URL: {cert_url}");
             }
         }
     }
@@ -1618,19 +1830,20 @@ async fn cmd_finalize(cli: &Cli, finalize_url: &str, domains: &[String], cert_ke
 }
 
 async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
+    client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
     let mut client = build_client(cli).await?;
     let order = client.poll_order(url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "poll-order",
                 "status": format!("{}", order.status),
                 "certificate_url": order.certificate,
             }));
         } else {
-            println!("Order status: {}", order.status);
+            outln!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
-                println!("Certificate URL: {cert_url}");
+                outln!("Certificate URL: {cert_url}");
             }
         }
     }
@@ -1638,18 +1851,19 @@ async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
 }
 
 async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) -> Result<()> {
+    client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
     let mut client = build_client(cli).await?;
     let cert = client.download_certificate(url).await?;
     std::fs::write(output, &cert)
         .with_context(|| format!("failed to write certificate to {}", output.display()))?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "download-cert",
                 "path": output.display().to_string(),
             }));
         } else {
-            println!("Certificate saved to {}", output.display());
+            outln!("Certificate saved to {}", output.display());
         }
     }
     Ok(())
@@ -1660,12 +1874,12 @@ async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     let account = client.deactivate_account().await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "deactivate-account",
                 "status": format!("{}", account.status),
             }));
         } else {
-            println!("Account status: {}", account.status);
+            outln!("Account status: {}", account.status);
         }
     }
     Ok(())
@@ -1683,13 +1897,13 @@ async fn cmd_key_rollover(cli: &Cli, new_key_path: &PathBuf) -> Result<()> {
     client.key_change(&new_key).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "key-rollover",
                 "new_key": new_key_path.display().to_string(),
             }));
         } else {
-            println!("Account key rolled over successfully");
-            println!("From now on, use the new key: {}", new_key_path.display());
+            outln!("Account key rolled over successfully");
+            outln!("From now on, use the new key: {}", new_key_path.display());
         }
     }
     Ok(())
@@ -1710,13 +1924,13 @@ async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8>) -> Resul
     client.revoke_certificate(&cert_der, reason).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "revoke-cert",
                 "path": cert_path.display().to_string(),
                 "reason": reason,
             }));
         } else {
-            println!("Certificate revoked");
+            outln!("Certificate revoked");
         }
     }
     Ok(())
@@ -1738,7 +1952,7 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
 
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "renewal-info",
                 "cert_id": cert_id,
                 "suggested_window": {
@@ -1748,10 +1962,10 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
                 "retry_after": retry_after,
             }));
         } else {
-            println!("CertID:   {cert_id}");
-            println!("Suggested renewal window:");
-            println!("  Start:  {}", info.suggested_window.start);
-            println!("  End:    {}", info.suggested_window.end);
+            outln!("CertID:   {cert_id}");
+            outln!("Suggested renewal window:");
+            outln!("  Start:  {}", info.suggested_window.start);
+            outln!("  End:    {}", info.suggested_window.end);
 
             // Show whether renewal is due
             if let Ok(end) = time::OffsetDateTime::parse(
@@ -1760,21 +1974,21 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
             ) {
                 let now = time::OffsetDateTime::now_utc();
                 if now >= end {
-                    println!("Status:   renewal overdue (window has passed)");
+                    outln!("Status:   renewal overdue (window has passed)");
                 } else if let Ok(start) = time::OffsetDateTime::parse(
                     &info.suggested_window.start,
                     &time::format_description::well_known::Rfc3339,
                 ) {
                     if now >= start {
-                        println!("Status:   renewal recommended (within window)");
+                        outln!("Status:   renewal recommended (within window)");
                     } else {
                         let until = start - now;
-                        println!("Status:   not yet due ({} days until window opens)", until.whole_days());
+                        outln!("Status:   not yet due ({} days until window opens)", until.whole_days());
                     }
                 }
             }
             if let Some(secs) = retry_after {
-                println!("Retry-After: {secs}s");
+                outln!("Retry-After: {secs}s");
             }
         }
     }
@@ -1782,6 +1996,9 @@ async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
 }
 
 async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Result<()> {
+    check_wildcard_compatible(&[domain], challenge_type)?;
+    let identifier = Identifier::from_str_auto(domain)?;
+
     let mut client = build_client(cli).await?;
 
     // Pre-authorization requires KID signing; look up account if URL not provided
@@ -1789,12 +2006,11 @@ async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Res
         client.create_account(None, true, None).await?;
     }
 
-    let identifier = Identifier::from_str_auto(domain);
     let (authz, authz_url) = client.new_authorization(identifier).await?;
 
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
-            println!("{}", serde_json::json!({
+            outln!("{}", serde_json::json!({
                 "command": "pre-authorize",
                 "identifier": authz.identifier.value,
                 "identifier_type": authz.identifier.identifier_type,
@@ -1808,18 +2024,18 @@ async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Res
                 })).collect::<Vec<_>>(),
             }));
         } else {
-            println!("Authorization URL: {authz_url}");
-            println!("Identifier:  {} ({})", authz.identifier.value, authz.identifier.identifier_type);
-            println!("Status:      {}", authz.status);
+            outln!("Authorization URL: {authz_url}");
+            outln!("Identifier:  {} ({})", authz.identifier.value, authz.identifier.identifier_type);
+            outln!("Status:      {}", authz.status);
             for ch in &authz.challenges {
                 if ch.challenge_type == challenge_type {
-                    println!("Challenge ({}):", ch.challenge_type);
-                    println!("  URL:   {}", ch.url);
-                    println!("  Status: {}", ch.status);
+                    outln!("Challenge ({}):", ch.challenge_type);
+                    outln!("  URL:   {}", ch.url);
+                    outln!("  Status: {}", ch.status);
                     if let Some(ref t) = ch.token {
-                        println!("  Token: {t}");
+                        outln!("  Token: {t}");
                         let key_auth = challenge::key_authorization(t, client.account_key());
-                        println!("  Key authorization: {key_auth}");
+                        outln!("  Key authorization: {key_auth}");
                     }
                 }
             }
@@ -1828,34 +2044,12 @@ async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Res
     Ok(())
 }
 
-// ── DNS TXT propagation check (dig with nslookup fallback) ──────────────────
+// ── DNS TXT propagation check (hickory-resolver, see dns_check.rs) ─────────
 
-/// Check whether a DNS TXT record with the expected value exists.
-/// Tries `dig` first; falls back to `nslookup` if `dig` is not available.
-async fn dns_txt_check(name: &str, expected: &str) -> Result<bool> {
-    // Try dig first
-    match tokio::process::Command::new("dig")
-        .args(["+short", "TXT", name])
-        .output()
-        .await
-    {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            return Ok(stdout.contains(expected));
-        }
-        Err(e) => {
-            tracing::debug!("dig not available ({e}), falling back to nslookup");
-        }
-    }
-
-    // Fallback: nslookup (available on Windows by default)
-    let output = tokio::process::Command::new("nslookup")
-        .args(["-type=TXT", name])
-        .output()
-        .await
-        .context("neither 'dig' nor 'nslookup' is available - cannot check DNS propagation")?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.contains(expected))
+/// Check whether a DNS TXT record with the expected value exists, using the
+/// configured [`DnsChecker`]. Comparison is byte-exact (no substring match).
+async fn dns_txt_check(checker: &DnsChecker, name: &str, expected: &str) -> Result<bool> {
+    checker.txt_matches(name, expected).await
 }
 
 // ── EAB helper ──────────────────────────────────────────────────────────────
@@ -1864,7 +2058,7 @@ async fn dns_txt_check(name: &str, expected: &str) -> Result<bool> {
 fn parse_eab(
     kid: Option<&str>,
     hmac_key_b64: Option<&str>,
-) -> Result<Option<(String, Vec<u8>)>> {
+) -> Result<Option<(String, secrecy::SecretBox<Vec<u8>>)>> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
 
@@ -1873,7 +2067,7 @@ fn parse_eab(
             let key_bytes = URL_SAFE_NO_PAD
                 .decode(key_b64)
                 .context("--eab-hmac-key is not valid base64url")?;
-            Ok(Some((kid.to_string(), key_bytes)))
+            Ok(Some((kid.to_string(), secrecy::SecretBox::new(Box::new(key_bytes)))))
         }
         (None, None) => Ok(None),
         _ => anyhow::bail!("--eab-kid and --eab-hmac-key must both be provided"),
@@ -1895,6 +2089,28 @@ fn run_hook(
         .with_context(|| format!("failed to run hook: {}", script.display()))?;
     if !status.success() {
         anyhow::bail!("hook {} exited with {status}", script.display());
+    }
+    Ok(())
+}
+
+/// Reject wildcard identifiers paired with a non-DNS challenge type.
+///
+/// RFC 8555 §7.1.3 / §8.4: wildcard certificates can only be validated via
+/// DNS-based challenges. dns-persist-01 (the persistent-DNS draft) is also
+/// accepted because it publishes to the same zone. http-01 and tls-alpn-01
+/// must hit a literal hostname and cannot satisfy `*.example.com`.
+fn check_wildcard_compatible<S: AsRef<str>>(domains: &[S], challenge_type: &str) -> Result<()> {
+    let dns_based = challenge_type == CHALLENGE_TYPE_DNS01
+        || challenge_type == CHALLENGE_TYPE_DNS_PERSIST01;
+    if dns_based {
+        return Ok(());
+    }
+    if let Some(d) = domains.iter().find(|d| d.as_ref().starts_with("*.")) {
+        anyhow::bail!(
+            "wildcard identifier {:?} requires a DNS-based challenge \
+             (dns-01 or dns-persist-01); got {challenge_type}",
+            d.as_ref()
+        );
     }
     Ok(())
 }
@@ -1929,7 +2145,29 @@ async fn cmd_run(
     persist_until: Option<u64>,
     cert_key_alg: CertKeyAlgorithm,
     profile: Option<&str>,
+    force: bool,
 ) -> Result<()> {
+    check_wildcard_compatible(&domains, challenge_type)?;
+
+    hook_check::validate_all_hooks(
+        &[
+            ("dns_hook", dns_hook),
+            ("on_challenge_ready", on_challenge_ready),
+            ("on_cert_issued", on_cert_issued),
+        ],
+        cli.unsafe_hooks,
+    )?;
+
+    let domains: Vec<String> = domains
+        .iter()
+        .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
+        .collect::<Result<Vec<_>>>()?;
+
+    let dns_checker = std::sync::Arc::new(
+        DnsChecker::new(cli.dns_check_mode, cli.dns_check_dnssec)
+            .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
+    );
+
     // ── 0. Renewal check ────────────────────────────────────────────────
     let json = cli.output_format == OutputFormat::Json;
     let silent = cli.silent;
@@ -1964,7 +2202,7 @@ async fn cmd_run(
                     if reissue_on_mismatch {
                         if !silent {
                             if json {
-                                println!("{}", serde_json::json!({
+                                outln!("{}", serde_json::json!({
                                     "command": "run",
                                     "action": "reissue",
                                     "reason": "domain_mismatch",
@@ -1974,7 +2212,7 @@ async fn cmd_run(
                                     "removed": removed,
                                 }));
                             } else {
-                                println!(
+                                outln!(
                                     "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
                                     added.join(", "),
                                     removed.join(", "),
@@ -1987,7 +2225,7 @@ async fn cmd_run(
                     } else {
                         if !silent {
                             if json {
-                                println!("{}", serde_json::json!({
+                                outln!("{}", serde_json::json!({
                                     "command": "run",
                                     "action": "skip",
                                     "reason": "domain_mismatch",
@@ -1998,7 +2236,7 @@ async fn cmd_run(
                                     "removed": removed,
                                 }));
                             } else {
-                                println!(
+                                outln!(
                                     "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
                                      Use --reissue-on-mismatch to override.",
                                     cert_sans.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "),
@@ -2040,7 +2278,7 @@ async fn cmd_run(
                                             if now < start {
                                                 if !silent {
                                                     if json {
-                                                        println!("{}", serde_json::json!({
+                                                        outln!("{}", serde_json::json!({
                                                             "command": "run",
                                                             "action": "skip",
                                                             "reason": "ari",
@@ -2049,7 +2287,7 @@ async fn cmd_run(
                                                             "cert_path": cert_output.display().to_string(),
                                                         }));
                                                     } else {
-                                                        println!(
+                                                        outln!(
                                                             "ARI: renewal window starts {} - skipping renewal",
                                                             info.suggested_window.start
                                                         );
@@ -2058,7 +2296,7 @@ async fn cmd_run(
                                                 return Ok(());
                                             }
                                             if !json && !silent {
-                                                println!(
+                                                outln!(
                                                     "ARI: renewal window is open ({} - {}), renewing...",
                                                     info.suggested_window.start, info.suggested_window.end
                                                 );
@@ -2096,7 +2334,7 @@ async fn cmd_run(
                     Ok(remaining) if remaining > threshold as i64 => {
                         if json {
                             if !silent {
-                                println!("{}", serde_json::json!({
+                                outln!("{}", serde_json::json!({
                                     "command": "run",
                                     "action": "skip",
                                     "reason": "days",
@@ -2106,7 +2344,7 @@ async fn cmd_run(
                                 }));
                             }
                         } else if !silent {
-                            println!(
+                            outln!(
                                 "Certificate {} has {remaining} days remaining (threshold: {threshold}), skipping renewal",
                                 cert_output.display()
                             );
@@ -2115,7 +2353,7 @@ async fn cmd_run(
                     }
                     Ok(remaining) => {
                         if !json && !silent {
-                            println!(
+                            outln!(
                                 "Certificate {} expires in {remaining} days (threshold: {threshold}), renewing...",
                                 cert_output.display()
                             );
@@ -2141,27 +2379,30 @@ async fn cmd_run(
     };
     let contact_list = contact.map(|c| vec![format!("mailto:{c}")]);
     let eab = parse_eab(eab_kid, eab_hmac_key)?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key.as_slice()));
+    let eab_ref = eab.as_ref().map(|(kid, key)| {
+            use secrecy::ExposeSecret;
+            (kid.as_str(), key.expose_secret().as_slice())
+        });
     let account = client.create_account(contact_list, true, eab_ref).await?;
     if !json && !silent {
-        println!("Account status: {}", account.status);
+        outln!("Account status: {}", account.status);
     }
 
     // ── 2. Pre-authorization (optional, RFC 8555 §7.4.1) ───────────────
     if pre_authorize {
         info!("Step 2: Pre-authorizing identifiers via newAuthz");
-        let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+        let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect::<Result<Vec<_>>>()?;
         for id in ids {
             let domain_display = id.value.clone();
             let (authz, authz_url) = client.new_authorization(id).await?;
             if !json && !silent {
-                println!("Pre-authorization for {} - status: {}", domain_display, authz.status);
-                println!("  Authz URL: {authz_url}");
+                outln!("Pre-authorization for {} - status: {}", domain_display, authz.status);
+                outln!("  Authz URL: {authz_url}");
             }
 
             if authz.status == AuthorizationStatus::Valid {
                 if !json && !silent {
-                    println!("  Already valid, skipping");
+                    outln!("  Already valid, skipping");
                 }
                 continue;
             }
@@ -2194,7 +2435,7 @@ async fn cmd_run(
                             dir, token, client.account_key(),
                         )?;
                         if !json && !silent {
-                            println!("  Challenge file written to {}", file.display());
+                            outln!("  Challenge file written to {}", file.display());
                         }
                         challenge_file = Some(file);
                     } else {
@@ -2228,7 +2469,7 @@ async fn cmd_run(
                     }
                     client.respond_to_challenge(&challenge_url).await?;
                     if !json && !silent {
-                        println!("  Challenge response sent - waiting for validation...");
+                        outln!("  Challenge response sent - waiting for validation...");
                     }
                 }
                 CHALLENGE_TYPE_DNS01 => {
@@ -2261,7 +2502,7 @@ async fn cmd_run(
                             + std::time::Duration::from_secs(timeout_secs);
                         let mut found = false;
                         while std::time::Instant::now() < deadline {
-                            if dns_txt_check(&txt_name, &txt_value).await? {
+                            if dns_txt_check(&dns_checker, &txt_name, &txt_value).await? {
                                 found = true;
                                 break;
                             }
@@ -2286,7 +2527,7 @@ async fn cmd_run(
                             );
                         }
                     } else if dns_hook.is_none() && !silent {
-                        println!("Press Enter once the record has propagated...");
+                        outln!("Press Enter once the record has propagated...");
                         let _ = std::io::stdin().read_line(&mut String::new());
                     }
                     if let Some(script) = on_challenge_ready {
@@ -2346,7 +2587,7 @@ async fn cmd_run(
                             + std::time::Duration::from_secs(timeout_secs);
                         let mut found = false;
                         while std::time::Instant::now() < deadline {
-                            if dns_txt_check(&txt_name, &txt_value).await? {
+                            if dns_txt_check(&dns_checker, &txt_name, &txt_value).await? {
                                 found = true;
                                 break;
                             }
@@ -2371,7 +2612,7 @@ async fn cmd_run(
                             );
                         }
                     } else if dns_hook.is_none() && !silent {
-                        println!("Press Enter once the record has propagated...");
+                        outln!("Press Enter once the record has propagated...");
                         let _ = std::io::stdin().read_line(&mut String::new());
                     }
                     if let Some(script) = on_challenge_ready {
@@ -2390,7 +2631,7 @@ async fn cmd_run(
                         challenge::tlsalpn01::print_instructions(
                             &authz.identifier.value, token, client.account_key(),
                         );
-                        println!("Press Enter once the TLS server is configured...");
+                        outln!("Press Enter once the TLS server is configured...");
                         let _ = std::io::stdin().read_line(&mut String::new());
                     }
                     if let Some(script) = on_challenge_ready {
@@ -2422,7 +2663,7 @@ async fn cmd_run(
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 let a = client.get_authorization(&authz_url).await?;
                 if !json && !silent {
-                    println!("  Authorization status: {}", a.status);
+                    outln!("  Authorization status: {}", a.status);
                 }
                 if let Some(ch) = a.challenges.iter().find(|c| c.challenge_type == challenge_type) {
                     if is_challenge_terminal(ch) {
@@ -2473,7 +2714,7 @@ async fn cmd_run(
             if let Some(ref f) = challenge_file { challenge::http01::cleanup_challenge_file(f); }
         }
         if !json && !silent {
-            println!("All identifiers pre-authorized");
+            outln!("All identifiers pre-authorized");
         }
     }
 
@@ -2491,7 +2732,8 @@ async fn cmd_run(
             }
         }
     }
-    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect();
+    check_wildcard_compatible(&domains, challenge_type)?;
+    let ids: Vec<Identifier> = domains.iter().map(|d| Identifier::from_str_auto(d)).collect::<Result<Vec<_>>>()?;
     let (order, order_url) = if let Some(ref cert_id) = ari_cert_id {
         info!("Using ARI replaces field (certID: {cert_id})");
         client.new_order_replacing(ids, cert_id.clone(), profile_owned).await?
@@ -2499,11 +2741,11 @@ async fn cmd_run(
         client.new_order(ids, profile_owned).await?
     };
     if !json && !silent {
-        println!("Order URL:  {order_url}");
+        outln!("Order URL:  {order_url}");
         if let Some(ref p) = order.profile {
-            println!("Profile:    {p}");
+            outln!("Profile:    {p}");
         }
-        println!("Order status: {}", order.status);
+        outln!("Order status: {}", order.status);
     }
 
     // ── Authorizations ──────────────────────────────────────────────────
@@ -2533,13 +2775,13 @@ async fn cmd_run(
         for authz_url in &order.authorizations {
             let authz = client.get_authorization(authz_url).await?;
             if !json && !silent {
-                println!(
+                outln!(
                     "Authorization for {} - status: {}",
                     authz.identifier.value, authz.status
                 );
             }
             if authz.status == AuthorizationStatus::Valid {
-                if !json && !silent { println!("  Already valid, skipping"); }
+                if !json && !silent { outln!("  Already valid, skipping"); }
                 continue;
             }
 
@@ -2639,13 +2881,14 @@ async fn cmd_run(
                     let value = p.txt_value.clone();
                     let domain = p.domain.clone();
                     let sem = semaphore.clone();
+                    let checker = std::sync::Arc::clone(&dns_checker);
                     set.spawn(async move {
                         let _permit = sem.acquire().await
                             .expect("semaphore closed unexpectedly");
                         let deadline = std::time::Instant::now()
                             + std::time::Duration::from_secs(timeout_secs);
                         while std::time::Instant::now() < deadline {
-                            match dns_txt_check(&name, &value).await {
+                            match dns_txt_check(&checker, &name, &value).await {
                                 Ok(true) => return Ok((domain, true)),
                                 Ok(false) => {}
                                 Err(e) => return Err(e),
@@ -2712,7 +2955,7 @@ async fn cmd_run(
                 }
                 client.respond_to_challenge(&p.challenge_url).await?;
                 if !json && !silent {
-                    println!("  Challenge response sent for {}", p.domain);
+                    outln!("  Challenge response sent for {}", p.domain);
                 }
             }
 
@@ -2739,7 +2982,7 @@ async fn cmd_run(
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     let a = client.get_authorization(&p.authz_url).await?;
                     if !json && !silent {
-                        println!("  Authorization status for {}: {}", p.domain, a.status);
+                        outln!("  Authorization status for {}: {}", p.domain, a.status);
                     }
 
                     if let Some(ch) = a
@@ -2818,7 +3061,7 @@ async fn cmd_run(
     for authz_url in &order.authorizations {
         let authz = client.get_authorization(authz_url).await?;
         if !json && !silent {
-            println!(
+            outln!(
                 "Authorization for {} - status: {}",
                 authz.identifier.value, authz.status
             );
@@ -2826,7 +3069,7 @@ async fn cmd_run(
 
         if authz.status == AuthorizationStatus::Valid {
             if !json && !silent {
-                println!("  Already valid, skipping");
+                outln!("  Already valid, skipping");
             }
             continue;
         }
@@ -2869,7 +3112,7 @@ async fn cmd_run(
                         client.account_key(),
                     )?;
                 if !json && !silent {
-                    println!("  Challenge file written to {}", file.display());
+                    outln!("  Challenge file written to {}", file.display());
                 }
                     challenge_file = Some(file);
                 } else {
@@ -2936,7 +3179,7 @@ async fn cmd_run(
                     );
                 }
                 if !json && !silent {
-                    println!("  Challenge response sent - waiting for validation...");
+                    outln!("  Challenge response sent - waiting for validation...");
                 }
             }
             CHALLENGE_TYPE_DNS01 => {
@@ -2965,7 +3208,7 @@ async fn cmd_run(
                         + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&txt_name, &txt_value).await? {
+                        if dns_txt_check(&dns_checker, &txt_name, &txt_value).await? {
                             info!("DNS TXT record found");
                             found = true;
                             break;
@@ -2980,7 +3223,7 @@ async fn cmd_run(
                     }
                 } else if !silent {
                     // Interactive: wait for Enter
-                    println!("Press Enter once the record has propagated...");
+                    outln!("Press Enter once the record has propagated...");
                     let _ = std::io::stdin().read_line(&mut String::new());
                 }
 
@@ -3034,7 +3277,7 @@ async fn cmd_run(
                         + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&txt_name, &txt_value).await? {
+                        if dns_txt_check(&dns_checker, &txt_name, &txt_value).await? {
                             info!("DNS TXT record found");
                             found = true;
                             break;
@@ -3048,7 +3291,7 @@ async fn cmd_run(
                         );
                     }
                 } else if !silent {
-                    println!("Press Enter once the record has propagated...");
+                    outln!("Press Enter once the record has propagated...");
                     let _ = std::io::stdin().read_line(&mut String::new());
                 }
 
@@ -3070,7 +3313,7 @@ async fn cmd_run(
                         token,
                         client.account_key(),
                     );
-                    println!("Press Enter once the TLS server is configured...");
+                    outln!("Press Enter once the TLS server is configured...");
                     let _ = std::io::stdin().read_line(&mut String::new());
                 }
 
@@ -3108,7 +3351,7 @@ async fn cmd_run(
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             let a = client.get_authorization(authz_url).await?;
             if !json && !silent {
-                println!("  Authorization status: {}", a.status);
+                outln!("  Authorization status: {}", a.status);
             }
 
             // Surface challenge-level errors early (only if terminal)
@@ -3182,7 +3425,7 @@ async fn cmd_run(
     let finalize_url = order.finalize.clone();
     let mut order = client.finalize_order(&finalize_url, &csr_der).await?;
     if !json && !silent {
-        println!("Order status: {}", order.status);
+        outln!("Order status: {}", order.status);
     }
 
     // ── Poll order ──────────────────────────────────────────────────────
@@ -3194,7 +3437,7 @@ async fn cmd_run(
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         order = client.poll_order(&order_url).await?;
         if !json && !silent {
-            println!("  Order status: {}", order.status);
+            outln!("  Order status: {}", order.status);
         }
     }
 
@@ -3205,36 +3448,44 @@ async fn cmd_run(
         .context("order is valid but has no certificate URL")?;
     let cert = client.download_certificate(&cert_url).await?;
 
-    let password = if let Some(pw) = key_password {
-        Some(pw.to_string())
+    let password: Option<secrecy::SecretString> = if let Some(pw) = key_password {
+        Some(secrecy::SecretString::from(pw.to_string()))
     } else if let Some(path) = key_password_file {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read password file: {}", path.display()))?;
-        content.lines().next().map(|line| line.trim().to_string()).filter(|pw| !pw.is_empty())
+        let content = zeroize::Zeroizing::new(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read password file: {}", path.display()))?,
+        );
+        let pw: Option<String> = content
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .filter(|pw: &String| !pw.is_empty());
+        pw.map(secrecy::SecretString::from)
     } else {
         None
     };
 
     let key_encrypted = password.is_some();
     if let Some(ref password) = password {
-        let encrypted = encrypt_private_key(&key_pem, password)?;
-        std::fs::write(key_output, encrypted.as_bytes())
+        use secrecy::ExposeSecret;
+        let encrypted = encrypt_private_key(&key_pem, password.expose_secret())?;
+        fs_secure::write_secret_file(key_output, encrypted.as_bytes(), force)
             .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
         if !json && !silent {
-            println!("Private key saved to {} (encrypted)", key_output.display());
+            outln!("Private key saved to {} (encrypted)", key_output.display());
         }
     } else {
-        std::fs::write(key_output, key_pem.as_bytes())
+        fs_secure::write_secret_file(key_output, key_pem.as_bytes(), force)
             .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
         if !json && !silent {
-            println!("Private key saved to {}", key_output.display());
+            outln!("Private key saved to {}", key_output.display());
         }
     }
 
     std::fs::write(cert_output, &cert)
         .with_context(|| format!("failed to write certificate to {}", cert_output.display()))?;
     if json && !silent {
-        println!("{}", serde_json::json!({
+        outln!("{}", serde_json::json!({
             "command": "run",
             "action": "issued",
             "domains": domains,
@@ -3244,9 +3495,9 @@ async fn cmd_run(
             "profile": profile,
         }));
     } else if !silent {
-        println!("Certificate saved to {}", cert_output.display());
+        outln!("Certificate saved to {}", cert_output.display());
         if print_cert {
-            println!("{cert}");
+            outln!("{cert}");
         }
     }
 

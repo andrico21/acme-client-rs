@@ -23,6 +23,44 @@ pub mod http01 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tracing::info;
 
+    /// Maximum accepted token length (defensive upper bound; real ACME tokens
+    /// are ~43 base64url chars from 32 random bytes, but the RFC does not
+    /// fix a length).
+    const MAX_TOKEN_LEN: usize = 128;
+
+    /// Validate an ACME HTTP-01 challenge token before using it as a path
+    /// segment or URL component.
+    ///
+    /// RFC 8555 §8.3 requires the token to be a base64url string. We accept
+    /// only `[A-Za-z0-9_-]{1,128}` and reject anything that could be
+    /// interpreted as a path traversal, separator, or empty segment. This
+    /// guards against a malicious or compromised ACME server (or unsafe
+    /// `serve-http01 --token` input) writing/removing files outside the
+    /// challenge directory.
+    pub fn validate_token(token: &str) -> Result<()> {
+        if token.is_empty() {
+            bail!("ACME challenge token is empty");
+        }
+        if token.len() > MAX_TOKEN_LEN {
+            bail!(
+                "ACME challenge token is {} bytes; refusing (max {})",
+                token.len(),
+                MAX_TOKEN_LEN
+            );
+        }
+        for b in token.as_bytes() {
+            let ok = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_');
+            if !ok {
+                bail!(
+                    "ACME challenge token contains invalid character {:?}; \
+                     expected base64url alphabet [A-Za-z0-9_-]",
+                    *b as char
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// The key authorization value to serve as the response body.
     pub fn response_body(token: &str, account_key: &AccountKey) -> String {
         key_authorization(token, account_key)
@@ -36,11 +74,17 @@ pub mod http01 {
     /// Write the challenge token file into `<dir>/.well-known/acme-challenge/`.
     ///
     /// Returns the full path to the written file (for cleanup).
+    ///
+    /// The token is validated against [`validate_token`] before any
+    /// filesystem operation. The file itself is created with `O_NOFOLLOW`
+    /// where supported to avoid following an attacker-planted symlink in a
+    /// shared webroot.
     pub fn write_challenge_file(
         challenge_dir: &Path,
         token: &str,
         account_key: &AccountKey,
     ) -> Result<PathBuf> {
+        validate_token(token)?;
         let auth = response_body(token, account_key);
         let well_known = challenge_dir.join(".well-known").join("acme-challenge");
         std::fs::create_dir_all(&well_known).with_context(|| {
@@ -50,11 +94,27 @@ pub mod http01 {
             )
         })?;
         let file_path = well_known.join(token);
-        std::fs::write(&file_path, auth.as_bytes()).with_context(|| {
+
+        use std::fs::OpenOptions;
+        use std::io::Write;
+        let mut opts = OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            // 0o644 — challenge file must be world-readable for the webroot
+            // mode of HTTP-01 (web server reads as a different user).
+            opts.mode(0o644);
+            opts.custom_flags(libc::O_NOFOLLOW);
+        }
+        let mut f = opts.open(&file_path).with_context(|| {
             format!(
-                "failed to write challenge file {}",
+                "failed to open challenge file {} (refused to follow symlink?)",
                 file_path.display()
             )
+        })?;
+        f.write_all(auth.as_bytes()).with_context(|| {
+            format!("failed to write challenge file {}", file_path.display())
         })?;
         info!("HTTP-01: wrote challenge to {}", file_path.display());
         Ok(file_path)
@@ -137,6 +197,7 @@ pub mod http01 {
 
 pub mod dns01 {
     use super::*;
+    use crate::outln;
 
     /// The value for the `_acme-challenge.<domain>` TXT record:
     ///   `base64url(SHA-256(keyAuthorization))`
@@ -147,30 +208,40 @@ pub mod dns01 {
     }
 
     /// Full DNS record name for the challenge.
+    ///
+    /// For wildcard identifiers (`*.example.com`), the leading `*.` is
+    /// stripped per RFC 8555 §8.4 — the validation record is published
+    /// at the base zone, not under a literal `*` label.
     pub fn record_name(domain: &str) -> String {
-        format!("_acme-challenge.{domain}")
+        let base = domain.strip_prefix("*.").unwrap_or(domain);
+        format!("_acme-challenge.{base}")
     }
 
     /// Print human-readable instructions for manual DNS record setup.
     pub fn print_instructions(domain: &str, token: &str, account_key: &AccountKey) {
         let name = record_name(domain);
         let value = txt_record_value(token, account_key);
-        println!();
-        println!("=== DNS-01 Challenge ===");
-        println!("Create a DNS TXT record:");
-        println!("  Name:  {name}");
-        println!("  Type:  TXT");
-        println!("  Value: {value}");
-        println!();
+        outln!();
+        outln!("=== DNS-01 Challenge ===");
+        outln!("Create a DNS TXT record:");
+        outln!("  Name:  {name}");
+        outln!("  Type:  TXT");
+        outln!("  Value: {value}");
+        outln!();
     }
 }
 
 // ── DNS-PERSIST-01 (draft-ietf-acme-dns-persist) ────────────────────────────
 
 pub mod dns_persist01 {
+    use crate::outln;
     /// DNS record name for dns-persist-01 validation.
+    ///
+    /// For wildcard identifiers (`*.example.com`), the leading `*.` is
+    /// stripped — the persistent validation record lives at the base zone.
     pub fn record_name(domain: &str) -> String {
-        format!("_validation-persist.{domain}")
+        let base = domain.strip_prefix("*.").unwrap_or(domain);
+        format!("_validation-persist.{base}")
     }
 
     /// Construct the TXT record value (RFC 8659 issue-value syntax).
@@ -203,23 +274,23 @@ pub mod dns_persist01 {
         let name = record_name(domain);
         let issuer = &issuer_domain_names[0];
         let value = txt_record_value(issuer, account_uri, policy, persist_until);
-        println!();
-        println!("=== DNS-PERSIST-01 Challenge ===");
-        println!("Create a DNS TXT record:");
-        println!("  Name:  {name}");
-        println!("  Type:  TXT");
-        println!("  Value: {value}");
+        outln!();
+        outln!("=== DNS-PERSIST-01 Challenge ===");
+        outln!("Create a DNS TXT record:");
+        outln!("  Name:  {name}");
+        outln!("  Type:  TXT");
+        outln!("  Value: {value}");
         if issuer_domain_names.len() > 1 {
-            println!();
-            println!("Available issuer domain names (you may use any one):");
+            outln!();
+            outln!("Available issuer domain names (you may use any one):");
             for idn in issuer_domain_names {
-                println!("  - {idn}");
+                outln!("  - {idn}");
             }
         }
-        println!();
-        println!("This record is persistent - it can be reused for future issuances.");
-        println!("Unlike dns-01, it does not need to change per issuance.");
-        println!();
+        outln!();
+        outln!("This record is persistent - it can be reused for future issuances.");
+        outln!("Unlike dns-01, it does not need to change per issuance.");
+        outln!();
     }
 }
 
@@ -227,6 +298,7 @@ pub mod dns_persist01 {
 
 pub mod tlsalpn01 {
     use super::*;
+    use crate::outln;
 
     /// ALPN protocol identifier.
     #[allow(dead_code)]
@@ -254,13 +326,40 @@ pub mod tlsalpn01 {
     pub fn print_instructions(domain: &str, token: &str, account_key: &AccountKey) {
         let value = acme_identifier_value(token, account_key);
         let hex: String = value.iter().map(|b| format!("{b:02x}")).collect();
-        println!();
-        println!("=== TLS-ALPN-01 Challenge ===");
-        println!("Domain: {domain}");
-        println!("ALPN protocol: acme-tls/1");
-        println!("acmeIdentifier extension (hex): {hex}");
-        println!();
-        println!("Configure a TLS server on port 443 with a self-signed");
-        println!("certificate containing this extension.");
+        outln!();
+        outln!("=== TLS-ALPN-01 Challenge ===");
+        outln!("Domain: {domain}");
+        outln!("ALPN protocol: acme-tls/1");
+        outln!("acmeIdentifier extension (hex): {hex}");
+        outln!();
+        outln!("Configure a TLS server on port 443 with a self-signed");
+        outln!("certificate containing this extension.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn dns01_record_name_strips_wildcard_prefix() {
+        assert_eq!(
+            super::dns01::record_name("*.example.com"),
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            super::dns01::record_name("example.com"),
+            "_acme-challenge.example.com"
+        );
+    }
+
+    #[test]
+    fn dns_persist01_record_name_strips_wildcard_prefix() {
+        assert_eq!(
+            super::dns_persist01::record_name("*.example.com"),
+            "_validation-persist.example.com"
+        );
+        assert_eq!(
+            super::dns_persist01::record_name("example.com"),
+            "_validation-persist.example.com"
+        );
     }
 }

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 use serde::Deserialize;
 
 /// Default config file name (auto-loaded from current directory if present).
@@ -37,6 +38,16 @@ pub struct GlobalConfig {
     pub output_format: Option<String>,
     /// Disable TLS certificate verification.
     pub insecure: Option<bool>,
+    /// HTTP connect timeout in seconds (TCP + TLS handshake).
+    pub connect_timeout: Option<u64>,
+    /// Allow private/loopback/link-local destination IPs (SSRF guard opt-out).
+    pub allow_private_network: Option<bool>,
+    /// DNS-01 propagation check resolver mode: "authoritative", "cached", or "system".
+    pub dns_check_mode: Option<String>,
+    /// Require DNSSEC validation for DNS-01 propagation checks.
+    pub dns_check_dnssec: Option<bool>,
+    /// Downgrade hook ownership/permission violations to warnings (SEC-13 opt-out).
+    pub unsafe_hooks: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -73,7 +84,7 @@ pub struct RunConfig {
     /// EAB Key ID from the CA.
     pub eab_kid: Option<String>,
     /// EAB HMAC key (base64url-encoded).
-    pub eab_hmac_key: Option<String>,
+    pub eab_hmac_key: Option<SecretString>,
     /// Pre-authorize identifiers via newAuthz before creating the order.
     pub pre_authorize: Option<bool>,
     /// Use ACME Renewal Information (RFC 9702) to decide when to renew.
@@ -102,7 +113,7 @@ pub struct AccountConfig {
     /// EAB Key ID from the CA.
     pub eab_kid: Option<String>,
     /// EAB HMAC key (base64url-encoded).
-    pub eab_hmac_key: Option<String>,
+    pub eab_hmac_key: Option<SecretString>,
 }
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -341,4 +352,32 @@ pub fn generate_template() -> &'static str {
 # Env: ACME_EAB_HMAC_KEY
 # eab_hmac_key = "base64url-encoded-hmac-key"
 "#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// SEC-07 regression: Debug-formatting a populated config must NOT leak
+    /// the EAB HMAC secret. SecretString redacts itself in Debug output.
+    #[test]
+    fn debug_format_redacts_eab_hmac_key() {
+        let secret_value = "super-secret-hmac-key-value-do-not-leak";
+        let cfg = Config {
+            global: GlobalConfig::default(),
+            run: RunConfig {
+                eab_hmac_key: Some(SecretString::from(secret_value.to_string())),
+                ..Default::default()
+            },
+            account: AccountConfig {
+                eab_hmac_key: Some(SecretString::from(secret_value.to_string())),
+                ..Default::default()
+            },
+        };
+        let debug_output = format!("{cfg:?}");
+        assert!(
+            !debug_output.contains(secret_value),
+            "SECURITY: Debug output leaked HMAC secret: {debug_output}"
+        );
+    }
 }

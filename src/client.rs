@@ -13,9 +13,221 @@ use crate::jws::AccountKey;
 use crate::types::*;
 
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Arc;
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
 const USER_AGENT_VALUE: &str = concat!("acme-client-rs/", env!("CARGO_PKG_VERSION"));
+
+// ── SSRF defenses ───────────────────────────────────────────────────────────
+//
+// Two complementary checks guard every URL we follow:
+//
+//   1. `validate_acme_url` — synchronous scheme + literal-IP check applied at
+//      every URL ingress (CLI args, server-returned URLs in Directory/Order/
+//      Authorization). Cheap, no I/O, catches `file://`, `data:`, embedded
+//      IPv4/IPv6 literals in private/loopback ranges.
+//
+//   2. `SsrfSafeResolver` — wraps the system DNS resolver inside the reqwest
+//      `Client`. Catches DNS-rebinding and the case where a hostname resolves
+//      to a private IP. This is the layer that matters for `corp.local`-style
+//      names that bypass the synchronous check.
+//
+// Both layers respect `--allow-private-network` (and `--insecure`, which
+// implies it). Default: BLOCK.
+
+/// Classify an IP as "must not be reached by an ACME client" unless the
+/// operator explicitly opted in. Covers loopback, RFC1918, link-local
+/// (incl. cloud metadata at 169.254.169.254), CGNAT, multicast, broadcast,
+/// reserved/documentation ranges, IPv6 loopback/ULA/link-local/multicast,
+/// and IPv4-mapped IPv6 (a common SSRF bypass).
+fn is_private_or_special_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_private_or_special_ipv4(v4),
+        IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_private_or_special_ipv4(mapped);
+            }
+            is_private_or_special_ipv6(v6)
+        }
+    }
+}
+
+fn is_private_or_special_ipv4(ip: Ipv4Addr) -> bool {
+    if ip.is_loopback() || ip.is_private() || ip.is_link_local()
+        || ip.is_multicast() || ip.is_broadcast() || ip.is_unspecified()
+        || ip.is_documentation()
+    {
+        return true;
+    }
+    let o = ip.octets();
+    // CGNAT (RFC 6598): 100.64.0.0/10
+    if o[0] == 100 && (o[1] & 0xC0) == 64 {
+        return true;
+    }
+    // IETF protocol assignments (RFC 6890): 192.0.0.0/24
+    if o[0] == 192 && o[1] == 0 && o[2] == 0 {
+        return true;
+    }
+    // Benchmarking (RFC 2544): 198.18.0.0/15
+    if o[0] == 198 && (o[1] == 18 || o[1] == 19) {
+        return true;
+    }
+    // Reserved for future use (RFC 1112): 240.0.0.0/4
+    if o[0] >= 240 {
+        return true;
+    }
+    false
+}
+
+fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
+        return true;
+    }
+    let s = ip.segments();
+    // Unique local addresses (RFC 4193): fc00::/7
+    if (s[0] & 0xfe00) == 0xfc00 {
+        return true;
+    }
+    // Link-local: fe80::/10
+    if (s[0] & 0xffc0) == 0xfe80 {
+        return true;
+    }
+    // Documentation (RFC 3849): 2001:db8::/32
+    if s[0] == 0x2001 && s[1] == 0x0db8 {
+        return true;
+    }
+    false
+}
+
+/// Validate any URL the client is about to contact.
+///
+/// `insecure` allows plain `http://` for loopback hosts only (matches
+/// historical `validate_directory_url` semantics).
+/// `allow_private` permits private/loopback/link-local IP literals; it is
+/// implicitly true when `insecure` is set.
+///
+/// Hostnames (non-literal) are NOT resolved here — that check happens
+/// connect-time inside `SsrfSafeResolver`, which closes the DNS-rebinding
+/// race that synchronous resolution would leave open.
+pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
+    let parsed = reqwest::Url::parse(url)
+        .with_context(|| format!("invalid URL {url:?}"))?;
+    let scheme = parsed.scheme();
+    if scheme != "https" && scheme != "http" {
+        bail!("URL must use https:// (got scheme {scheme:?}); refusing {url:?}");
+    }
+    let host = parsed.host_str().unwrap_or("");
+    let host_ip: Option<IpAddr> = host
+        .trim_start_matches('[').trim_end_matches(']')
+        .parse().ok();
+    let is_loopback_host = host_ip.map(|ip| ip.is_loopback()).unwrap_or_else(||
+        matches!(host, "localhost")
+    );
+    if scheme == "http" {
+        if !insecure {
+            bail!(
+                "URL must use https:// (RFC 8555 §6.1). Got http:// for {url:?}. \
+                 Pass --insecure only for local testing against a loopback ACME server."
+            );
+        }
+        if !is_loopback_host {
+            bail!(
+                "--insecure with http:// is only allowed for loopback hosts \
+                 (127.0.0.1, ::1, localhost); got host {host:?} in {url:?}"
+            );
+        }
+    }
+    let allow_private = allow_private || insecure;
+    if let Some(ip) = host_ip {
+        if !allow_private && is_private_or_special_ip(ip) {
+            bail!(
+                "refusing to contact private/loopback/special-purpose IP {ip} in {url:?}; \
+                 pass --allow-private-network to override (e.g. for an internal CA)"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// reqwest DNS resolver that rejects hostnames resolving to private,
+/// loopback, link-local, multicast or other special-purpose addresses.
+/// This is the connect-time half of SSRF defense and closes the
+/// DNS-rebinding race that a synchronous pre-check cannot.
+pub struct SsrfSafeResolver {
+    allow_private: bool,
+}
+
+impl SsrfSafeResolver {
+    pub fn new(allow_private: bool) -> Arc<Self> {
+        Arc::new(Self { allow_private })
+    }
+}
+
+impl reqwest::dns::Resolve for SsrfSafeResolver {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let allow_private = self.allow_private;
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .collect();
+            let filtered: Vec<SocketAddr> = if allow_private {
+                addrs
+            } else {
+                addrs.into_iter()
+                    .filter(|sa| !is_private_or_special_ip(sa.ip()))
+                    .collect()
+            };
+            if filtered.is_empty() {
+                let err: Box<dyn std::error::Error + Send + Sync> = format!(
+                    "host {host:?} resolved only to private/loopback/special-purpose addresses; \
+                     pass --allow-private-network to override"
+                ).into();
+                return Err(err);
+            }
+            let iter: reqwest::dns::Addrs = Box::new(filtered.into_iter());
+            Ok(iter)
+        })
+    }
+}
+
+/// Build a `reqwest::Client` with the project's standard headers, timeouts,
+/// redirect policy and TLS settings. Centralizing this prevents drift
+/// between `AcmeClient::new` and ad-hoc HTTP calls (e.g. `list-profiles`).
+///
+/// `connect_timeout_secs` caps TCP + TLS handshake. The whole-request
+/// timeout is fixed at 120s. Auto-redirects are disabled because RFC 8555
+/// drives its own resource navigation via `Location` headers on
+/// non-redirect responses (newAccount, newOrder); transparent 30x
+/// following would corrupt nonce handling and hide CA misconfiguration.
+pub fn build_http_client(
+    danger_accept_invalid_certs: bool,
+    connect_timeout_secs: u64,
+    allow_private_network: bool,
+) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(USER_AGENT_VALUE)
+        .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
+        .timeout(std::time::Duration::from_secs(120))
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(danger_accept_invalid_certs)
+        .dns_resolver(SsrfSafeResolver::new(allow_private_network))
+        .build()
+        .context("failed to build HTTP client")
+}
+
+/// Validate an ACME directory URL against RFC 8555 §6.1 ("Use of HTTPS is
+/// REQUIRED"). Thin wrapper over `validate_acme_url` that also emits the
+/// loopback-testing warning when `http://` is permitted via `--insecure`.
+pub fn validate_directory_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
+    validate_acme_url(url, insecure, allow_private)
+        .with_context(|| format!("invalid directory URL {url:?}"))?;
+    if reqwest::Url::parse(url).map(|u| u.scheme() == "http").unwrap_or(false) {
+        warn!("Using plain http:// for ACME directory (loopback only) — TESTING USE ONLY");
+    }
+    Ok(())
+}
 
 // ── Response wrapper ────────────────────────────────────────────────────────
 
@@ -78,16 +290,15 @@ impl AcmeClient {
     ///
     /// When `danger_accept_invalid_certs` is `true`, TLS certificate
     /// verification is disabled.  **Only use for testing** (e.g. Pebble).
+    /// `connect_timeout_secs` is forwarded to the HTTP client.
     pub async fn new(
         directory_url: &str,
         account_key: AccountKey,
         danger_accept_invalid_certs: bool,
+        connect_timeout_secs: u64,
+        allow_private_network: bool,
     ) -> Result<Self> {
-        let http = reqwest::Client::builder()
-            .user_agent(USER_AGENT_VALUE)
-            .danger_accept_invalid_certs(danger_accept_invalid_certs)
-            .build()
-            .context("failed to build HTTP client")?;
+        let http = build_http_client(danger_accept_invalid_certs, connect_timeout_secs, allow_private_network)?;
 
         info!("Fetching ACME directory from {}", directory_url);
         let resp = http
@@ -367,7 +578,9 @@ impl AcmeClient {
         debug!("Fetching authorization: {authz_url}");
         let resp = self.signed_request(authz_url, "").await?;
         resp.ensure_success()?;
-        resp.json()
+        let authz: Authorization = resp.json()?;
+        validate_server_identifier(&authz.identifier)?;
+        Ok(authz)
     }
 
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
@@ -444,6 +657,7 @@ impl AcmeClient {
         resp.ensure_success()?;
         let authz_url = resp.location()?;
         let authz: Authorization = resp.json()?;
+        validate_server_identifier(&authz.identifier)?;
         Ok((authz, authz_url))
     }
 
@@ -546,4 +760,79 @@ pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
     let serial_b64 = URL_SAFE_NO_PAD.encode(serial);
 
     Ok(format!("{aki_b64}.{serial_b64}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn rejects_non_http_schemes() {
+        for url in ["file:///etc/passwd", "data:text/plain,x", "gopher://x", "ftp://x/"] {
+            assert!(validate_acme_url(url, true, true).is_err(), "{url} should be rejected");
+        }
+    }
+
+    #[test]
+    fn https_public_host_ok() {
+        assert!(validate_acme_url("https://acme-v02.api.letsencrypt.org/directory", false, false).is_ok());
+    }
+
+    #[test]
+    fn http_rejected_without_insecure() {
+        assert!(validate_acme_url("http://localhost:14000/dir", false, false).is_err());
+    }
+
+    #[test]
+    fn http_loopback_ok_with_insecure() {
+        for url in ["http://localhost/dir", "http://127.0.0.1:14000/dir", "http://[::1]/dir"] {
+            assert!(validate_acme_url(url, true, false).is_ok(), "{url} should pass");
+        }
+    }
+
+    #[test]
+    fn http_non_loopback_rejected_even_with_insecure() {
+        assert!(validate_acme_url("http://10.0.0.5/dir", true, true).is_err());
+    }
+
+    #[test]
+    fn private_ipv4_literal_rejected_by_default() {
+        for url in [
+            "https://10.0.0.5/dir", "https://192.168.1.1/dir", "https://172.16.0.1/dir",
+            "https://169.254.169.254/latest/meta-data/", "https://100.64.0.1/dir",
+        ] {
+            assert!(validate_acme_url(url, false, false).is_err(), "{url} should be rejected");
+        }
+    }
+
+    #[test]
+    fn private_ipv4_literal_allowed_with_opt_in() {
+        assert!(validate_acme_url("https://10.0.0.5/dir", false, true).is_ok());
+    }
+
+    #[test]
+    fn private_ipv6_literal_rejected() {
+        for url in ["https://[::1]/dir", "https://[fc00::1]/dir", "https://[fe80::1]/dir"] {
+            assert!(validate_acme_url(url, false, false).is_err(), "{url} should be rejected");
+        }
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_blocked_as_ipv4() {
+        assert!(validate_acme_url("https://[::ffff:10.0.0.5]/dir", false, false).is_err());
+        assert!(validate_acme_url("https://[::ffff:10.0.0.5]/dir", false, true).is_ok());
+    }
+
+    #[test]
+    fn classifies_private_ips() {
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254))));
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(100, 64, 0, 1))));
+        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+        assert!(!is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(104, 16, 0, 1))));
+        assert!(is_private_or_special_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_private_or_special_ip("fc00::1".parse().unwrap()));
+        assert!(is_private_or_special_ip("fe80::1".parse().unwrap()));
+    }
 }

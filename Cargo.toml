@@ -7,10 +7,14 @@ license = "Apache-2.0"
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+idna = "1"
+secrecy = { version = "0.10", features = ["serde"] }
+zeroize = "1"
 clap = { version = "4.6", features = ["derive", "env"] }
 ecdsa = { version = "0.16", features = ["signing"] }
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
 hmac = "0.12"
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config", "dnssec-aws-lc-rs"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 p384 = { version = "0.13", features = ["ecdsa", "pem"] }
 p521 = { version = "0.13", features = ["ecdsa", "pem"] }
@@ -30,6 +34,12 @@ toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 x509-parser = "0.18"
+[lints.clippy]
+print_stdout = "deny"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+nix = { version = "0.31", features = ["user", "fs"] }
 
 # ── Release profile: smallest hardened binary ────────────────────────────────
 
@@ -42,3 +52,6 @@ strip = true           # Strip all symbols and debug info from the binary
 debug = 0              # No debug info generated at all (DWARF, PDB, etc.)
 debug-assertions = false
 overflow-checks = true # Catch integer overflow → panic → abort (defense in depth)
+
+[dev-dependencies]
+tempfile = "3.27.0"

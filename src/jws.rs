@@ -116,9 +116,38 @@ impl AccountKey {
         Ok(Self { inner })
     }
 
-    /// Load an account key from a PKCS#8 PEM string.
-    /// The algorithm is auto-detected from the key's OID.
-    pub fn from_pkcs8_pem(pem_data: &str) -> Result<Self> {
+    /// Load an account key from a PKCS#8 PEM string, optionally decrypting
+    /// an encrypted PKCS#8 envelope (PEM label `ENCRYPTED PRIVATE KEY`,
+    /// PBES2/scrypt+AES-256-CBC) with the supplied password.
+    ///
+    /// SEC-08: account-key-at-rest encryption. Opt-in via password; absence
+    /// of password against an encrypted key returns a directive error
+    /// pointing at the relevant CLI flag.
+    pub fn from_pkcs8_pem_with_password(pem_data: &str, password: Option<&str>) -> Result<Self> {
+        let parsed = pem::parse(pem_data).context("failed to parse PKCS#8 PEM data")?;
+        let is_encrypted = parsed.tag() == "ENCRYPTED PRIVATE KEY";
+
+        if is_encrypted {
+            let password = password.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "account key is encrypted PKCS#8 but no password supplied; \
+                     pass --account-key-password or --account-key-password-file"
+                )
+            })?;
+            let enc = pkcs8::EncryptedPrivateKeyInfo::try_from(parsed.contents())
+                .map_err(|e| anyhow::anyhow!("failed to parse encrypted PKCS#8: {e}"))?;
+            let decrypted = enc
+                .decrypt(password.as_bytes())
+                .map_err(|_| anyhow::anyhow!("failed to decrypt account key (wrong password?)"))?;
+            let unencrypted_pem =
+                pem::encode(&pem::Pem::new("PRIVATE KEY", decrypted.as_bytes().to_vec()));
+            return Self::from_pkcs8_pem_unencrypted(&unencrypted_pem);
+        }
+
+        Self::from_pkcs8_pem_unencrypted(pem_data)
+    }
+
+    fn from_pkcs8_pem_unencrypted(pem_data: &str) -> Result<Self> {
         use p256::pkcs8::DecodePrivateKey;
 
         if let Ok(sk) = p256::SecretKey::from_pkcs8_pem(pem_data) {
@@ -355,8 +384,7 @@ impl AccountKey {
                 sig.to_bytes().to_vec()
             }
             KeyInner::Rs256(sk) => {
-                let signing_key =
-                    rsa::pkcs1v15::SigningKey::<Sha256>::new(sk.as_ref().clone());
+                let signing_key = rsa::pkcs1v15::SigningKey::<Sha256>::new(sk.as_ref().clone());
                 let sig: rsa::pkcs1v15::Signature = signing_key.sign(data);
                 let bytes: Box<[u8]> = sig.into();
                 bytes.to_vec()
@@ -378,8 +406,7 @@ impl AccountKey {
             "jwk": self.jwk(),
             "url": url,
         });
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
         let sig_bytes = self.sign_raw(signing_input.as_bytes());
@@ -397,12 +424,7 @@ impl AccountKey {
     ///
     /// The payload is the account's public JWK, signed with HMAC-SHA256
     /// using the EAB key provided by the CA.
-    pub fn sign_eab(
-        &self,
-        eab_kid: &str,
-        hmac_key: &[u8],
-        url: &str,
-    ) -> Result<serde_json::Value> {
+    pub fn sign_eab(&self, eab_kid: &str, hmac_key: &[u8], url: &str) -> Result<serde_json::Value> {
         use hmac::{Hmac, Mac};
         type HmacSha256 = Hmac<Sha256>;
 
@@ -411,14 +433,11 @@ impl AccountKey {
             "kid": eab_kid,
             "url": url,
         });
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
-        let payload_b64 =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk())?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk())?.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
 
-        let mut mac = HmacSha256::new_from_slice(hmac_key)
-            .context("invalid HMAC key length")?;
+        let mut mac = HmacSha256::new_from_slice(hmac_key).context("invalid HMAC key length")?;
         mac.update(signing_input.as_bytes());
         let sig = mac.finalize().into_bytes();
         let sig_b64 = URL_SAFE_NO_PAD.encode(&sig);
@@ -432,8 +451,7 @@ impl AccountKey {
 
     /// Produce a JWS Flattened JSON Serialization.
     fn sign_jws(&self, header: &ProtectedHeader<'_>, payload: &str) -> Result<String> {
-        let protected =
-            URL_SAFE_NO_PAD.encode(serde_json::to_string(header)?.as_bytes());
+        let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(header)?.as_bytes());
 
         let payload_b64 = if payload.is_empty() {
             String::new()

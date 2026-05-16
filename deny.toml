@@ -3,7 +3,12 @@
 [advisories]
 version = 2
 ignore = [
-    # rsa 0.9.10 Marvin Attack — transitive dep via rcgen, not used for RSA operations
+    # RUSTSEC-2023-0071 (Marvin Attack): timing side-channel in `rsa` crate's
+    # PKCS#1 v1.5 *decryption*. We use `rsa` (a direct dependency) only for
+    # PKCS#1 v1.5 *signing* of ACME JWS payloads (src/jws.rs), never for
+    # decryption — so the advisory does not apply to our usage. No fixed
+    # version of `rsa` exists yet (tracked upstream); revisit on every
+    # `rsa` upgrade and remove this ignore once a patched release ships.
     "RUSTSEC-2023-0071",
 ]
 

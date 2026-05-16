@@ -43,6 +43,24 @@
 # Default: false
 # insecure = true
 
+# HTTP connect timeout in seconds (TCP + TLS handshake cap). The whole-request
+# timeout is fixed at 120s. Increase if you have a slow link to the CA or are
+# routing through a proxy that adds latency.
+# CLI: --connect-timeout
+# Env: ACME_CONNECT_TIMEOUT
+# Default: 15
+# connect_timeout = 30
+
+# Downgrade hook-script ownership/permission violations (SEC-13) from hard
+# errors to stderr warnings. By default the client refuses to run if any
+# configured hook script is not an absolute path, not owned by the running user
+# or root, group/world-writable, or sits in a group/world-writable directory.
+# Set to true only if you understand and accept the privilege-escalation risk.
+# CLI: --unsafe-hooks
+# Env: ACME_UNSAFE_HOOKS
+# Default: false
+# unsafe_hooks = true
+
 # ── Run subcommand options ───────────────────────────────────────────────────
 # These apply when using `acme-client-rs run`.
 
@@ -75,6 +93,14 @@
 # The script is called with environment variables: ACME_ACTION, ACME_DOMAIN,
 # ACME_TXT_NAME, ACME_TXT_VALUE. For both dns-01 and dns-persist-01,
 # ACME_ACTION is "create" before validation or "cleanup" after.
+#
+# SECURITY (SEC-13): Hook scripts run with the client's privileges (often root).
+# Each configured hook must be an ABSOLUTE path, owned by the running user or
+# root, NOT group/world-writable, and live inside directories that are also not
+# group/world-writable. Otherwise the client refuses to run. To downgrade these
+# checks to warnings, set unsafe_hooks = true below (or pass --unsafe-hooks /
+# ACME_UNSAFE_HOOKS=1). Only do so if you accept the privilege-escalation risk.
+#
 # CLI: --dns-hook
 # dns_hook = "/usr/local/bin/dns-hook.sh"
 
@@ -168,6 +194,26 @@
 # CLI: --cert-key-algorithm
 # Default: "ec-p256"
 # cert_key_algorithm = "ec-p256"
+
+# Reissue the certificate if the requested domains differ from the existing
+# certificate's SANs. Without this, `run` skips reissuance when the cert is
+# still valid for `days`, even if you've added or removed domains.
+# CLI: --reissue-on-mismatch
+# Default: false
+# reissue_on_mismatch = true
+
+# Print the certificate PEM to stdout after issuance (in addition to writing
+# it to cert_output). Useful when piping into another command.
+# CLI: --print-cert
+# Default: false
+# print_cert = true
+
+# Certificate profile name (draft-ietf-acme-profiles-01).
+# Selects a CA-defined profile such as "tlsserver" or "shortlived".
+# Use the `list-profiles` subcommand to see what the CA supports.
+# CLI: --profile
+# Env: ACME_PROFILE
+# profile = "tlsserver"
 
 # ── Account subcommand options ───────────────────────────────────────────────
 # These apply when using `acme-client-rs account`.
