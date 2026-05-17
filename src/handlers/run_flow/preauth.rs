@@ -10,10 +10,7 @@ use tracing::info;
 
 use crate::client::AcmeClient;
 use crate::outln;
-use crate::types::{
-    AuthorizationStatus, CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
-    CHALLENGE_TYPE_TLSALPN01, Identifier,
-};
+use crate::types::{AuthorizationStatus, ChallengeType, Identifier};
 
 use super::super::{
     dns_txt_check, is_challenge_failed, run_dns_hook_cleanup_logged, run_dns_hook_create, run_hook,
@@ -53,7 +50,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             .with_context(|| {
                 format!("no {} challenge for {}", ctx.challenge_type, domain_display)
             })?;
-        let token = if ctx.challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
+        let token = if ctx.challenge_type != ChallengeType::DnsPersist01 {
             ch.token.as_deref().context("challenge has no token")?
         } else {
             "" // dns-persist-01 has no token
@@ -64,8 +61,8 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
         let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
         let mut dns_cleanup_info: Option<(String, String)> = None;
 
-        match ctx.challenge_type {
-            CHALLENGE_TYPE_HTTP01 => {
+        match &ctx.challenge_type {
+            ChallengeType::Http01 => {
                 if let Some(dir) = ctx.challenge_dir {
                     let file = crate::challenge::http01::write_challenge_file(
                         dir,
@@ -124,7 +121,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     outln!("  Challenge response sent - waiting for validation...");
                 }
             }
-            CHALLENGE_TYPE_DNS01 => {
+            ChallengeType::Dns01 => {
                 if authz.identifier.is_ip() {
                     anyhow::bail!(
                         "dns-01 challenges are not supported for IP identifiers ({})",
@@ -188,7 +185,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         script,
                         &[
                             ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", token),
                             ("ACME_KEY_AUTH", &key_auth),
                             ("ACME_TXT_NAME", &txt_name_ref),
@@ -199,7 +196,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
             }
-            CHALLENGE_TYPE_DNS_PERSIST01 => {
+            ChallengeType::DnsPersist01 => {
                 if authz.identifier.is_ip() {
                     anyhow::bail!(
                         "dns-persist-01 challenges are not supported for IP identifiers ({})",
@@ -278,7 +275,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         script,
                         &[
                             ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TXT_NAME", &txt_name),
                             ("ACME_TXT_VALUE", &txt_value),
                         ],
@@ -287,7 +284,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
             }
-            CHALLENGE_TYPE_TLSALPN01 => {
+            ChallengeType::TlsAlpn01 => {
                 if !ctx.silent {
                     crate::challenge::tlsalpn01::print_instructions(
                         &authz.identifier.value,
@@ -303,7 +300,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         script,
                         &[
                             ("ACME_DOMAIN", &authz.identifier.value),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", token),
                             ("ACME_KEY_AUTH", &key_auth),
                         ],

@@ -39,9 +39,7 @@ pub(crate) use run_flow::cmd_run;
 use anyhow::{Context, Result};
 
 use crate::dns_check::DnsChecker;
-use crate::types::{
-    CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, Challenge, ChallengeStatus,
-};
+use crate::types::{Challenge, ChallengeStatus, ChallengeType};
 
 // ── DNS TXT propagation check (hickory-resolver, see dns_check.rs) ─────────
 
@@ -170,10 +168,12 @@ pub(super) fn run_dns_hook_cleanup_silent(
 /// must hit a literal hostname and cannot satisfy `*.example.com`.
 pub(super) fn check_wildcard_compatible<S: AsRef<str>>(
     domains: &[S],
-    challenge_type: &str,
+    challenge_type: &ChallengeType,
 ) -> Result<()> {
-    let dns_based =
-        challenge_type == CHALLENGE_TYPE_DNS01 || challenge_type == CHALLENGE_TYPE_DNS_PERSIST01;
+    let dns_based = matches!(
+        challenge_type,
+        ChallengeType::Dns01 | ChallengeType::DnsPersist01
+    );
     if dns_based {
         return Ok(());
     }
@@ -202,11 +202,11 @@ pub(super) fn is_challenge_failed(ch: &Challenge) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AcmeError, Challenge, ChallengeStatus};
+    use crate::types::{AcmeError, Challenge, ChallengeStatus, ChallengeType};
 
     fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Challenge {
         Challenge {
-            challenge_type: "http-01".to_string(),
+            challenge_type: ChallengeType::Http01,
             url: "https://example.com/chall/1".to_string(),
             status,
             validated: None,

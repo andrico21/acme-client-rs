@@ -154,7 +154,8 @@ pub(crate) async fn cmd_show_dns_persist01(
 }
 
 pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Result<()> {
-    check_wildcard_compatible(&[domain], challenge_type)?;
+    let challenge_type = crate::types::ChallengeType::parse_strict(challenge_type)?;
+    check_wildcard_compatible(&[domain], &challenge_type)?;
     let identifier = Identifier::from_str_auto(domain)?;
 
     let mut client = build_client(cli).await?;

@@ -5,12 +5,78 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-// ── Challenge type constants (RFC 8555 §8) ──────────────────────────────────
+// ── Challenge type (RFC 8555 §8) ────────────────────────────────────────────
 
-pub const CHALLENGE_TYPE_HTTP01: &str = "http-01";
-pub const CHALLENGE_TYPE_DNS01: &str = "dns-01";
-pub const CHALLENGE_TYPE_TLSALPN01: &str = "tls-alpn-01";
-pub const CHALLENGE_TYPE_DNS_PERSIST01: &str = "dns-persist-01";
+/// ACME challenge type — strongly-typed replacement for the prior
+/// string-literal comparisons.
+///
+/// `Unknown(String)` preserves forward-compat: if the CA advertises a challenge
+/// type we don't recognize (RFC 8737 tls-alpn-01 extensions, future RFC
+/// variants), we deserialize it intact and let the standard "match my preferred
+/// type" filter skip it, rather than failing the whole order parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChallengeType {
+    Http01,
+    Dns01,
+    TlsAlpn01,
+    DnsPersist01,
+    Unknown(String),
+}
+
+impl ChallengeType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Http01 => "http-01",
+            Self::Dns01 => "dns-01",
+            Self::TlsAlpn01 => "tls-alpn-01",
+            Self::DnsPersist01 => "dns-persist-01",
+            Self::Unknown(s) => s.as_str(),
+        }
+    }
+
+    pub fn parse_strict(s: &str) -> Result<Self> {
+        match s {
+            "http-01" => Ok(Self::Http01),
+            "dns-01" => Ok(Self::Dns01),
+            "tls-alpn-01" => Ok(Self::TlsAlpn01),
+            "dns-persist-01" => Ok(Self::DnsPersist01),
+            other => bail!(
+                "unknown challenge type {other:?}; expected one of: \
+                 http-01, dns-01, tls-alpn-01, dns-persist-01"
+            ),
+        }
+    }
+}
+
+impl From<String> for ChallengeType {
+    fn from(s: String) -> Self {
+        match s.as_str() {
+            "http-01" => Self::Http01,
+            "dns-01" => Self::Dns01,
+            "tls-alpn-01" => Self::TlsAlpn01,
+            "dns-persist-01" => Self::DnsPersist01,
+            _ => Self::Unknown(s),
+        }
+    }
+}
+
+impl std::fmt::Display for ChallengeType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for ChallengeType {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ChallengeType {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(d)?))
+    }
+}
 
 // ── Directory (RFC 8555 §7.1.1) ─────────────────────────────────────────────
 
@@ -354,7 +420,7 @@ impl std::fmt::Display for AuthorizationStatus {
 #[allow(dead_code)]
 pub struct Challenge {
     #[serde(rename = "type")]
-    pub challenge_type: String,
+    pub challenge_type: ChallengeType,
     pub url: String,
     pub status: ChallengeStatus,
     pub validated: Option<String>,
@@ -481,6 +547,43 @@ pub struct RevokeCertRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn challenge_type_roundtrips_through_string_for_known_variants() {
+        for (variant, wire) in [
+            (ChallengeType::Http01, "http-01"),
+            (ChallengeType::Dns01, "dns-01"),
+            (ChallengeType::TlsAlpn01, "tls-alpn-01"),
+            (ChallengeType::DnsPersist01, "dns-persist-01"),
+        ] {
+            assert_eq!(variant.as_str(), wire);
+            assert_eq!(ChallengeType::from(wire.to_string()), variant);
+            assert_eq!(ChallengeType::parse_strict(wire).unwrap(), variant);
+        }
+    }
+
+    #[test]
+    fn challenge_type_preserves_unknown_via_from_string() {
+        // Wire-side MUST tolerate unknown variants (forward-compat with future
+        // RFCs); strict parser MUST reject them.
+        let unknown = ChallengeType::from("custom-future-01".to_string());
+        assert_eq!(
+            unknown,
+            ChallengeType::Unknown("custom-future-01".to_string())
+        );
+        assert_eq!(unknown.as_str(), "custom-future-01");
+        assert!(ChallengeType::parse_strict("custom-future-01").is_err());
+    }
+
+    #[test]
+    fn challenge_type_serde_roundtrip_through_json() {
+        let j = serde_json::to_string(&ChallengeType::DnsPersist01).unwrap();
+        assert_eq!(j, "\"dns-persist-01\"");
+        let parsed: ChallengeType = serde_json::from_str("\"dns-01\"").unwrap();
+        assert_eq!(parsed, ChallengeType::Dns01);
+        let unknown: ChallengeType = serde_json::from_str("\"future-02\"").unwrap();
+        assert_eq!(unknown, ChallengeType::Unknown("future-02".to_string()));
+    }
 
     #[test]
     fn dns_normalize_lowercases_and_strips_trailing_dot() {

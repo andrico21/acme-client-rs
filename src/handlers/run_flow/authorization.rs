@@ -13,10 +13,7 @@ use tracing::info;
 
 use crate::client::AcmeClient;
 use crate::outln;
-use crate::types::{
-    AuthorizationStatus, CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
-    CHALLENGE_TYPE_TLSALPN01, Order,
-};
+use crate::types::{AuthorizationStatus, ChallengeType, Order};
 
 use super::super::{
     dns_txt_check, is_challenge_failed, run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent,
@@ -39,8 +36,8 @@ pub(super) async fn authorize(
     // all TXT records are created first, then all propagation checks run
     // concurrently, then challenges are responded to serially (nonce chain).
     let use_parallel_dns = ctx.dns_hook.is_some()
-        && (ctx.challenge_type == CHALLENGE_TYPE_DNS01
-            || ctx.challenge_type == CHALLENGE_TYPE_DNS_PERSIST01);
+        && (ctx.challenge_type == ChallengeType::Dns01
+            || ctx.challenge_type == ChallengeType::DnsPersist01);
 
     if use_parallel_dns {
         // ── Phased DNS authorization (parallel propagation wait) ────────
@@ -83,7 +80,7 @@ pub(super) async fn authorize(
                     )
                 })?;
 
-            let (token, txt_name, txt_value) = if ctx.challenge_type == CHALLENGE_TYPE_DNS01 {
+            let (token, txt_name, txt_value) = if ctx.challenge_type == ChallengeType::Dns01 {
                 if authz.identifier.is_ip() {
                     anyhow::bail!(
                         "dns-01 challenges are not supported for IP identifiers ({})",
@@ -236,14 +233,14 @@ pub(super) async fn authorize(
             // Phase 3: ctx.on_challenge_ready hooks + respond_to_challenge (serial)
             for p in &pending {
                 if let Some(script) = ctx.on_challenge_ready {
-                    if ctx.challenge_type == CHALLENGE_TYPE_DNS01 {
+                    if ctx.challenge_type == ChallengeType::Dns01 {
                         let key_auth =
                             crate::challenge::key_authorization(&p.token, client.account_key());
                         run_hook(
                             script,
                             &[
                                 ("ACME_DOMAIN", p.domain.as_str()),
-                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                                 ("ACME_TOKEN", &p.token),
                                 ("ACME_KEY_AUTH", &key_auth),
                                 ("ACME_TXT_NAME", &p.txt_name),
@@ -255,7 +252,7 @@ pub(super) async fn authorize(
                             script,
                             &[
                                 ("ACME_DOMAIN", p.domain.as_str()),
-                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                                 ("ACME_TXT_NAME", &p.txt_name),
                                 ("ACME_TXT_VALUE", &p.txt_value),
                             ],
@@ -382,7 +379,7 @@ pub(super) async fn authorize(
                         ctx.challenge_type, authz.identifier.value
                     )
                 })?;
-            let token = if ctx.challenge_type != CHALLENGE_TYPE_DNS_PERSIST01 {
+            let token = if ctx.challenge_type != ChallengeType::DnsPersist01 {
                 ch.token.as_deref().context("challenge has no token")?
             } else {
                 "" // dns-persist-01 has no token
@@ -394,8 +391,8 @@ pub(super) async fn authorize(
             // Background HTTP server handle (standalone mode only)
             let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
 
-            match ctx.challenge_type {
-                CHALLENGE_TYPE_HTTP01 => {
+            match &ctx.challenge_type {
+                ChallengeType::Http01 => {
                     let validation_url = format!(
                         "http://{}/.well-known/acme-challenge/{}",
                         authz.identifier.value, token
@@ -490,7 +487,7 @@ pub(super) async fn authorize(
                         outln!("  Challenge response sent - waiting for validation...");
                     }
                 }
-                CHALLENGE_TYPE_DNS01 => {
+                ChallengeType::Dns01 => {
                     if authz.identifier.is_ip() {
                         anyhow::bail!(
                             "dns-01 challenges are not supported for IP identifiers ({})",
@@ -547,7 +544,7 @@ pub(super) async fn authorize(
                             script,
                             &[
                                 ("ACME_DOMAIN", &authz.identifier.value),
-                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                                 ("ACME_TOKEN", token),
                                 ("ACME_KEY_AUTH", &key_auth),
                                 ("ACME_TXT_NAME", &txt_name_ref),
@@ -558,7 +555,7 @@ pub(super) async fn authorize(
 
                     client.respond_to_challenge(&challenge_url).await?;
                 }
-                CHALLENGE_TYPE_DNS_PERSIST01 => {
+                ChallengeType::DnsPersist01 => {
                     if authz.identifier.is_ip() {
                         anyhow::bail!(
                             "dns-persist-01 challenges are not supported for IP identifiers ({})",
@@ -627,7 +624,7 @@ pub(super) async fn authorize(
                             script,
                             &[
                                 ("ACME_DOMAIN", &authz.identifier.value),
-                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                                 ("ACME_TXT_NAME", &txt_name),
                                 ("ACME_TXT_VALUE", &txt_value),
                             ],
@@ -636,7 +633,7 @@ pub(super) async fn authorize(
 
                     client.respond_to_challenge(&challenge_url).await?;
                 }
-                CHALLENGE_TYPE_TLSALPN01 => {
+                ChallengeType::TlsAlpn01 => {
                     if !ctx.silent {
                         crate::challenge::tlsalpn01::print_instructions(
                             &authz.identifier.value,
@@ -654,7 +651,7 @@ pub(super) async fn authorize(
                             script,
                             &[
                                 ("ACME_DOMAIN", &authz.identifier.value),
-                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type),
+                                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                                 ("ACME_TOKEN", token),
                                 ("ACME_KEY_AUTH", &key_auth),
                             ],

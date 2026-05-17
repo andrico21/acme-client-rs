@@ -19,7 +19,7 @@ use tracing::info;
 use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
 use crate::client::AcmeClient;
 use crate::dns_check::DnsChecker;
-use crate::types::Identifier;
+use crate::types::{ChallengeType, Identifier};
 use crate::{build_client, outln};
 
 use super::{check_wildcard_compatible, parse_eab};
@@ -31,7 +31,7 @@ use super::{check_wildcard_compatible, parse_eab};
 /// are set by the renewal phase and consumed by later phases.
 pub(super) struct RunContext<'a> {
     pub cli: &'a Cli,
-    pub challenge_type: &'a str,
+    pub challenge_type: ChallengeType,
     pub http_port: u16,
     pub challenge_dir: Option<&'a std::path::Path>,
     pub dns_hook: Option<&'a std::path::Path>,
@@ -102,7 +102,8 @@ pub(crate) async fn cmd_run(
     force: bool,
     cleanup_registry: &crate::cleanup::CleanupRegistry,
 ) -> Result<()> {
-    check_wildcard_compatible(&domains, challenge_type)?;
+    let challenge_type = ChallengeType::parse_strict(challenge_type)?;
+    check_wildcard_compatible(&domains, &challenge_type)?;
 
     crate::hook_check::validate_all_hooks(
         &[
@@ -205,7 +206,7 @@ pub(crate) async fn cmd_run(
             available.keys().cloned().collect::<Vec<_>>().join(", ")
         );
     }
-    check_wildcard_compatible(&ctx.domains, ctx.challenge_type)?;
+    check_wildcard_compatible(&ctx.domains, &ctx.challenge_type)?;
     let ids: Vec<Identifier> = ctx
         .domains
         .iter()
