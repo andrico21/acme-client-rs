@@ -21,7 +21,7 @@ use crate::{build_client, outln};
 
 use super::{
     check_wildcard_compatible, dns_txt_check, is_challenge_terminal, parse_eab,
-    run_dns_hook_create, run_hook,
+    run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent, run_dns_hook_create, run_hook,
 };
 // ── Full automated flow ─────────────────────────────────────────────────────
 
@@ -466,19 +466,12 @@ pub(crate) async fn cmd_run(
                         }
                         if !found {
                             if let Some(hook) = dns_hook {
-                                match std::process::Command::new(hook)
-                                    .env("ACME_DOMAIN", &authz.identifier.value)
-                                    .env("ACME_TXT_NAME", &txt_name)
-                                    .env("ACME_TXT_VALUE", &txt_value)
-                                    .env("ACME_ACTION", "cleanup")
-                                    .status()
-                                {
-                                    Ok(s) if !s.success() => {
-                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
-                                    }
-                                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                                    _ => {}
-                                }
+                                run_dns_hook_cleanup_logged(
+                                    hook,
+                                    &authz.identifier.value,
+                                    &txt_name,
+                                    &txt_value,
+                                );
                             }
                             anyhow::bail!(
                                 "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -568,19 +561,12 @@ pub(crate) async fn cmd_run(
                         }
                         if !found {
                             if let Some(hook) = dns_hook {
-                                match std::process::Command::new(hook)
-                                    .env("ACME_DOMAIN", &authz.identifier.value)
-                                    .env("ACME_TXT_NAME", &txt_name)
-                                    .env("ACME_TXT_VALUE", &txt_value)
-                                    .env("ACME_ACTION", "cleanup")
-                                    .status()
-                                {
-                                    Ok(s) if !s.success() => {
-                                        tracing::warn!("DNS hook (cleanup) exited with {s}")
-                                    }
-                                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                                    _ => {}
-                                }
+                                run_dns_hook_cleanup_logged(
+                                    hook,
+                                    &authz.identifier.value,
+                                    &txt_name,
+                                    &txt_value,
+                                );
                             }
                             anyhow::bail!(
                                 "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -704,17 +690,7 @@ pub(crate) async fn cmd_run(
             if let Some((ref txt_name, ref txt_value)) = dns_cleanup_info
                 && let Some(hook) = dns_hook
             {
-                let status = std::process::Command::new(hook)
-                    .env("ACME_DOMAIN", &domain_display)
-                    .env("ACME_TXT_NAME", txt_name)
-                    .env("ACME_TXT_VALUE", txt_value)
-                    .env("ACME_ACTION", "cleanup")
-                    .status();
-                match status {
-                    Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
-                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                    _ => {}
-                }
+                run_dns_hook_cleanup_logged(hook, &domain_display, txt_name, txt_value);
             }
             if let Some(handle) = serve_task.take() {
                 handle.abort();
@@ -878,12 +854,7 @@ pub(crate) async fn cmd_run(
             if !status.success() {
                 // Clean up any records we already created
                 for p in &pending {
-                    let _ = std::process::Command::new(hook)
-                        .env("ACME_DOMAIN", &p.domain)
-                        .env("ACME_TXT_NAME", &p.txt_name)
-                        .env("ACME_TXT_VALUE", &p.txt_value)
-                        .env("ACME_ACTION", "cleanup")
-                        .status();
+                    run_dns_hook_cleanup_silent(hook, &p.domain, &p.txt_name, &p.txt_value);
                 }
                 anyhow::bail!("DNS hook (create) exited with {status}");
             }
@@ -960,19 +931,7 @@ pub(crate) async fn cmd_run(
                 if !failed.is_empty() {
                     // Clean up ALL created records before bailing
                     for p in &pending {
-                        match std::process::Command::new(hook)
-                            .env("ACME_DOMAIN", &p.domain)
-                            .env("ACME_TXT_NAME", &p.txt_name)
-                            .env("ACME_TXT_VALUE", &p.txt_value)
-                            .env("ACME_ACTION", "cleanup")
-                            .status()
-                        {
-                            Ok(s) if !s.success() => {
-                                tracing::warn!("DNS hook (cleanup) exited with {s}")
-                            }
-                            Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                            _ => {}
-                        }
+                        run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value);
                     }
                     anyhow::bail!(
                         "DNS TXT records not found within {timeout_secs}s for: {}",
@@ -1024,12 +983,7 @@ pub(crate) async fn cmd_run(
                     if std::time::Instant::now() > poll_deadline {
                         // Clean up remaining records
                         for q in &pending {
-                            let _ = std::process::Command::new(hook)
-                                .env("ACME_DOMAIN", &q.domain)
-                                .env("ACME_TXT_NAME", &q.txt_name)
-                                .env("ACME_TXT_VALUE", &q.txt_value)
-                                .env("ACME_ACTION", "cleanup")
-                                .status();
+                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value);
                         }
                         anyhow::bail!(
                             "authorization for {} did not complete within {challenge_timeout}s",
@@ -1049,12 +1003,12 @@ pub(crate) async fn cmd_run(
                     {
                         if is_challenge_terminal(ch) {
                             for q in &pending {
-                                let _ = std::process::Command::new(hook)
-                                    .env("ACME_DOMAIN", &q.domain)
-                                    .env("ACME_TXT_NAME", &q.txt_name)
-                                    .env("ACME_TXT_VALUE", &q.txt_value)
-                                    .env("ACME_ACTION", "cleanup")
-                                    .status();
+                                run_dns_hook_cleanup_silent(
+                                    hook,
+                                    &q.domain,
+                                    &q.txt_name,
+                                    &q.txt_value,
+                                );
                             }
                             let detail = ch
                                 .error
@@ -1074,12 +1028,12 @@ pub(crate) async fn cmd_run(
                         AuthorizationStatus::Valid => break,
                         AuthorizationStatus::Invalid => {
                             for q in &pending {
-                                let _ = std::process::Command::new(hook)
-                                    .env("ACME_DOMAIN", &q.domain)
-                                    .env("ACME_TXT_NAME", &q.txt_name)
-                                    .env("ACME_TXT_VALUE", &q.txt_value)
-                                    .env("ACME_ACTION", "cleanup")
-                                    .status();
+                                run_dns_hook_cleanup_silent(
+                                    hook,
+                                    &q.domain,
+                                    &q.txt_name,
+                                    &q.txt_value,
+                                );
                             }
                             let detail = a
                                 .challenges
@@ -1102,17 +1056,7 @@ pub(crate) async fn cmd_run(
                     hook.display(),
                     p.domain
                 );
-                match std::process::Command::new(hook)
-                    .env("ACME_DOMAIN", &p.domain)
-                    .env("ACME_TXT_NAME", &p.txt_name)
-                    .env("ACME_TXT_VALUE", &p.txt_value)
-                    .env("ACME_ACTION", "cleanup")
-                    .status()
-                {
-                    Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
-                    Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
-                    _ => {}
-                }
+                run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value);
             }
         }
     } else {

@@ -121,6 +121,47 @@ pub(super) fn run_dns_hook_create(
     Ok(())
 }
 
+/// Invoke a DNS hook to delete a previously-created DNS-01 TXT record,
+/// logging any failure as a warning. Errors are intentionally non-fatal:
+/// callers are usually already on an error path (challenge timed out,
+/// validation failed) and a missing cleanup must not mask the original
+/// failure cause.
+pub(super) fn run_dns_hook_cleanup_logged(
+    hook: &std::path::Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) {
+    let status = std::process::Command::new(hook)
+        .env("ACME_DOMAIN", domain)
+        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_TXT_VALUE", txt_value)
+        .env("ACME_ACTION", "cleanup")
+        .status();
+    match status {
+        Ok(s) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
+        Err(e) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
+        _ => {}
+    }
+}
+
+/// Best-effort DNS cleanup hook for parallel-DNS rollback paths where any
+/// hook failure would be immediately followed by `anyhow::bail!` anyway,
+/// making logging redundant. Use [`run_dns_hook_cleanup_logged`] elsewhere.
+pub(super) fn run_dns_hook_cleanup_silent(
+    hook: &std::path::Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) {
+    let _ = std::process::Command::new(hook)
+        .env("ACME_DOMAIN", domain)
+        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_TXT_VALUE", txt_value)
+        .env("ACME_ACTION", "cleanup")
+        .status();
+}
+
 /// Reject wildcard identifiers paired with a non-DNS challenge type.
 ///
 /// RFC 8555 §7.1.3 / §8.4: wildcard certificates can only be validated via
