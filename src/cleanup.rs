@@ -113,7 +113,7 @@ mod tests {
         std::fs::write(
             &hook,
             format!(
-                "#!/usr/bin/env bash\necho \"$ACME_ACTION:$ACME_DOMAIN:$ACME_TXT_NAME\" >> {}\n",
+                "#!/bin/sh\necho \"$ACME_ACTION:$ACME_DOMAIN:$ACME_TXT_NAME\" >> {}\n",
                 log.display()
             ),
         )
