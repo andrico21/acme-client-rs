@@ -8,7 +8,7 @@
 //! The flow is split across four phase modules — see CODE_REVIEW.md item 5.
 //! Phase extraction is in progress; today `cmd_run` is still monolithic.
 
-mod authorization;
+mod authorize;
 mod finalize;
 mod preauth;
 mod renewal;
@@ -228,7 +228,7 @@ pub(crate) async fn cmd_run(
         outln!("Order status: {}", order.status);
     }
 
-    authorization::authorize(&mut ctx, &mut client, &order).await?;
+    authorize::authorize(&mut ctx, &mut client, &order).await?;
 
     finalize::finalize(&mut ctx, &mut client, order, &order_url).await?;
 
