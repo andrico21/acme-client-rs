@@ -78,26 +78,42 @@ pub(super) async fn provision_http01(
             loop {
                 let (mut stream, addr) = listener.accept().await?;
                 tracing::debug!("HTTP-01: connection from {addr}");
-                let mut buf = vec![0u8; 4096];
-                let n = stream.read(&mut buf).await?;
-                let req = String::from_utf8_lossy(&buf[..n]);
-                if req.contains(&path) {
-                    let resp = format!(
-                        "HTTP/1.1 200 OK\r\n\
-                         Content-Type: application/octet-stream\r\n\
-                         Content-Length: {}\r\n\
-                         X-Content-Type-Options: nosniff\r\n\
-                         Connection: close\r\n\
-                         Server: acme-client-rs\r\n\r\n{}",
-                        auth.len(),
-                        auth
-                    );
-                    stream.write_all(resp.as_bytes()).await?;
-                    info!("HTTP-01: served challenge response to {addr}");
-                    return Ok(());
-                }
-                let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n";
-                stream.write_all(not_found.as_bytes()).await?;
+                // Per-connection handler runs on its own task so multiple
+                // parallel CA validation probes (e.g. Let's Encrypt multi-
+                // perspective validation: 3+ concurrent requests) are served
+                // concurrently. Errors on one connection MUST NOT tear down
+                // the listener - other probes must still succeed.
+                let auth = auth.clone();
+                let path = path.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 4096];
+                    let n = match stream.read(&mut buf).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::debug!("HTTP-01: read from {addr} failed: {e}");
+                            return;
+                        }
+                    };
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let resp = if req.contains(&path) {
+                        info!("HTTP-01: serving challenge response to {addr}");
+                        format!(
+                            "HTTP/1.1 200 OK\r\n\
+                             Content-Type: application/octet-stream\r\n\
+                             Content-Length: {}\r\n\
+                             X-Content-Type-Options: nosniff\r\n\
+                             Connection: close\r\n\
+                             Server: acme-client-rs\r\n\r\n{}",
+                            auth.len(),
+                            auth
+                        )
+                    } else {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n".to_string()
+                    };
+                    if let Err(e) = stream.write_all(resp.as_bytes()).await {
+                        tracing::debug!("HTTP-01: write to {addr} failed: {e}");
+                    }
+                });
             }
         });
         ctx.cleanup_registry
