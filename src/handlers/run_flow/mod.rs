@@ -4,6 +4,14 @@
 //! renewal decisions, order placement, challenge fulfillment (HTTP-01,
 //! DNS-01, DNS-PERSIST-01, TLS-ALPN-01), CSR generation, finalization,
 //! and post-issuance hook invocation.
+//!
+//! The flow is split across four phase modules — see CODE_REVIEW.md item 5.
+//! Phase extraction is in progress; today `cmd_run` is still monolithic.
+
+mod authorization;
+mod finalize;
+mod preauth;
+mod renewal;
 
 use anyhow::{Context, Result};
 use tracing::info;

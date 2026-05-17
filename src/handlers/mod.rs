@@ -21,7 +21,7 @@ pub(crate) mod cert;
 pub(crate) mod challenge;
 pub(crate) mod config;
 pub(crate) mod order;
-pub(crate) mod run;
+pub(crate) mod run_flow;
 
 // Re-export every cmd_* so main.rs can keep `use crate::handlers::*;`.
 pub(crate) use account::{cmd_account, cmd_deactivate, cmd_generate_key, cmd_key_rollover};
@@ -34,7 +34,7 @@ pub(crate) use order::{
     cmd_download_cert, cmd_finalize, cmd_get_authz, cmd_list_profiles, cmd_order, cmd_poll_order,
     cmd_respond_challenge,
 };
-pub(crate) use run::cmd_run;
+pub(crate) use run_flow::cmd_run;
 
 use anyhow::{Context, Result};
 
