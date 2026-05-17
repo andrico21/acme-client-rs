@@ -2250,6 +2250,31 @@ fi
 
 rm -f "${PROF_STDERR}" 2>/dev/null
 
+# ── TC-86: show-dns-persist01 happy path ────────────────────────────────────
+
+log_test "86" "show-dns-persist01 happy path (SEC-18)"
+OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-persist01 \
+  --domain "${SINGLE_DOMAIN}" \
+  --issuer-domain-name letsencrypt.org 2>&1)
+if echo "${OUTPUT}" | grep -q "_validation-persist" \
+   && echo "${OUTPUT}" | grep -q "accounturi="; then
+  pass "show-dns-persist01 emitted record name + accounturi"
+else
+  fail "86" "show-dns-persist01 output missing expected fields"
+  echo "  Output: ${OUTPUT}"
+fi
+
+# ── TC-87: show-dns-persist01 rejects injected issuer-domain-name ──────────
+
+log_test "87" "show-dns-persist01 rejects ;-injection in --issuer-domain-name (SEC-18)"
+if acme --account-key "${ACCT_KEY}" show-dns-persist01 \
+     --domain "${SINGLE_DOMAIN}" \
+     --issuer-domain-name 'evil; rogue=x' >/dev/null 2>&1; then
+  fail "87" "Injected issuer-domain-name was accepted"
+else
+  pass "Injected issuer-domain-name rejected"
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Summary
 # ═════════════════════════════════════════════════════════════════════════════

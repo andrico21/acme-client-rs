@@ -2192,6 +2192,9 @@ fn cmd_show_dns01(
     silent: bool,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
+    let domain = crate::types::validate_and_normalize_dns(domain)
+        .context("invalid --domain for show-dns01")?;
+    let domain = domain.as_str();
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
@@ -2227,6 +2230,15 @@ async fn cmd_show_dns_persist01(
     persist_until: Option<u64>,
     fmt: OutputFormat,
 ) -> Result<()> {
+    let domain = crate::types::validate_and_normalize_dns(domain)
+        .context("invalid --domain for show-dns-persist01")?;
+    let domain = domain.as_str();
+    let _issuer_check = crate::client::validate_issuer_domain_name(issuer_domain_name)
+        .context("invalid --issuer-domain-name for show-dns-persist01")?;
+    if let Some(p) = persist_policy {
+        crate::client::validate_caa_parameter_value(p)
+            .context("invalid --persist-policy for show-dns-persist01")?;
+    }
     let mut client = build_client(cli).await?;
 
     // Need account URL for the accounturi parameter
@@ -2244,7 +2256,7 @@ async fn cmd_show_dns_persist01(
         &account_uri,
         persist_policy,
         persist_until,
-    );
+    )?;
 
     if !cli.silent {
         if fmt == OutputFormat::Json {
@@ -2270,7 +2282,7 @@ async fn cmd_show_dns_persist01(
                 &account_uri,
                 persist_policy,
                 persist_until,
-            );
+            )?;
         }
     }
     Ok(())
@@ -3139,7 +3151,7 @@ async fn cmd_run(
                         &account_uri,
                         persist_policy,
                         persist_until,
-                    );
+                    )?;
                     if let Some(hook) = dns_hook {
                         let status = std::process::Command::new(hook)
                             .env("ACME_DOMAIN", &authz.identifier.value)
@@ -3160,7 +3172,7 @@ async fn cmd_run(
                             &account_uri,
                             persist_policy,
                             persist_until,
-                        );
+                        )?;
                     }
                     if let Some(timeout_secs) = dns_wait {
                         let deadline = std::time::Instant::now()
@@ -3464,7 +3476,7 @@ async fn cmd_run(
                     &account_uri,
                     persist_policy,
                     persist_until,
-                );
+                )?;
                 (String::new(), name, value)
             };
 
@@ -3930,7 +3942,7 @@ async fn cmd_run(
                         &account_uri,
                         persist_policy,
                         persist_until,
-                    );
+                    )?;
 
                     // No hook: print instructions for manual setup
                     if !silent {
@@ -3940,7 +3952,7 @@ async fn cmd_run(
                             &account_uri,
                             persist_policy,
                             persist_until,
-                        );
+                        )?;
                     }
 
                     if let Some(timeout_secs) = dns_wait {

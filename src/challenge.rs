@@ -252,28 +252,32 @@ pub mod dns_persist01 {
         account_uri: &str,
         policy: Option<&str>,
         persist_until: Option<u64>,
-    ) -> String {
-        let mut value = format!("{issuer_domain_name}; accounturi={account_uri}");
+    ) -> anyhow::Result<String> {
+        let issuer = crate::client::validate_issuer_domain_name(issuer_domain_name)?;
+        let uri = crate::client::validate_account_uri(account_uri)?;
+        let mut value = format!("{issuer}; accounturi={uri}");
         if let Some(p) = policy {
+            let p = crate::client::validate_caa_parameter_value(p)?;
             value.push_str(&format!("; policy={p}"));
         }
         if let Some(ts) = persist_until {
             value.push_str(&format!("; persistUntil={ts}"));
         }
-        value
+        Ok(value)
     }
 
-    /// Print human-readable instructions for dns-persist-01 setup.
     pub fn print_instructions(
         domain: &str,
         issuer_domain_names: &[String],
         account_uri: &str,
         policy: Option<&str>,
         persist_until: Option<u64>,
-    ) {
+    ) -> anyhow::Result<()> {
         let name = record_name(domain);
-        let issuer = &issuer_domain_names[0];
-        let value = txt_record_value(issuer, account_uri, policy, persist_until);
+        let issuer = issuer_domain_names
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("issuer_domain_names is empty"))?;
+        let value = txt_record_value(issuer, account_uri, policy, persist_until)?;
         outln!();
         outln!("=== DNS-PERSIST-01 Challenge ===");
         outln!("Create a DNS TXT record:");
@@ -291,6 +295,7 @@ pub mod dns_persist01 {
         outln!("This record is persistent - it can be reused for future issuances.");
         outln!("Unlike dns-01, it does not need to change per issuance.");
         outln!();
+        Ok(())
     }
 }
 
@@ -361,5 +366,66 @@ mod tests {
             super::dns_persist01::record_name("example.com"),
             "_validation-persist.example.com"
         );
+    }
+
+    #[test]
+    fn dns_persist01_txt_value_happy_path() {
+        let v = super::dns_persist01::txt_record_value(
+            "letsencrypt.org",
+            "https://acme.example/acct/123",
+            Some("wildcard"),
+            Some(1_700_000_000),
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            "letsencrypt.org; accounturi=https://acme.example/acct/123; \
+             policy=wildcard; persistUntil=1700000000"
+        );
+    }
+
+    #[test]
+    fn dns_persist01_txt_value_rejects_issuer_injection() {
+        let err = super::dns_persist01::txt_record_value(
+            "evil.com; rogue=x",
+            "https://acme.example/acct/1",
+            None,
+            None,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn dns_persist01_txt_value_rejects_uri_injection() {
+        let err = super::dns_persist01::txt_record_value(
+            "letsencrypt.org",
+            "https://acme.example/acct/1;rogue",
+            None,
+            None,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn dns_persist01_txt_value_rejects_policy_injection() {
+        let err = super::dns_persist01::txt_record_value(
+            "letsencrypt.org",
+            "https://acme.example/acct/1",
+            Some("wildcard; rogue=x"),
+            None,
+        );
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn dns_persist01_txt_value_lowercases_issuer() {
+        let v = super::dns_persist01::txt_record_value(
+            "LetsEncrypt.ORG",
+            "https://acme.example/acct/1",
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(v.starts_with("letsencrypt.org; "));
     }
 }

@@ -114,11 +114,31 @@ fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
 /// Hostnames (non-literal) are NOT resolved here — that check happens
 /// connect-time inside `SsrfSafeResolver`, which closes the DNS-rebinding
 /// race that synchronous resolution would leave open.
+/// Maximum URL byte-length accepted anywhere we talk to an ACME server.
+///
+/// Priority-1 (RFC contract): RFC 9110 §4.1 RECOMMENDS that senders and
+/// recipients support URIs of at least 8000 octets in protocol elements.
+/// We refuse anything beyond that as both an SSRF/log-spam guard and a
+/// protocol-sanity check.
+pub const MAX_ACME_URL_LEN: usize = 8000;
+
 pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
+    if url.len() > MAX_ACME_URL_LEN {
+        bail!(
+            "URL exceeds {MAX_ACME_URL_LEN} octets ({} bytes); refusing",
+            url.len()
+        );
+    }
     let parsed = reqwest::Url::parse(url).with_context(|| format!("invalid URL {url:?}"))?;
     let scheme = parsed.scheme();
     if scheme != "https" && scheme != "http" {
         bail!("URL must use https:// (got scheme {scheme:?}); refusing {url:?}");
+    }
+    // Priority-1 (RFC contract / phishing-shape defense): RFC 9110 §4.2.4
+    // says senders MUST NOT generate `userinfo` in http/https URI references
+    // and recipients SHOULD treat userinfo from untrusted sources as an error.
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!("URL must not contain userinfo (user:pass@host); refusing {url:?}");
     }
     let host = parsed.host_str().unwrap_or("");
     let host_ip: Option<IpAddr> = host
@@ -154,6 +174,107 @@ pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Resu
         );
     }
     Ok(())
+}
+
+/// Validate an issuer-domain-name as it will appear in a dns-persist-01 TXT
+/// record (draft-ietf-acme-dns-persist §3.1, basis RFC 8659 §4.2).
+///
+/// Priority-1 (RFC contract): rules transcribed from the spec —
+/// LDH labels only, no wildcard (`*`), no underscore (`_`),
+/// no trailing dot, A-label (Punycode) form if non-ASCII source,
+/// ASCII-lowercase, total length ≤ 253 octets, ≥ 1 label.
+pub fn validate_issuer_domain_name(s: &str) -> Result<String> {
+    if s.is_empty() {
+        bail!("issuer-domain-name is empty");
+    }
+    if s.len() > 253 {
+        bail!("issuer-domain-name exceeds 253 octets ({} bytes)", s.len());
+    }
+    if !s.is_ascii() {
+        bail!("issuer-domain-name must be ASCII A-label form (Punycode); got non-ASCII in {s:?}");
+    }
+    if s.ends_with('.') {
+        bail!("issuer-domain-name must not have a trailing dot: {s:?}");
+    }
+    if s.contains('*') {
+        bail!("issuer-domain-name must not contain wildcard '*': {s:?}");
+    }
+    if s.contains('_') {
+        bail!("issuer-domain-name must not contain underscore '_': {s:?}");
+    }
+    let lower = s.to_ascii_lowercase();
+    for label in lower.split('.') {
+        if label.is_empty() {
+            bail!("issuer-domain-name has empty label: {s:?}");
+        }
+        if label.len() > 63 {
+            bail!("issuer-domain-name label exceeds 63 octets: {label:?}");
+        }
+        let bytes = label.as_bytes();
+        if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+            bail!("issuer-domain-name label must start/end alphanumeric (LDH): {label:?}");
+        }
+        for &b in bytes {
+            if !(b.is_ascii_alphanumeric() || b == b'-') {
+                bail!("issuer-domain-name label has non-LDH char {b:?}: {label:?}");
+            }
+        }
+    }
+    Ok(lower)
+}
+
+/// Validate an `accounturi` value for a dns-persist-01 TXT record.
+///
+/// Priority-1 (RFC contract): RFC 8657 §3 requires "a URI"; RFC 8659 §4.2
+/// value grammar forbids literal `;` (TXT structural separator), control
+/// chars, space, DEL. RFC 9110 §4.2.4 forbids userinfo. Fragments are
+/// stripped from a URI's identity, so we reject them too.
+pub fn validate_account_uri(s: &str) -> Result<String> {
+    if s.is_empty() {
+        bail!("accounturi is empty");
+    }
+    if s.len() > MAX_ACME_URL_LEN {
+        bail!(
+            "accounturi exceeds {MAX_ACME_URL_LEN} octets ({} bytes)",
+            s.len()
+        );
+    }
+    if !s.is_ascii() {
+        bail!("accounturi must be ASCII (percent-encode non-ASCII): {s:?}");
+    }
+    if s.contains(';') {
+        bail!("accounturi must not contain literal ';' (CAA value separator): {s:?}");
+    }
+    for &b in s.as_bytes() {
+        if b < 0x21 || b == 0x7f {
+            bail!("accounturi contains control char or space: byte 0x{b:02x}");
+        }
+    }
+    let parsed = reqwest::Url::parse(s).with_context(|| format!("accounturi not a URI: {s:?}"))?;
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!("accounturi must not contain userinfo: {s:?}");
+    }
+    if parsed.fragment().is_some() {
+        bail!("accounturi must not contain a fragment: {s:?}");
+    }
+    Ok(s.to_string())
+}
+
+/// Validate a CAA-style parameter value per RFC 8659 §4.2:
+///
+/// Priority-1 (RFC contract): `value = *(%x21-3A / %x3C-7E)` —
+/// printable ASCII excluding space (`%x20`), semicolon (`%x3B`), and DEL (`%x7F`).
+pub fn validate_caa_parameter_value(s: &str) -> Result<&str> {
+    if s.is_empty() {
+        bail!("CAA parameter value is empty");
+    }
+    for &b in s.as_bytes() {
+        let ok = (0x21..=0x3A).contains(&b) || (0x3C..=0x7E).contains(&b);
+        if !ok {
+            bail!("CAA parameter value has byte 0x{b:02x} outside RFC 8659 §4.2 grammar: {s:?}");
+        }
+    }
+    Ok(s)
 }
 
 /// reqwest DNS resolver that rejects hostnames resolving to private,
@@ -315,10 +436,10 @@ pub struct AcmeClient {
     http: reqwest::Client,
     directory: Directory,
     account_key: AccountKey,
-    /// Cached Replay-Nonce from the most recent server response.
     nonce: Option<String>,
-    /// Account URL (returned in the Location header of newAccount).
     account_url: Option<String>,
+    insecure: bool,
+    allow_private: bool,
 }
 
 impl AcmeClient {
@@ -359,12 +480,35 @@ impl AcmeClient {
         let directory: Directory = resp.json().await.context("failed to parse directory")?;
         debug!(?directory, "ACME directory loaded");
 
+        let insecure = danger_accept_invalid_certs;
+        let allow_private = allow_private_network;
+        for (label, url) in [
+            ("newNonce", directory.new_nonce.as_str()),
+            ("newAccount", directory.new_account.as_str()),
+            ("newOrder", directory.new_order.as_str()),
+            ("revokeCert", directory.revoke_cert.as_str()),
+            ("keyChange", directory.key_change.as_str()),
+        ] {
+            validate_acme_url(url, insecure, allow_private)
+                .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
+        }
+        if let Some(u) = directory.new_authz.as_deref() {
+            validate_acme_url(u, insecure, allow_private)
+                .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
+        }
+        if let Some(u) = directory.renewal_info.as_deref() {
+            validate_acme_url(u, insecure, allow_private)
+                .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
+        }
+
         Ok(Self {
             http,
             directory,
             account_key,
             nonce: None,
             account_url: None,
+            insecure,
+            allow_private,
         })
     }
 
@@ -390,6 +534,8 @@ impl AcmeClient {
     // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
 
     async fn fetch_nonce(&self) -> Result<String> {
+        validate_acme_url(&self.directory.new_nonce, self.insecure, self.allow_private)
+            .with_context(|| "newNonce URL failed validation".to_string())?;
         debug!("Fetching fresh nonce via HEAD {}", self.directory.new_nonce);
         let resp = self
             .http
@@ -426,6 +572,8 @@ impl AcmeClient {
     // ── Signed POST with badNonce retry (RFC 8555 §6.2, §6.5) ──────────
 
     async fn signed_request(&mut self, url: &str, payload: &str) -> Result<AcmeResponse> {
+        validate_acme_url(url, self.insecure, self.allow_private)
+            .with_context(|| format!("signed_request target URL failed validation: {url}"))?;
         for attempt in 0u8..2 {
             let nonce = self.get_nonce().await?;
 
@@ -939,5 +1087,124 @@ mod tests {
         let out = truncate_for_log(body);
         assert!(out.contains("valid"));
         assert!(out.contains("end"));
+    }
+
+    #[test]
+    fn validate_acme_url_rejects_userinfo() {
+        for url in [
+            "https://attacker@trusted-ca.example/dir",
+            "https://user:pass@trusted-ca.example/dir",
+            "https://:pw@trusted-ca.example/dir",
+        ] {
+            assert!(
+                validate_acme_url(url, false, false).is_err(),
+                "{url} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_acme_url_enforces_8000_octet_cap() {
+        let host = "https://ca.example/";
+        let pad_len = MAX_ACME_URL_LEN - host.len();
+        let just_ok = format!("{host}{}", "a".repeat(pad_len));
+        assert_eq!(just_ok.len(), MAX_ACME_URL_LEN);
+        assert!(validate_acme_url(&just_ok, false, false).is_ok());
+        let too_long = format!("{host}{}", "a".repeat(pad_len + 1));
+        assert!(validate_acme_url(&too_long, false, false).is_err());
+    }
+
+    #[test]
+    fn validate_issuer_domain_name_accepts_canonical() {
+        for d in ["example.com", "letsencrypt.org", "sub.example.co.uk"] {
+            assert!(validate_issuer_domain_name(d).is_ok(), "{d}");
+        }
+    }
+
+    #[test]
+    fn validate_issuer_domain_name_lowercases() {
+        let out = validate_issuer_domain_name("Example.COM").unwrap();
+        assert_eq!(out, "example.com");
+    }
+
+    #[test]
+    fn validate_issuer_domain_name_rejects_injection_attempts() {
+        for d in [
+            "evil.com; rogue=x",
+            "evil.com;rogue",
+            "evil.com\n",
+            "evil.com ",
+            "*.example.com",
+            "_acme.example.com",
+            "example.com.",
+            "",
+            "café.example",
+        ] {
+            assert!(
+                validate_issuer_domain_name(d).is_err(),
+                "{d:?} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_issuer_domain_name_enforces_length() {
+        let too_long = format!("{}.example", "a".repeat(250));
+        assert!(validate_issuer_domain_name(&too_long).is_err());
+        let too_long_label = format!("{}.example", "a".repeat(64));
+        assert!(validate_issuer_domain_name(&too_long_label).is_err());
+    }
+
+    #[test]
+    fn validate_account_uri_accepts_https_and_http() {
+        assert!(validate_account_uri("https://acme.example/acct/123").is_ok());
+        assert!(validate_account_uri("http://acme.example/acct/123").is_ok());
+    }
+
+    #[test]
+    fn validate_account_uri_rejects_injection_attempts() {
+        for u in [
+            "https://acme.example/acct;rogue=x",
+            "https://acme.example/acct/1\n",
+            "https://acme.example/acct/1 ",
+            "https://user:pw@acme.example/acct/1",
+            "https://attacker@acme.example/acct/1",
+            "https://acme.example/acct/1#frag",
+            "not-a-url",
+            "",
+            "https://acmé.example/acct/1",
+        ] {
+            assert!(validate_account_uri(u).is_err(), "{u:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_account_uri_accepts_percent_encoded_semicolon() {
+        // DNS TXT parsers split on literal `;`, not on `%3B`.
+        assert!(validate_account_uri("https://acme.example/acct/1%3Bx").is_ok());
+    }
+
+    #[test]
+    fn validate_caa_parameter_value_accepts_canonical() {
+        for v in ["wildcard", "non-wildcard", "foo-bar", "v=1"] {
+            assert!(validate_caa_parameter_value(v).is_ok(), "{v}");
+        }
+    }
+
+    #[test]
+    fn validate_caa_parameter_value_rejects_injection_attempts() {
+        for v in [
+            "wildcard; rogue=x",
+            "wild card",
+            "wild\nard",
+            "wild\x7fard",
+            "wildcardé",
+            "",
+        ] {
+            assert!(
+                validate_caa_parameter_value(v).is_err(),
+                "{v:?} must be rejected"
+            );
+        }
     }
 }
