@@ -253,10 +253,16 @@ graph TD
     GK["generate-key"] --> GK_ALG{"--algorithm?"}
     GK_ALG -- es256 --> GK_GEN["Generate ES256 key"]
     GK_ALG -- es384 --> GK_GEN384["Generate ES384 key"]
+    GK_ALG -- es512 --> GK_GEN512["Generate ES512 key"]
     GK_ALG -- ed25519 --> GK_GENED["Generate Ed25519 key"]
+    GK_ALG -- rsa2048 --> GK_GENR2["Generate RSA-2048 key"]
+    GK_ALG -- rsa4096 --> GK_GENR4["Generate RSA-4096 key"]
     GK_GEN --> GK_WRITE["Write PEM to<br/>--account-key"]
     GK_GEN384 --> GK_WRITE
+    GK_GEN512 --> GK_WRITE
     GK_GENED --> GK_WRITE
+    GK_GENR2 --> GK_WRITE
+    GK_GENR4 --> GK_WRITE
     GK_WRITE --> GK_FMT{"--output-format?"}
     GK_FMT -- json --> GK_JSON["JSON: algorithm, path"]
     GK_FMT -- text --> GK_TEXT["Text: confirmation"]

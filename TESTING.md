@@ -39,15 +39,17 @@ Expected output (URL paths may vary):
 
 ### Set Alias (optional)
 
+Since every example in this document targets Pebble (self-signed TLS), the alias bakes in `--insecure` so individual command lines stay short. In production, run the binary directly without `--insecure`.
+
 ```sh
 # Linux/macOS
-alias acme=./target/release/acme-client-rs
+alias acme='./target/release/acme-client-rs --insecure'
 
 # PowerShell
-Set-Alias acme .\target\release\acme-client-rs.exe
+function acme { & .\target\release\acme-client-rs.exe --insecure @args }
 ```
 
-All commands below use `acme` as the alias for brevity.
+All commands below use `acme` as the alias for brevity, and inherit `--insecure` from it.
 
 ---
 
