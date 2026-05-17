@@ -2253,14 +2253,18 @@ rm -f "${PROF_STDERR}" 2>/dev/null
 # ── TC-86: show-dns-persist01 happy path ────────────────────────────────────
 
 log_test "86" "show-dns-persist01 happy path (SEC-18)"
-OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-persist01 \
-  --domain "${SINGLE_DOMAIN}" \
-  --issuer-domain-name letsencrypt.org 2>&1)
-if echo "${OUTPUT}" | grep -q "_validation-persist" \
-   && echo "${OUTPUT}" | grep -q "accounturi="; then
-  pass "show-dns-persist01 emitted record name + accounturi"
+if OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-persist01 \
+    --domain "${SINGLE_DOMAIN}" \
+    --issuer-domain-name letsencrypt.org 2>&1); then
+  if echo "${OUTPUT}" | grep -q "_validation-persist" \
+     && echo "${OUTPUT}" | grep -q "accounturi="; then
+    pass "show-dns-persist01 emitted record name + accounturi"
+  else
+    fail "86" "show-dns-persist01 output missing expected fields"
+    echo "  Output: ${OUTPUT}"
+  fi
 else
-  fail "86" "show-dns-persist01 output missing expected fields"
+  fail "86" "show-dns-persist01 exited non-zero"
   echo "  Output: ${OUTPUT}"
 fi
 
