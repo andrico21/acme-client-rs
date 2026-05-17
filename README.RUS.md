@@ -8,6 +8,29 @@
 
 > **Раскрытие информации об ИИ:** Этот проект разработан с помощью ИИ - [Claude Opus 4.6](https://www.anthropic.com/claude) (через GitHub Copilot). Весь код, документация и тесты были проверены и утверждены автором.
 
+## Установка
+
+Скачайте готовый бинарный файл из [последнего релиза](https://github.com/andrico21/acme-client-rs/releases/latest):
+
+| Артефакт | Платформа | Линковка | Примечания |
+|---|---|---|---|
+| `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Статическая (musl)** | **Рекомендуется.** Без runtime-зависимостей — работает на любом дистрибутиве Linux. |
+| `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Динамическая (GNU) | Требует GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
+| `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Динамическая | Intel Mac. |
+| `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Динамическая | Apple Silicon (M1+). |
+| `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Динамическая (MSVC) | Windows 10+. |
+
+**Быстрая установка на Linux (статический бинарник):**
+
+```sh
+curl -sL https://github.com/andrico21/acme-client-rs/releases/latest/download/acme-client-rs-linux-x86_64-musl.tar.gz | tar xz
+sudo install -m 755 acme-client-rs /usr/local/bin/
+```
+
+> **Совет:** На Linux всегда предпочитайте **musl**-бинарник. Вариант GNU динамически линкуется с системным GLIBC и не запустится на дистрибутивах со GLIBC старее 2.39 (например, RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
+
+В качестве альтернативы — сборка из исходников, см. раздел [Сборка](#сборка) ниже.
+
 ## Возможности
 
 - Полная реализация протокола RFC 8555: управление аккаунтами, ротация ключей, жизненный цикл заказов, обработка вызовов, загрузка сертификатов, отзыв
