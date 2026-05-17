@@ -127,20 +127,18 @@ impl Identifier {
 
     /// Create an IP identifier per RFC 8738.
     ///
-    /// IPv6 addresses are normalized to their canonical form (RFC 5952)
-    /// by parsing and re-formatting through `std::net::IpAddr`.
-    pub fn ip(value: impl Into<String>) -> Self {
+    /// Returns `Err` if `value` does not parse as `IpAddr`. IPv6 addresses
+    /// are normalized to their canonical form (RFC 5952) by parsing and
+    /// re-formatting through `std::net::IpAddr`.
+    pub fn ip(value: impl Into<String>) -> Result<Self> {
         let raw = value.into();
-        // Normalize: parse as IpAddr then Display it back.
-        // This gives canonical IPv6 (compressed, lowercase) per RFC 5952.
-        let normalized = raw
-            .parse::<std::net::IpAddr>()
-            .map(|addr| addr.to_string())
-            .unwrap_or(raw);
-        Self {
+        let addr: std::net::IpAddr = raw
+            .parse()
+            .with_context(|| format!("not a valid IP address: {raw}"))?;
+        Ok(Self {
             identifier_type: "ip".into(),
-            value: normalized,
-        }
+            value: addr.to_string(),
+        })
     }
 
     /// Auto-detect whether `value` is an IP address or a DNS name, and
@@ -160,7 +158,7 @@ impl Identifier {
             &s
         };
         if candidate.parse::<std::net::IpAddr>().is_ok() {
-            Ok(Self::ip(candidate))
+            Self::ip(candidate)
         } else {
             Ok(Self::dns(validate_and_normalize_dns(&s)?))
         }
@@ -665,13 +663,24 @@ mod tests {
 
     #[test]
     fn server_identifier_accepts_valid_ip() {
-        let id = Identifier::ip("192.0.2.1");
+        let id = Identifier::ip("192.0.2.1").unwrap();
         assert!(validate_server_identifier(&id).is_ok());
     }
 
     #[test]
+    fn ip_constructor_rejects_invalid_input() {
+        assert!(Identifier::ip("not-an-ip").is_err());
+    }
+
+    #[test]
     fn server_identifier_rejects_invalid_ip() {
-        let id = Identifier::ip("not-an-ip");
+        // Construct via struct literal to bypass the validating constructor,
+        // proving validate_server_identifier rejects bad data even if
+        // somehow synthesized.
+        let id = Identifier {
+            identifier_type: "ip".to_string(),
+            value: "not-an-ip".to_string(),
+        };
         assert!(validate_server_identifier(&id).is_err());
     }
 
