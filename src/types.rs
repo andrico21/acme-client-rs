@@ -419,6 +419,24 @@ impl std::fmt::Display for AcmeError {
         if let Some(ref error_type) = self.error_type {
             write!(f, " ({error_type})")?;
         }
+        if let Some(status) = self.status {
+            write!(f, " [status={status}]")?;
+        }
+        if let Some(ref subs) = self.subproblems
+            && !subs.is_empty()
+        {
+            write!(f, "; subproblems:")?;
+            for sp in subs {
+                write!(f, " [{}", sp.error_type)?;
+                if let Some(ref id) = sp.identifier {
+                    write!(f, " {}={}", id.identifier_type, id.value)?;
+                }
+                if let Some(ref d) = sp.detail {
+                    write!(f, ": {d}")?;
+                }
+                write!(f, "]")?;
+            }
+        }
         Ok(())
     }
 }
@@ -586,5 +604,48 @@ mod tests {
             validate_and_normalize_dns("_acme-challenge.example.com").unwrap(),
             "_acme-challenge.example.com"
         );
+    }
+
+    #[test]
+    fn acme_error_display_includes_subproblems_and_status() {
+        let err = AcmeError {
+            error_type: Some("urn:ietf:params:acme:error:rejectedIdentifier".into()),
+            detail: Some("Some identifiers were rejected".into()),
+            status: Some(400),
+            subproblems: Some(vec![
+                Subproblem {
+                    error_type: "urn:ietf:params:acme:error:malformed".into(),
+                    detail: Some("DNS name has wildcard".into()),
+                    identifier: Some(Identifier {
+                        identifier_type: "dns".into(),
+                        value: "*.evil.example".into(),
+                    }),
+                },
+                Subproblem {
+                    error_type: "urn:ietf:params:acme:error:invalidContact".into(),
+                    detail: None,
+                    identifier: None,
+                },
+            ]),
+        };
+        let s = format!("{err}");
+        assert!(s.contains("Some identifiers were rejected"));
+        assert!(s.contains("rejectedIdentifier"));
+        assert!(s.contains("status=400"));
+        assert!(s.contains("dns=*.evil.example"));
+        assert!(s.contains("DNS name has wildcard"));
+        assert!(s.contains("invalidContact"));
+    }
+
+    #[test]
+    fn acme_error_display_empty_subproblems_omitted() {
+        let err = AcmeError {
+            error_type: Some("urn:ietf:params:acme:error:badNonce".into()),
+            detail: Some("Bad nonce".into()),
+            status: None,
+            subproblems: Some(vec![]),
+        };
+        let s = format!("{err}");
+        assert!(!s.contains("subproblems"));
     }
 }
