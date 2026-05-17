@@ -692,8 +692,10 @@ acme-client-rs serve-http01 --token <token> --port 80 &
 # 5. Tell the server to validate
 acme-client-rs respond-challenge https://acme-v02.api.letsencrypt.org/acme/chall/xyz789
 
-# 6. Finalize with CSR
-acme-client-rs finalize --finalize-url https://acme-v02.api.letsencrypt.org/acme/order/123/finalize example.com www.example.com
+# 6. Finalize with CSR (--key-output is required; the generated key cannot be recovered later)
+acme-client-rs finalize --finalize-url https://acme-v02.api.letsencrypt.org/acme/order/123/finalize \
+  --key-output /etc/ssl/private/example.com.key \
+  example.com www.example.com
 
 # 7. Poll until certificate is ready
 acme-client-rs poll-order https://acme-v02.api.letsencrypt.org/acme/order/123
@@ -1198,8 +1200,8 @@ acme-client-rs serve-http01 --token <token> --port 5002
 # e) In another terminal, tell the CA the challenge is ready
 acme-client-rs respond-challenge <challenge-url>
 
-# f) Finalize the order with a CSR
-acme-client-rs finalize --finalize-url <finalize-url> test.example.com
+# f) Finalize the order with a CSR (--key-output is required; the generated key cannot be recovered later)
+acme-client-rs finalize --finalize-url <finalize-url> --key-output test.example.com.key test.example.com
 
 # g) Poll until the certificate is ready
 acme-client-rs poll-order <order-url>

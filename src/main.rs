@@ -362,6 +362,7 @@ Examples:
 Examples:
   acme-client-rs finalize \\
     --finalize-url https://acme-server/acme/order/123/finalize \\
+    --key-output /etc/ssl/private/example.com.key \\
     example.com www.example.com")]
     Finalize {
         /// Order finalize URL
@@ -370,6 +371,21 @@ Examples:
         /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
         #[arg(long, default_value = "ec-p256")]
         cert_key_algorithm: CertKeyAlgorithm,
+        // Priority 2 (public API): --key-output is REQUIRED to prevent the
+        // SEC-20 footgun where a CSR is submitted to the CA but the freshly
+        // generated private key is discarded, leaving an unusable certificate.
+        /// Save the generated CSR private key to this file (REQUIRED — without this the issued certificate would be unusable)
+        #[arg(long)]
+        key_output: PathBuf,
+        /// Password to encrypt the private key (visible in process list - prefer --key-password-file)
+        #[arg(long, conflicts_with = "key_password_file")]
+        key_password: Option<String>,
+        /// Read the private key encryption password from a file (first line, trailing newline stripped)
+        #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
+        key_password_file: Option<PathBuf>,
+        /// Overwrite the private key file if it already exists.
+        #[arg(long)]
+        force: bool,
         /// Domain names for the CSR
         #[arg(required = true)]
         domains: Vec<String>,
@@ -1125,8 +1141,24 @@ async fn run(
         Commands::Finalize {
             finalize_url,
             cert_key_algorithm,
+            key_output,
+            key_password,
+            key_password_file,
+            force,
             domains,
-        } => cmd_finalize(&cli, finalize_url, domains, *cert_key_algorithm).await,
+        } => {
+            cmd_finalize(
+                &cli,
+                finalize_url,
+                domains,
+                *cert_key_algorithm,
+                key_output,
+                key_password.as_deref(),
+                key_password_file.as_deref(),
+                *force,
+            )
+            .await
+        }
         Commands::PollOrder { url } => cmd_poll_order(&cli, url).await,
         Commands::DownloadCert { url, output } => cmd_download_cert(&cli, url, output).await,
         Commands::DeactivateAccount => cmd_deactivate(&cli).await,
@@ -2288,11 +2320,16 @@ async fn cmd_show_dns_persist01(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_finalize(
     cli: &Cli,
     finalize_url: &str,
     domains: &[String],
     cert_key_alg: CertKeyAlgorithm,
+    key_output: &std::path::Path,
+    key_password: Option<&str>,
+    key_password_file: Option<&std::path::Path>,
+    force: bool,
 ) -> Result<()> {
     client::validate_acme_url(finalize_url, cli.insecure, cli.allow_private_network)?;
     let domains: Vec<String> = domains
@@ -2300,7 +2337,37 @@ async fn cmd_finalize(
         .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
         .collect::<Result<Vec<_>>>()?;
     let mut client = build_client(cli).await?;
-    let (csr_der, _key_pem) = generate_csr(&domains, cert_key_alg)?;
+    let (csr_der, key_pem) = generate_csr(&domains, cert_key_alg)?;
+
+    let password: Option<secrecy::SecretString> = if let Some(pw) = key_password {
+        Some(secrecy::SecretString::from(pw.to_string()))
+    } else if let Some(path) = key_password_file {
+        fs_secure::warn_if_world_readable(path, "password");
+        let content = zeroize::Zeroizing::new(
+            std::fs::read_to_string(path)
+                .with_context(|| format!("failed to read password file: {}", path.display()))?,
+        );
+        let pw: Option<String> = content
+            .lines()
+            .next()
+            .map(|line| line.trim().to_string())
+            .filter(|pw: &String| !pw.is_empty());
+        pw.map(secrecy::SecretString::from)
+    } else {
+        None
+    };
+
+    let key_encrypted = password.is_some();
+    if let Some(ref password) = password {
+        use secrecy::ExposeSecret;
+        let encrypted = encrypt_private_key(&key_pem, password.expose_secret())?;
+        fs_secure::write_secret_file(key_output, encrypted.as_bytes(), force)
+            .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
+    } else {
+        fs_secure::write_secret_file(key_output, key_pem.as_bytes(), force)
+            .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
+    }
+
     let order = client.finalize_order(finalize_url, &csr_der).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
@@ -2310,9 +2377,16 @@ async fn cmd_finalize(
                     "command": "finalize",
                     "status": format!("{}", order.status),
                     "certificate_url": order.certificate,
+                    "key_path": key_output.display().to_string(),
+                    "key_encrypted": key_encrypted,
                 })
             );
         } else {
+            if key_encrypted {
+                outln!("Private key saved to {} (encrypted)", key_output.display());
+            } else {
+                outln!("Private key saved to {}", key_output.display());
+            }
             outln!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
                 outln!("Certificate URL: {cert_url}");

@@ -494,13 +494,15 @@ log_test "13" "Finalize Order"
 if [[ -n "${MANUAL_FINALIZE_URL:-}" ]]; then
   # Wait a moment for challenge validation
   sleep 3
+  MANUAL_CERT_KEY="${WORK_DIR}/manual-cert.key"
   OUTPUT=$(acme --account-key "${MANUAL_KEY}" --account-url "${MANUAL_ACCT_URL}" \
-    finalize --finalize-url "${MANUAL_FINALIZE_URL}" "${SINGLE_DOMAIN}" 2>&1)
-  if echo "${OUTPUT}" | grep -q "Order status:"; then
-    pass "Finalize completed - $(echo "${OUTPUT}" | grep 'Order status' | head -1)"
+    finalize --finalize-url "${MANUAL_FINALIZE_URL}" \
+    --key-output "${MANUAL_CERT_KEY}" "${SINGLE_DOMAIN}" 2>&1)
+  if echo "${OUTPUT}" | grep -q "Order status:" && [[ -s "${MANUAL_CERT_KEY}" ]]; then
+    pass "Finalize completed and key persisted - $(echo "${OUTPUT}" | grep 'Order status' | head -1)"
     MANUAL_CERT_URL=$(echo "${OUTPUT}" | grep "^Certificate URL:" | head -1 | sed 's/^Certificate URL:[[:space:]]*//' || true)
   else
-    fail "13" "Finalize failed"
+    fail "13" "Finalize failed or key not written"
     echo "  Output: ${OUTPUT}"
   fi
 else
@@ -2277,6 +2279,17 @@ if acme --account-key "${ACCT_KEY}" show-dns-persist01 \
   fail "87" "Injected issuer-domain-name was accepted"
 else
   pass "Injected issuer-domain-name rejected"
+fi
+
+# ── TC-88: finalize refuses to run without --key-output (SEC-20) ────────────
+
+log_test "88" "finalize requires --key-output to prevent discarded-key footgun (SEC-20)"
+if acme --account-key "${ACCT_KEY}" \
+     finalize --finalize-url "https://localhost:14000/dummy/finalize" \
+     "${SINGLE_DOMAIN}" >/dev/null 2>&1; then
+  fail "88" "finalize accepted with no --key-output"
+else
+  pass "finalize rejected without --key-output"
 fi
 
 # ═════════════════════════════════════════════════════════════════════════════
