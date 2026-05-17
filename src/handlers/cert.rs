@@ -6,7 +6,8 @@ use anyhow::{Context, Result};
 
 use crate::cli::{Cli, OutputFormat};
 use crate::client::compute_cert_id;
-use crate::{build_client, outln, pem_to_der};
+use crate::csr::pem_to_der;
+use crate::{build_client, outln};
 
 pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8>) -> Result<()> {
     let mut client = build_client(cli).await?;

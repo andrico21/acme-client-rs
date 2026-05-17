@@ -4,12 +4,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use crate::account_key::{load_account_key_with_password, resolve_account_key_password};
 use crate::cli::{Cli, OutputFormat};
+use crate::csr::encrypt_private_key;
 use crate::jws::{AccountKey, KeyAlgorithm};
-use crate::{
-    build_client, encrypt_private_key, load_account_key_with_password, outln,
-    resolve_account_key_password,
-};
+use crate::{build_client, outln};
 
 use super::parse_eab;
 pub(crate) fn cmd_generate_key(

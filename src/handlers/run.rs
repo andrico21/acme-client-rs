@@ -8,17 +8,16 @@
 use anyhow::{Context, Result};
 use tracing::info;
 
+use crate::cert_info::{cert_days_remaining, cert_san_identifiers, normalize_identifier};
 use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
 use crate::client::{AcmeClient, compute_cert_id};
+use crate::csr::{encrypt_private_key, generate_csr, pem_to_der};
 use crate::dns_check::DnsChecker;
 use crate::types::{
     AuthorizationStatus, CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
     CHALLENGE_TYPE_TLSALPN01, Identifier, OrderStatus,
 };
-use crate::{
-    build_client, cert_days_remaining, cert_san_identifiers, encrypt_private_key, generate_csr,
-    normalize_identifier, outln, pem_to_der,
-};
+use crate::{build_client, outln};
 
 use super::{
     check_wildcard_compatible, dns_txt_check, is_challenge_terminal, parse_eab,

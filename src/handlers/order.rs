@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
+use crate::csr::{encrypt_private_key, generate_csr};
 use crate::types::Identifier;
-use crate::{build_client, encrypt_private_key, generate_csr, outln};
+use crate::{build_client, outln};
 
 pub(crate) async fn cmd_order(
     cli: &Cli,
