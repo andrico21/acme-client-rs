@@ -26,6 +26,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
         .collect::<Result<Vec<_>>>()?;
     for id in ids {
         let domain_display = id.value_str().into_owned();
+        let dns_for_hook = id.as_dns().cloned();
         let (authz, authz_url) = client.new_authorization(id).await?;
         if !ctx.json && !ctx.silent {
             outln!(
@@ -59,7 +60,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
 
         let mut challenge_file: Option<std::path::PathBuf> = None;
         let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
-        let mut dns_cleanup_info: Option<(String, String)> = None;
+        let mut dns_cleanup_info: Option<(crate::types::DnsName, String)> = None;
 
         match &ctx.challenge_type {
             ChallengeType::Http01 => {
@@ -122,42 +123,32 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 }
             }
             ChallengeType::Dns01 => {
-                if authz.identifier.is_ip() {
-                    anyhow::bail!(
-                        "dns-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value_str()
-                    );
-                }
-                let txt_name = crate::challenge::dns01::record_name(&authz.identifier.value_str());
+                let dns = dns_for_hook.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dns-01 challenges are not supported for IP identifiers ({domain_display})"
+                    )
+                })?;
+                let txt_name = crate::challenge::dns01::record_name(dns);
                 let txt_value =
                     crate::challenge::dns01::txt_record_value(token, client.account_key());
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(
-                        hook,
-                        &authz.identifier.value_str(),
-                        &txt_name,
-                        &txt_value,
-                    )?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value)?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: authz.identifier.value_str().into_owned(),
-                            txt_name: txt_name.clone(),
+                            domain: dns.as_str().to_string(),
+                            txt_name: txt_name.as_str().to_string(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
-                    crate::challenge::dns01::print_instructions(
-                        &authz.identifier.value_str(),
-                        token,
-                        client.account_key(),
-                    );
+                    crate::challenge::dns01::print_instructions(dns, token, client.account_key());
                 }
                 if let Some(timeout_secs) = ctx.dns_wait {
                     let deadline =
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&ctx.dns_checker, &txt_name, &txt_value).await? {
+                        if dns_txt_check(&ctx.dns_checker, txt_name.as_str(), &txt_value).await? {
                             found = true;
                             break;
                         }
@@ -165,12 +156,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(
-                                hook,
-                                &authz.identifier.value_str(),
-                                &txt_name,
-                                &txt_value,
-                            );
+                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value);
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -182,19 +168,15 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 }
                 if let Some(script) = ctx.on_challenge_ready {
                     let key_auth = crate::challenge::key_authorization(token, client.account_key());
-                    let txt_name_ref =
-                        crate::challenge::dns01::record_name(&authz.identifier.value_str());
-                    let txt_value_ref =
-                        crate::challenge::dns01::txt_record_value(token, client.account_key());
                     run_hook(
                         script,
                         &[
-                            ("ACME_DOMAIN", &authz.identifier.value_str()),
+                            ("ACME_DOMAIN", dns.as_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", token),
                             ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", &txt_name_ref),
-                            ("ACME_TXT_VALUE", &txt_value_ref),
+                            ("ACME_TXT_NAME", txt_name.as_str()),
+                            ("ACME_TXT_VALUE", &txt_value),
                         ],
                     )?;
                 }
@@ -202,12 +184,11 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 client.respond_to_challenge(&challenge_url).await?;
             }
             ChallengeType::DnsPersist01 => {
-                if authz.identifier.is_ip() {
-                    anyhow::bail!(
-                        "dns-persist-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value_str()
-                    );
-                }
+                let dns = dns_for_hook.as_ref().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dns-persist-01 challenges are not supported for IP identifiers ({domain_display})"
+                    )
+                })?;
                 let issuer_names = ch
                     .issuer_domain_names
                     .as_ref()
@@ -221,8 +202,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
-                let txt_name =
-                    crate::challenge::dns_persist01::record_name(&authz.identifier.value_str());
+                let txt_name = crate::challenge::dns_persist01::record_name(dns);
                 let txt_value = crate::challenge::dns_persist01::txt_record_value(
                     &issuer_names[0],
                     &account_uri,
@@ -230,22 +210,17 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     ctx.persist_until,
                 )?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(
-                        hook,
-                        &authz.identifier.value_str(),
-                        &txt_name,
-                        &txt_value,
-                    )?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value)?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: authz.identifier.value_str().into_owned(),
-                            txt_name: txt_name.clone(),
+                            domain: dns.as_str().to_string(),
+                            txt_name: txt_name.as_str().to_string(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
                     crate::challenge::dns_persist01::print_instructions(
-                        &authz.identifier.value_str(),
+                        dns,
                         issuer_names,
                         &account_uri,
                         ctx.persist_policy,
@@ -257,7 +232,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(&ctx.dns_checker, &txt_name, &txt_value).await? {
+                        if dns_txt_check(&ctx.dns_checker, txt_name.as_str(), &txt_value).await? {
                             found = true;
                             break;
                         }
@@ -265,12 +240,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(
-                                hook,
-                                &authz.identifier.value_str(),
-                                &txt_name,
-                                &txt_value,
-                            );
+                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value);
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -284,9 +254,9 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     run_hook(
                         script,
                         &[
-                            ("ACME_DOMAIN", &authz.identifier.value_str()),
+                            ("ACME_DOMAIN", dns.as_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TXT_NAME", &txt_name),
+                            ("ACME_TXT_NAME", txt_name.as_str()),
                             ("ACME_TXT_VALUE", &txt_value),
                         ],
                     )?;
@@ -393,8 +363,9 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
         // Clean up DNS hook if applicable (dns-01 and dns-persist-01)
         if let Some((ref txt_name, ref txt_value)) = dns_cleanup_info
             && let Some(hook) = ctx.dns_hook
+            && let Some(ref dns) = dns_for_hook
         {
-            run_dns_hook_cleanup_logged(hook, &domain_display, txt_name, txt_value);
+            run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value);
         }
         if let Some(handle) = serve_task.take() {
             handle.abort();

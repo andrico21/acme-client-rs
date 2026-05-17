@@ -57,28 +57,28 @@ pub(super) async fn run_phased_dns(
             })?;
 
         let (token, txt_name, txt_value) = if ctx.challenge_type == ChallengeType::Dns01 {
-            if authz.identifier.is_ip() {
-                anyhow::bail!(
+            let dns = authz.identifier.as_dns().ok_or_else(|| {
+                anyhow::anyhow!(
                     "dns-01 challenges are not supported for IP identifiers ({})",
                     authz.identifier.value_str()
-                );
-            }
+                )
+            })?;
             let t = ch
                 .token
                 .as_deref()
                 .context("challenge has no token")?
                 .to_string();
-            let name = crate::challenge::dns01::record_name(&authz.identifier.value_str());
+            let name = crate::challenge::dns01::record_name(dns);
             let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
             (t, name, value)
         } else {
             // dns-persist-01
-            if authz.identifier.is_ip() {
-                anyhow::bail!(
+            let dns = authz.identifier.as_dns().ok_or_else(|| {
+                anyhow::anyhow!(
                     "dns-persist-01 challenges are not supported for IP identifiers ({})",
                     authz.identifier.value_str()
-                );
-            }
+                )
+            })?;
             let issuer_names = ch
                 .issuer_domain_names
                 .as_ref()
@@ -92,7 +92,7 @@ pub(super) async fn run_phased_dns(
                 .account_url()
                 .context("account URL not known - cannot construct dns-persist-01 record")?
                 .to_string();
-            let name = crate::challenge::dns_persist01::record_name(&authz.identifier.value_str());
+            let name = crate::challenge::dns_persist01::record_name(dns);
             let value = crate::challenge::dns_persist01::txt_record_value(
                 &issuer_names[0],
                 &account_uri,
@@ -110,7 +110,7 @@ pub(super) async fn run_phased_dns(
         );
         let status = std::process::Command::new(hook)
             .env("ACME_DOMAIN", authz.identifier.value_str().as_ref())
-            .env("ACME_TXT_NAME", &txt_name)
+            .env("ACME_TXT_NAME", txt_name.as_str())
             .env("ACME_TXT_VALUE", &txt_value)
             .env("ACME_ACTION", "create")
             .status()
@@ -122,17 +122,22 @@ pub(super) async fn run_phased_dns(
             }
             anyhow::bail!("DNS hook (create) exited with {status}");
         }
+        let dns_for_pending = authz
+            .identifier
+            .as_dns()
+            .expect("DNS branch above guarantees DNS identifier")
+            .clone();
         ctx.cleanup_registry
             .register(crate::cleanup::CleanupAction::DnsRecord {
                 hook: hook.to_path_buf(),
-                domain: authz.identifier.value_str().into_owned(),
-                txt_name: txt_name.clone(),
+                domain: dns_for_pending.as_str().to_string(),
+                txt_name: txt_name.as_str().to_string(),
                 txt_value: txt_value.clone(),
             });
 
         pending.push(DnsPending {
             authz_url: authz_url.clone(),
-            domain: authz.identifier.value_str().into_owned(),
+            domain: dns_for_pending,
             challenge_url: ch.url.clone(),
             token,
             txt_name,
@@ -155,7 +160,7 @@ pub(super) async fn run_phased_dns(
 
             let semaphore =
                 std::sync::Arc::new(tokio::sync::Semaphore::new(ctx.dns_propagation_concurrency));
-            let mut set: tokio::task::JoinSet<anyhow::Result<(String, bool)>> =
+            let mut set: tokio::task::JoinSet<anyhow::Result<(crate::types::DnsName, bool)>> =
                 tokio::task::JoinSet::new();
             for p in &pending {
                 let name = p.txt_name.clone();
@@ -168,7 +173,7 @@ pub(super) async fn run_phased_dns(
                     let deadline =
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     while std::time::Instant::now() < deadline {
-                        match dns_txt_check(&checker, &name, &value).await {
+                        match dns_txt_check(&checker, name.as_str(), &value).await {
                             Ok(true) => return Ok((domain, true)),
                             Ok(false) => {}
                             // Transient resolver errors (NXDOMAIN, SERVFAIL, timeout)
@@ -183,7 +188,7 @@ pub(super) async fn run_phased_dns(
                 });
             }
 
-            let mut failed: Vec<String> = Vec::new();
+            let mut failed: Vec<crate::types::DnsName> = Vec::new();
             while let Some(result) = set.join_next().await {
                 let (domain, found) = result.context("DNS propagation task panicked")??;
                 if found {
@@ -200,7 +205,11 @@ pub(super) async fn run_phased_dns(
                 }
                 anyhow::bail!(
                     "DNS TXT records not found within {timeout_secs}s for: {}",
-                    failed.join(", ")
+                    failed
+                        .iter()
+                        .map(|d| d.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
             }
         }
@@ -218,7 +227,7 @@ pub(super) async fn run_phased_dns(
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", &p.token),
                             ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", &p.txt_name),
+                            ("ACME_TXT_NAME", p.txt_name.as_str()),
                             ("ACME_TXT_VALUE", &p.txt_value),
                         ],
                     )?;
@@ -228,7 +237,7 @@ pub(super) async fn run_phased_dns(
                         &[
                             ("ACME_DOMAIN", p.domain.as_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TXT_NAME", &p.txt_name),
+                            ("ACME_TXT_NAME", p.txt_name.as_str()),
                             ("ACME_TXT_VALUE", &p.txt_value),
                         ],
                     )?;

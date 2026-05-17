@@ -12,7 +12,7 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::client::AcmeClient;
-use crate::types::{ChallengeType, Order};
+use crate::types::{ChallengeType, DnsName, Order};
 
 use super::RunContext;
 
@@ -27,10 +27,10 @@ mod sequential;
 /// been created (via the DNS hook) and is awaiting propagation + validation.
 pub(super) struct DnsPending {
     pub authz_url: url::Url,
-    pub domain: String,
+    pub domain: DnsName,
     pub challenge_url: url::Url,
     pub token: String,
-    pub txt_name: String,
+    pub txt_name: DnsName,
     pub txt_value: String,
 }
 

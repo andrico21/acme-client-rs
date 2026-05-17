@@ -57,9 +57,7 @@ pub(crate) fn cmd_show_dns01(
     silent: bool,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
-    let domain = crate::types::validate_and_normalize_dns(domain)
-        .context("invalid --domain for show-dns01")?;
-    let domain = domain.as_str();
+    let domain = crate::types::DnsName::parse(domain).context("invalid --domain for show-dns01")?;
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
@@ -68,7 +66,7 @@ pub(crate) fn cmd_show_dns01(
         load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
     if !silent {
         if fmt == OutputFormat::Json {
-            let name = crate::challenge::dns01::record_name(domain);
+            let name = crate::challenge::dns01::record_name(&domain);
             let value = crate::challenge::dns01::txt_record_value(token, &key);
             outln!(
                 "{}",
@@ -81,7 +79,7 @@ pub(crate) fn cmd_show_dns01(
                 })
             );
         } else {
-            crate::challenge::dns01::print_instructions(domain, token, &key);
+            crate::challenge::dns01::print_instructions(&domain, token, &key);
         }
     }
     Ok(())
@@ -95,9 +93,8 @@ pub(crate) async fn cmd_show_dns_persist01(
     persist_until: Option<u64>,
     fmt: OutputFormat,
 ) -> Result<()> {
-    let domain = crate::types::validate_and_normalize_dns(domain)
-        .context("invalid --domain for show-dns-persist01")?;
-    let domain = domain.as_str();
+    let domain =
+        crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-persist01")?;
     let _issuer_check = crate::client::validate_issuer_domain_name(issuer_domain_name)
         .context("invalid --issuer-domain-name for show-dns-persist01")?;
     if let Some(p) = persist_policy {
@@ -115,7 +112,7 @@ pub(crate) async fn cmd_show_dns_persist01(
         .context("account URL not known")?
         .to_string();
 
-    let name = crate::challenge::dns_persist01::record_name(domain);
+    let name = crate::challenge::dns_persist01::record_name(&domain);
     let value = crate::challenge::dns_persist01::txt_record_value(
         issuer_domain_name,
         &account_uri,
@@ -142,7 +139,7 @@ pub(crate) async fn cmd_show_dns_persist01(
         } else {
             let issuer_names = vec![issuer_domain_name.to_string()];
             crate::challenge::dns_persist01::print_instructions(
-                domain,
+                &domain,
                 &issuer_names,
                 &account_uri,
                 persist_policy,

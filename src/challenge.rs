@@ -243,13 +243,21 @@ pub mod dns01 {
     /// For wildcard identifiers (`*.example.com`), the leading `*.` is
     /// stripped per RFC 8555 §8.4 — the validation record is published
     /// at the base zone, not under a literal `*` label.
-    pub fn record_name(domain: &str) -> String {
-        let base = domain.strip_prefix("*.").unwrap_or(domain);
-        format!("_acme-challenge.{base}")
+    pub fn record_name(domain: &crate::types::DnsName) -> crate::types::DnsName {
+        let base = domain
+            .as_str()
+            .strip_prefix("*.")
+            .unwrap_or(domain.as_str());
+        crate::types::DnsName::parse(&format!("_acme-challenge.{base}"))
+            .expect("constructed _acme-challenge.<dns> is always a valid DnsName")
     }
 
     /// Print human-readable instructions for manual DNS record setup.
-    pub fn print_instructions(domain: &str, token: &str, account_key: &AccountKey) {
+    pub fn print_instructions(
+        domain: &crate::types::DnsName,
+        token: &str,
+        account_key: &AccountKey,
+    ) {
         let name = record_name(domain);
         let value = txt_record_value(token, account_key);
         outln!();
@@ -270,9 +278,13 @@ pub mod dns_persist01 {
     ///
     /// For wildcard identifiers (`*.example.com`), the leading `*.` is
     /// stripped — the persistent validation record lives at the base zone.
-    pub fn record_name(domain: &str) -> String {
-        let base = domain.strip_prefix("*.").unwrap_or(domain);
-        format!("_validation-persist.{base}")
+    pub fn record_name(domain: &crate::types::DnsName) -> crate::types::DnsName {
+        let base = domain
+            .as_str()
+            .strip_prefix("*.")
+            .unwrap_or(domain.as_str());
+        crate::types::DnsName::parse(&format!("_validation-persist.{base}"))
+            .expect("constructed _validation-persist.<dns> is always a valid DnsName")
     }
 
     /// Construct the TXT record value (RFC 8659 issue-value syntax).
@@ -298,7 +310,7 @@ pub mod dns_persist01 {
     }
 
     pub fn print_instructions(
-        domain: &str,
+        domain: &crate::types::DnsName,
         issuer_domain_names: &[String],
         account_uri: &str,
         policy: Option<&str>,
@@ -377,24 +389,28 @@ pub mod tlsalpn01 {
 mod tests {
     #[test]
     fn dns01_record_name_strips_wildcard_prefix() {
+        let wildcard = crate::types::DnsName::parse("*.example.com").unwrap();
+        let bare = crate::types::DnsName::parse("example.com").unwrap();
         assert_eq!(
-            super::dns01::record_name("*.example.com"),
+            super::dns01::record_name(&wildcard).as_str(),
             "_acme-challenge.example.com"
         );
         assert_eq!(
-            super::dns01::record_name("example.com"),
+            super::dns01::record_name(&bare).as_str(),
             "_acme-challenge.example.com"
         );
     }
 
     #[test]
     fn dns_persist01_record_name_strips_wildcard_prefix() {
+        let wildcard = crate::types::DnsName::parse("*.example.com").unwrap();
+        let bare = crate::types::DnsName::parse("example.com").unwrap();
         assert_eq!(
-            super::dns_persist01::record_name("*.example.com"),
+            super::dns_persist01::record_name(&wildcard).as_str(),
             "_validation-persist.example.com"
         );
         assert_eq!(
-            super::dns_persist01::record_name("example.com"),
+            super::dns_persist01::record_name(&bare).as_str(),
             "_validation-persist.example.com"
         );
     }

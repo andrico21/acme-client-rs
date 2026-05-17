@@ -13,6 +13,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
+use crate::types::DnsName;
+
 pub(crate) fn run_hook(script: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
     let mut cmd = std::process::Command::new(script);
     for &(key, val) in env_vars {
@@ -35,13 +37,13 @@ pub(crate) fn run_hook(script: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
 /// as fatal because the upcoming validation will fail without the record.
 pub(crate) fn run_dns_hook_create(
     hook: &Path,
-    domain: &str,
-    txt_name: &str,
+    domain: &DnsName,
+    txt_name: &DnsName,
     txt_value: &str,
 ) -> Result<()> {
     let status = std::process::Command::new(hook)
-        .env("ACME_DOMAIN", domain)
-        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_DOMAIN", domain.as_str())
+        .env("ACME_TXT_NAME", txt_name.as_str())
         .env("ACME_TXT_VALUE", txt_value)
         .env("ACME_ACTION", "create")
         .status()
@@ -59,13 +61,13 @@ pub(crate) fn run_dns_hook_create(
 /// failure cause.
 pub(crate) fn run_dns_hook_cleanup_logged(
     hook: &Path,
-    domain: &str,
-    txt_name: &str,
+    domain: &DnsName,
+    txt_name: &DnsName,
     txt_value: &str,
 ) {
     let status = std::process::Command::new(hook)
-        .env("ACME_DOMAIN", domain)
-        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_DOMAIN", domain.as_str())
+        .env("ACME_TXT_NAME", txt_name.as_str())
         .env("ACME_TXT_VALUE", txt_value)
         .env("ACME_ACTION", "cleanup")
         .status();
@@ -81,13 +83,13 @@ pub(crate) fn run_dns_hook_cleanup_logged(
 /// making logging redundant. Use [`run_dns_hook_cleanup_logged`] elsewhere.
 pub(crate) fn run_dns_hook_cleanup_silent(
     hook: &Path,
-    domain: &str,
-    txt_name: &str,
+    domain: &DnsName,
+    txt_name: &DnsName,
     txt_value: &str,
 ) {
     let _ = std::process::Command::new(hook)
-        .env("ACME_DOMAIN", domain)
-        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_DOMAIN", domain.as_str())
+        .env("ACME_TXT_NAME", txt_name.as_str())
         .env("ACME_TXT_VALUE", txt_value)
         .env("ACME_ACTION", "cleanup")
         .status();

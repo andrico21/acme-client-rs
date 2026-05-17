@@ -229,6 +229,7 @@ impl Identifier {
     }
 
     /// `true` if this identifier is an IP literal.
+    #[allow(dead_code)]
     pub fn is_ip(&self) -> bool {
         matches!(self, Self::Ip(_))
     }
@@ -249,6 +250,17 @@ impl Identifier {
         match self {
             Self::Dns(n) => std::borrow::Cow::Borrowed(n.as_str()),
             Self::Ip(a) => std::borrow::Cow::Owned(a.to_string()),
+        }
+    }
+
+    /// Borrow the inner [`DnsName`] when this identifier is a DNS name,
+    /// returning `None` for IP identifiers. Used by DNS-only call paths
+    /// that take `&DnsName` directly instead of going through
+    /// [`Identifier::value_str`].
+    pub fn as_dns(&self) -> Option<&DnsName> {
+        match self {
+            Self::Dns(n) => Some(n),
+            Self::Ip(_) => None,
         }
     }
 }
