@@ -1669,6 +1669,19 @@ fn cmd_show_config(
             "connect_timeout",
             cfg_g.and_then(|c| c.connect_timeout).is_some(),
         );
+        let apn_src = global_source(
+            "allow_private_network",
+            cfg_g.and_then(|c| c.allow_private_network).is_some(),
+        );
+        let dcm_src = global_source(
+            "dns_check_mode",
+            cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some(),
+        );
+        let dcd_src = global_source(
+            "dns_check_dnssec",
+            cfg_g.and_then(|c| c.dns_check_dnssec).is_some(),
+        );
+        let uh_src = global_source("unsafe_hooks", cfg_g.and_then(|c| c.unsafe_hooks).is_some());
 
         outln!("[global]");
         outln!("  directory       = {}{}", cli.directory, src(dir_src));
@@ -1693,6 +1706,22 @@ fn cmd_show_config(
         );
         outln!("  insecure        = {}{}", cli.insecure, src(ins_src));
         outln!("  connect_timeout = {}{}", cli.connect_timeout, src(ct_src));
+        outln!(
+            "  allow_private_network = {}{}",
+            cli.allow_private_network,
+            src(apn_src)
+        );
+        outln!(
+            "  dns_check_mode  = {:?}{}",
+            cli.dns_check_mode,
+            src(dcm_src)
+        );
+        outln!(
+            "  dns_check_dnssec = {}{}",
+            cli.dns_check_dnssec,
+            src(dcd_src)
+        );
+        outln!("  unsafe_hooks    = {}{}", cli.unsafe_hooks, src(uh_src));
 
         if let Some(r) = cfg_run {
             outln!();
