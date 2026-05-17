@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 mod challenge;
+mod cleanup;
 mod client;
 mod config;
 mod dns_check;
@@ -702,7 +703,25 @@ async fn main() {
         }
     }
 
-    if let Err(err) = run(cli, loaded_config.as_ref(), &matches, config_mode).await {
+    let cleanup_registry = cleanup::CleanupRegistry::default();
+    let sigint_registry = cleanup_registry.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            eprintln!("Interrupted — running challenge cleanup before exit...");
+            sigint_registry.run_all_sync();
+            std::process::exit(130);
+        }
+    });
+
+    if let Err(err) = run(
+        cli,
+        loaded_config.as_ref(),
+        &matches,
+        config_mode,
+        &cleanup_registry,
+    )
+    .await
+    {
         eprintln!("Error: {err:#}");
         std::process::exit(1);
     }
@@ -1055,6 +1074,7 @@ async fn run(
     loaded_config: Option<&config::Config>,
     matches: &clap::ArgMatches,
     config_mode: bool,
+    cleanup_registry: &cleanup::CleanupRegistry,
 ) -> Result<()> {
     let fmt = cli.output_format;
     match &cli.command {
@@ -1244,6 +1264,7 @@ async fn run(
                 *cert_key_algorithm,
                 profile.as_deref(),
                 *force,
+                cleanup_registry,
             )
             .await
         }
@@ -2776,6 +2797,7 @@ async fn cmd_run(
     cert_key_alg: CertKeyAlgorithm,
     profile: Option<&str>,
     force: bool,
+    cleanup_registry: &cleanup::CleanupRegistry,
 ) -> Result<()> {
     check_wildcard_compatible(&domains, challenge_type)?;
 
@@ -3100,6 +3122,8 @@ async fn cmd_run(
                         if !json && !silent {
                             outln!("  Challenge file written to {}", file.display());
                         }
+                        cleanup_registry
+                            .register(cleanup::CleanupAction::HttpChallengeFile(file.clone()));
                         challenge_file = Some(file);
                     } else {
                         if http_port != 80 {
@@ -3111,7 +3135,7 @@ async fn cmd_run(
                         let path = challenge::http01::challenge_path(token);
                         let listener = challenge::http01::bind_or_suggest(http_port).await?;
                         info!("HTTP-01 server listening on 0.0.0.0:{http_port}");
-                        serve_task = Some(tokio::spawn(async move {
+                        let task = tokio::spawn(async move {
                             use tokio::io::{AsyncReadExt, AsyncWriteExt};
                             loop {
                                 let (mut stream, _addr) = listener.accept().await?;
@@ -3133,7 +3157,10 @@ async fn cmd_run(
                                     )
                                     .await?;
                             }
-                        }));
+                        });
+                        cleanup_registry
+                            .register(cleanup::CleanupAction::ServerTask(task.abort_handle()));
+                        serve_task = Some(task);
                     }
                     client.respond_to_challenge(&challenge_url).await?;
                     if !json && !silent {
@@ -3151,6 +3178,12 @@ async fn cmd_run(
                     let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
                     if let Some(hook) = dns_hook {
                         run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
+                        cleanup_registry.register(cleanup::CleanupAction::DnsRecord {
+                            hook: hook.to_path_buf(),
+                            domain: authz.identifier.value.clone(),
+                            txt_name: txt_name.clone(),
+                            txt_value: txt_value.clone(),
+                        });
                     } else if !silent {
                         challenge::dns01::print_instructions(
                             &authz.identifier.value,
@@ -3242,6 +3275,12 @@ async fn cmd_run(
                     )?;
                     if let Some(hook) = dns_hook {
                         run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
+                        cleanup_registry.register(cleanup::CleanupAction::DnsRecord {
+                            hook: hook.to_path_buf(),
+                            domain: authz.identifier.value.clone(),
+                            txt_name: txt_name.clone(),
+                            txt_value: txt_value.clone(),
+                        });
                     } else if !silent {
                         challenge::dns_persist01::print_instructions(
                             &authz.identifier.value,
@@ -3582,6 +3621,12 @@ async fn cmd_run(
                 }
                 anyhow::bail!("DNS hook (create) exited with {status}");
             }
+            cleanup_registry.register(cleanup::CleanupAction::DnsRecord {
+                hook: hook.to_path_buf(),
+                domain: authz.identifier.value.clone(),
+                txt_name: txt_name.clone(),
+                txt_value: txt_value.clone(),
+            });
 
             pending.push(DnsPending {
                 authz_url: authz_url.clone(),
@@ -3862,6 +3907,8 @@ async fn cmd_run(
                         if !json && !silent {
                             outln!("  Challenge file written to {}", file.display());
                         }
+                        cleanup_registry
+                            .register(cleanup::CleanupAction::HttpChallengeFile(file.clone()));
                         challenge_file = Some(file);
                     } else {
                         // Standalone mode: bind a TCP server
@@ -3879,7 +3926,7 @@ async fn cmd_run(
                         let listener = challenge::http01::bind_or_suggest(http_port).await?;
                         info!("HTTP-01 server listening on 0.0.0.0:{http_port}");
 
-                        serve_task = Some(tokio::spawn(async move {
+                        let task = tokio::spawn(async move {
                             use tokio::io::{AsyncReadExt, AsyncWriteExt};
                             loop {
                                 let (mut stream, addr) = listener.accept().await?;
@@ -3905,7 +3952,10 @@ async fn cmd_run(
                                 let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n";
                                 stream.write_all(not_found.as_bytes()).await?;
                             }
-                        }));
+                        });
+                        cleanup_registry
+                            .register(cleanup::CleanupAction::ServerTask(task.abort_handle()));
+                        serve_task = Some(task);
                     }
 
                     // Yield briefly so the HTTP-01 server task is ready
