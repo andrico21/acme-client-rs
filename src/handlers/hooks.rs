@@ -33,10 +33,12 @@ pub(crate) fn run_hook(script: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
 /// `ACME_ACTION=create` env contract documented in README. Returns an error
 /// if the hook fails to spawn or exits non-zero — callers MUST treat that
 /// as fatal because the upcoming validation will fail without the record.
-pub(crate) fn run_dns_hook_create(hook: &Path,
-domain: &str,
-txt_name: &str,
-txt_value: &str,) -> Result<()> {
+pub(crate) fn run_dns_hook_create(
+    hook: &Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) -> Result<()> {
     let status = std::process::Command::new(hook)
         .env("ACME_DOMAIN", domain)
         .env("ACME_TXT_NAME", txt_name)
@@ -55,10 +57,12 @@ txt_value: &str,) -> Result<()> {
 /// callers are usually already on an error path (challenge timed out,
 /// validation failed) and a missing cleanup must not mask the original
 /// failure cause.
-pub(crate) fn run_dns_hook_cleanup_logged(hook: &Path,
-domain: &str,
-txt_name: &str,
-txt_value: &str,) {
+pub(crate) fn run_dns_hook_cleanup_logged(
+    hook: &Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) {
     let status = std::process::Command::new(hook)
         .env("ACME_DOMAIN", domain)
         .env("ACME_TXT_NAME", txt_name)
@@ -75,10 +79,12 @@ txt_value: &str,) {
 /// Best-effort DNS cleanup hook for parallel-DNS rollback paths where any
 /// hook failure would be immediately followed by `anyhow::bail!` anyway,
 /// making logging redundant. Use [`run_dns_hook_cleanup_logged`] elsewhere.
-pub(crate) fn run_dns_hook_cleanup_silent(hook: &Path,
-domain: &str,
-txt_name: &str,
-txt_value: &str,) {
+pub(crate) fn run_dns_hook_cleanup_silent(
+    hook: &Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) {
     let _ = std::process::Command::new(hook)
         .env("ACME_DOMAIN", domain)
         .env("ACME_TXT_NAME", txt_name)
