@@ -522,7 +522,8 @@ impl AcmeClient {
             .context("server does not support pre-authorization (no newAuthz in directory)")?;
         info!(
             "Pre-authorizing identifier: {} ({})",
-            identifier.value, identifier.identifier_type
+            identifier.value_str(),
+            identifier.type_str()
         );
         let payload = serde_json::to_string(&NewAuthorizationRequest { identifier })?;
         let resp = self

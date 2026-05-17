@@ -33,7 +33,7 @@ pub(super) async fn run_phased_dns(
         if !ctx.json && !ctx.silent {
             outln!(
                 "Authorization for {} - status: {}",
-                authz.identifier.value,
+                authz.identifier.value_str(),
                 authz.status
             );
         }
@@ -51,7 +51,8 @@ pub(super) async fn run_phased_dns(
             .with_context(|| {
                 format!(
                     "no {} challenge for {}",
-                    ctx.challenge_type, authz.identifier.value
+                    ctx.challenge_type,
+                    authz.identifier.value_str()
                 )
             })?;
 
@@ -59,7 +60,7 @@ pub(super) async fn run_phased_dns(
             if authz.identifier.is_ip() {
                 anyhow::bail!(
                     "dns-01 challenges are not supported for IP identifiers ({})",
-                    authz.identifier.value
+                    authz.identifier.value_str()
                 );
             }
             let t = ch
@@ -67,7 +68,7 @@ pub(super) async fn run_phased_dns(
                 .as_deref()
                 .context("challenge has no token")?
                 .to_string();
-            let name = crate::challenge::dns01::record_name(&authz.identifier.value);
+            let name = crate::challenge::dns01::record_name(&authz.identifier.value_str());
             let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
             (t, name, value)
         } else {
@@ -75,7 +76,7 @@ pub(super) async fn run_phased_dns(
             if authz.identifier.is_ip() {
                 anyhow::bail!(
                     "dns-persist-01 challenges are not supported for IP identifiers ({})",
-                    authz.identifier.value
+                    authz.identifier.value_str()
                 );
             }
             let issuer_names = ch
@@ -91,7 +92,7 @@ pub(super) async fn run_phased_dns(
                 .account_url()
                 .context("account URL not known - cannot construct dns-persist-01 record")?
                 .to_string();
-            let name = crate::challenge::dns_persist01::record_name(&authz.identifier.value);
+            let name = crate::challenge::dns_persist01::record_name(&authz.identifier.value_str());
             let value = crate::challenge::dns_persist01::txt_record_value(
                 &issuer_names[0],
                 &account_uri,
@@ -105,10 +106,10 @@ pub(super) async fn run_phased_dns(
         info!(
             "Calling DNS hook (create): {} for {}",
             hook.display(),
-            authz.identifier.value
+            authz.identifier.value_str()
         );
         let status = std::process::Command::new(hook)
-            .env("ACME_DOMAIN", &authz.identifier.value)
+            .env("ACME_DOMAIN", authz.identifier.value_str().as_ref())
             .env("ACME_TXT_NAME", &txt_name)
             .env("ACME_TXT_VALUE", &txt_value)
             .env("ACME_ACTION", "create")
@@ -124,14 +125,14 @@ pub(super) async fn run_phased_dns(
         ctx.cleanup_registry
             .register(crate::cleanup::CleanupAction::DnsRecord {
                 hook: hook.to_path_buf(),
-                domain: authz.identifier.value.clone(),
+                domain: authz.identifier.value_str().into_owned(),
                 txt_name: txt_name.clone(),
                 txt_value: txt_value.clone(),
             });
 
         pending.push(DnsPending {
             authz_url: authz_url.clone(),
-            domain: authz.identifier.value.clone(),
+            domain: authz.identifier.value_str().into_owned(),
             challenge_url: ch.url.clone(),
             token,
             txt_name,

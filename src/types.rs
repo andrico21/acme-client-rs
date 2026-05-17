@@ -110,63 +110,155 @@ pub struct DirectoryMeta {
 
 // ── Identifier (RFC 8555 §9.7.7, RFC 8738 for IP) ────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Identifier {
-    #[serde(rename = "type")]
-    pub identifier_type: String,
-    pub value: String,
+/// Validated DNS name suitable for use as an ACME identifier.
+///
+/// The inner string is **always** the output of [`validate_and_normalize_dns`]
+/// (lowercased ASCII, A-label IDN, RFC-conformant labels, optional leftmost
+/// `*` wildcard). The field is private — construction is only possible via
+/// [`DnsName::parse`] or deserialization (which routes through the same
+/// validator via `try_from = "String"`). This makes the
+/// "DNS name was checked" invariant a static property of the type.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct DnsName(String);
+
+impl DnsName {
+    /// Validate and normalize `input` from a user-controlled source (CLI
+    /// `--domain`, config file), returning a `DnsName` whose inner string
+    /// is the canonical form. Lowercases, IDN A-label conversion, etc.
+    pub fn parse(input: &str) -> Result<Self> {
+        Ok(Self(validate_and_normalize_dns(input)?))
+    }
+
+    /// Validate `input` from an untrusted-but-authoritative source (CA
+    /// server response). Unlike [`DnsName::parse`], this REJECTS any input
+    /// that is not already in canonical form -- RFC 8555 §7.1.4 requires
+    /// the CA to echo identifiers verbatim, so a server returning
+    /// `Example.COM` is non-conformant (and is the canonical SEC-04
+    /// argv-injection vector if accepted and silently normalized).
+    pub fn parse_canonical(input: &str) -> Result<Self> {
+        let normalized = validate_and_normalize_dns(input)?;
+        if normalized != input {
+            bail!("DNS identifier {input:?} is not in canonical form (expected {normalized:?})");
+        }
+        Ok(Self(normalized))
+    }
+
+    /// Borrow the canonical DNS string.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for DnsName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for DnsName {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<DnsName> for String {
+    fn from(n: DnsName) -> String {
+        n.0
+    }
+}
+
+impl TryFrom<String> for DnsName {
+    type Error = anyhow::Error;
+    fn try_from(s: String) -> Result<Self> {
+        Self::parse_canonical(&s)
+    }
+}
+
+/// ACME identifier (RFC 8555 §9.7.7, RFC 8738 §3 for IP).
+///
+/// Modeled as an enum so DNS-only vs IP-only branches are type-checked
+/// rather than discovered via a string comparison on a `type` field.
+/// `Dns` carries a validated [`DnsName`]; `Ip` carries a parsed
+/// [`std::net::IpAddr`] whose `Display` form is RFC 5952-canonical.
+///
+/// Wire format (unchanged): `{"type":"dns"|"ip","value":"..."}`.
+/// Deserialization routes the `value` through each variant's validating
+/// constructor — a server returning a malformed IP, mixed-case DNS, or
+/// shell-metacharacter-injected name is rejected at the parse boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "value", rename_all = "lowercase")]
+pub enum Identifier {
+    Dns(DnsName),
+    Ip(std::net::IpAddr),
 }
 
 impl Identifier {
-    pub fn dns(value: impl Into<String>) -> Self {
-        Self {
-            identifier_type: "dns".into(),
-            value: value.into(),
-        }
+    /// Construct a DNS identifier from raw input, validating + normalizing.
+    pub fn dns(value: &str) -> Result<Self> {
+        Ok(Self::Dns(DnsName::parse(value)?))
     }
 
-    /// Create an IP identifier per RFC 8738.
-    ///
-    /// Returns `Err` if `value` does not parse as `IpAddr`. IPv6 addresses
-    /// are normalized to their canonical form (RFC 5952) by parsing and
-    /// re-formatting through `std::net::IpAddr`.
-    pub fn ip(value: impl Into<String>) -> Result<Self> {
-        let raw = value.into();
-        let addr: std::net::IpAddr = raw
+    /// Construct an IP identifier per RFC 8738. IPv6 is normalized to
+    /// RFC 5952 form by the `IpAddr` round-trip.
+    pub fn ip(value: &str) -> Result<Self> {
+        let addr: std::net::IpAddr = value
             .parse()
-            .with_context(|| format!("not a valid IP address: {raw}"))?;
-        Ok(Self {
-            identifier_type: "ip".into(),
-            value: addr.to_string(),
-        })
+            .with_context(|| format!("not a valid IP address: {value}"))?;
+        Ok(Self::Ip(addr))
     }
 
-    /// Auto-detect whether `value` is an IP address or a DNS name, and
-    /// validate + normalize it for use as an ACME identifier per RFC 8555.
+    /// Auto-detect whether `value` is an IP literal or a DNS name and
+    /// dispatch to the appropriate validating constructor.
     ///
-    /// - Bare IPv4 (`1.2.3.4`) → `ip` identifier
-    /// - Bare IPv6 (`::1`, `2001:db8::1`) → `ip` identifier
-    /// - Bracketed IPv6 (`[::1]`) → `ip` identifier (brackets stripped)
-    /// - Anything else → `dns` identifier, run through
-    ///   [`validate_and_normalize_dns`]
-    pub fn from_str_auto(value: impl Into<String>) -> Result<Self> {
-        let s = value.into();
-        // Strip brackets for IPv6 literals like [::1]
-        let candidate = if s.starts_with('[') && s.ends_with(']') {
-            &s[1..s.len() - 1]
-        } else {
-            &s
-        };
+    /// - Bare IPv4 (`1.2.3.4`) → [`Identifier::Ip`]
+    /// - Bare IPv6 (`::1`, `2001:db8::1`) → [`Identifier::Ip`]
+    /// - Bracketed IPv6 (`[::1]`) → [`Identifier::Ip`] (brackets stripped)
+    /// - Anything else → [`Identifier::Dns`] via [`DnsName::parse`]
+    pub fn from_str_auto(value: &str) -> Result<Self> {
+        // Strip brackets for IPv6 literals like [::1].
+        let candidate = value
+            .strip_prefix('[')
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(value);
         if candidate.parse::<std::net::IpAddr>().is_ok() {
             Self::ip(candidate)
         } else {
-            Ok(Self::dns(validate_and_normalize_dns(&s)?))
+            Self::dns(value)
         }
     }
 
-    /// Returns `true` if this is an IP identifier.
+    /// `true` if this identifier is an IP literal.
     pub fn is_ip(&self) -> bool {
-        self.identifier_type == "ip"
+        matches!(self, Self::Ip(_))
+    }
+
+    /// Wire-format `type` tag (`"dns"` or `"ip"`), for JSON output, logs,
+    /// and human-readable formatting.
+    pub fn type_str(&self) -> &'static str {
+        match self {
+            Self::Dns(_) => "dns",
+            Self::Ip(_) => "ip",
+        }
+    }
+
+    /// Canonical wire-format `value` string. Allocates only for IP.
+    /// Use [`Identifier::as_dns`] + [`DnsName::as_str`] for zero-alloc
+    /// DNS-only access.
+    pub fn value_str(&self) -> std::borrow::Cow<'_, str> {
+        match self {
+            Self::Dns(n) => std::borrow::Cow::Borrowed(n.as_str()),
+            Self::Ip(a) => std::borrow::Cow::Owned(a.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for Identifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Dns(n) => f.write_str(n.as_str()),
+            Self::Ip(a) => write!(f, "{a}"),
+        }
     }
 }
 
@@ -241,36 +333,15 @@ pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
 
 /// Validate an identifier we received from the ACME server.
 ///
-/// Defense-in-depth (SEC-04): the CA controls the strings inside
-/// `Authorization.identifier`, and those values flow into `dig` argv,
-/// hook env vars, and DNS record names. A buggy or hostile CA could
-/// substitute a value containing shell metacharacters, leading dashes
-/// (which `dig` would parse as a flag), or non-DNS-safe bytes. We
-/// reject anything that doesn't survive our own normalization, and
-/// reject DNS values where normalization would change the string
-/// (the CA must echo back exactly what we sent — RFC 8555 §7.1.4).
-pub fn validate_server_identifier(id: &Identifier) -> Result<()> {
-    match id.identifier_type.as_str() {
-        "dns" => {
-            let normalized = validate_and_normalize_dns(&id.value).with_context(|| {
-                format!("server returned invalid DNS identifier {:?}", id.value)
-            })?;
-            if normalized != id.value {
-                bail!(
-                    "server returned DNS identifier {:?} that does not match its normalized form {normalized:?}",
-                    id.value
-                );
-            }
-            Ok(())
-        }
-        "ip" => {
-            id.value.parse::<std::net::IpAddr>().map_err(|e| {
-                anyhow::anyhow!("server returned invalid IP identifier {:?}: {e}", id.value)
-            })?;
-            Ok(())
-        }
-        other => bail!("server returned unknown identifier type {other:?}"),
-    }
+/// With the enum-based [`Identifier`], all SEC-04 defense is enforced at
+/// the serde boundary: IP-parse failures, unknown `type` values, and
+/// non-canonical DNS strings (RFC 8555 §7.1.4 echo-back violations) are
+/// all caught during deserialization by [`DnsName::parse_canonical`] and
+/// `IpAddr`'s own `FromStr`. This function remains as a no-op marker
+/// for callers that want to assert "yes, I validated this", and as the
+/// extension point for any future post-parse identifier checks.
+pub fn validate_server_identifier(_id: &Identifier) -> Result<()> {
+    Ok(())
 }
 
 // ── Account (RFC 8555 §7.1.2, §7.3) ─────────────────────────────────────────
@@ -493,7 +564,7 @@ impl std::fmt::Display for AcmeError {
             for sp in subs {
                 write!(f, " [{}", sp.error_type)?;
                 if let Some(ref id) = sp.identifier {
-                    write!(f, " {}={}", id.identifier_type, id.value)?;
+                    write!(f, " {}={}", id.type_str(), id)?;
                 }
                 if let Some(ref d) = sp.detail {
                     write!(f, ": {d}")?;
@@ -634,31 +705,29 @@ mod tests {
         assert!(ip.is_ip());
         let dns = Identifier::from_str_auto("Example.COM").unwrap();
         assert!(!dns.is_ip());
-        assert_eq!(dns.value, "example.com");
+        assert_eq!(dns.value_str(), "example.com");
     }
 
     #[test]
     fn server_identifier_accepts_normalized_dns() {
-        let id = Identifier::dns("example.com");
+        let id = Identifier::dns("example.com").unwrap();
         assert!(validate_server_identifier(&id).is_ok());
     }
 
     #[test]
-    fn server_identifier_rejects_uppercase_dns() {
-        let id = Identifier::dns("Example.COM");
-        assert!(validate_server_identifier(&id).is_err());
+    fn dns_constructor_normalizes_uppercase() {
+        let id = Identifier::dns("Example.COM").unwrap();
+        assert_eq!(id.value_str(), "example.com");
     }
 
     #[test]
-    fn server_identifier_rejects_dig_flag_injection() {
-        let id = Identifier::dns("-X");
-        assert!(validate_server_identifier(&id).is_err());
+    fn dns_constructor_rejects_dig_flag_injection() {
+        assert!(Identifier::dns("-X").is_err());
     }
 
     #[test]
-    fn server_identifier_rejects_shell_metacharacters() {
-        let id = Identifier::dns("foo;rm -rf /");
-        assert!(validate_server_identifier(&id).is_err());
+    fn dns_constructor_rejects_shell_metacharacters() {
+        assert!(Identifier::dns("foo;rm -rf /").is_err());
     }
 
     #[test]
@@ -673,24 +742,46 @@ mod tests {
     }
 
     #[test]
-    fn server_identifier_rejects_invalid_ip() {
-        // Construct via struct literal to bypass the validating constructor,
-        // proving validate_server_identifier rejects bad data even if
-        // somehow synthesized.
-        let id = Identifier {
-            identifier_type: "ip".to_string(),
-            value: "not-an-ip".to_string(),
-        };
-        assert!(validate_server_identifier(&id).is_err());
+    fn deserialize_rejects_invalid_ip() {
+        let bad = r#"{"type":"ip","value":"not-an-ip"}"#;
+        assert!(serde_json::from_str::<Identifier>(bad).is_err());
     }
 
     #[test]
-    fn server_identifier_rejects_unknown_type() {
-        let id = Identifier {
-            identifier_type: "evil".to_string(),
-            value: "anything".to_string(),
-        };
-        assert!(validate_server_identifier(&id).is_err());
+    fn deserialize_rejects_unknown_type() {
+        let bad = r#"{"type":"evil","value":"anything"}"#;
+        assert!(serde_json::from_str::<Identifier>(bad).is_err());
+    }
+
+    #[test]
+    fn deserialize_rejects_unnormalized_dns() {
+        let bad = r#"{"type":"dns","value":"Example.COM"}"#;
+        assert!(serde_json::from_str::<Identifier>(bad).is_err());
+    }
+
+    #[test]
+    fn deserialize_accepts_canonical_dns() {
+        let ok = r#"{"type":"dns","value":"example.com"}"#;
+        let id: Identifier = serde_json::from_str(ok).unwrap();
+        assert!(matches!(id, Identifier::Dns(ref n) if n.as_str() == "example.com"));
+    }
+
+    #[test]
+    fn deserialize_accepts_ipv4() {
+        let ok = r#"{"type":"ip","value":"192.0.2.1"}"#;
+        let id: Identifier = serde_json::from_str(ok).unwrap();
+        assert!(matches!(id, Identifier::Ip(_)));
+        assert_eq!(id.value_str(), "192.0.2.1");
+    }
+
+    #[test]
+    fn serialize_round_trip_preserves_wire_format() {
+        let id = Identifier::dns("example.com").unwrap();
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, r#"{"type":"dns","value":"example.com"}"#);
+        let ip = Identifier::ip("192.0.2.1").unwrap();
+        let json = serde_json::to_string(&ip).unwrap();
+        assert_eq!(json, r#"{"type":"ip","value":"192.0.2.1"}"#);
     }
 
     #[test]
@@ -728,10 +819,7 @@ mod tests {
                 Subproblem {
                     error_type: "urn:ietf:params:acme:error:malformed".into(),
                     detail: Some("DNS name has wildcard".into()),
-                    identifier: Some(Identifier {
-                        identifier_type: "dns".into(),
-                        value: "*.evil.example".into(),
-                    }),
+                    identifier: Some(Identifier::dns("*.evil.example").unwrap()),
                 },
                 Subproblem {
                     error_type: "urn:ietf:params:acme:error:invalidContact".into(),

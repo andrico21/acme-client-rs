@@ -28,7 +28,7 @@ pub(crate) async fn cmd_order(
     }
     let ids: Vec<Identifier> = domains
         .iter()
-        .map(Identifier::from_str_auto)
+        .map(|d| Identifier::from_str_auto(d))
         .collect::<Result<Vec<_>>>()?;
     let (order, order_url) = client.new_order(ids, profile).await?;
     if !cli.silent {
@@ -131,8 +131,8 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
                 "{}",
                 serde_json::json!({
                     "command": "get-authz",
-                    "identifier": authz.identifier.value,
-                    "identifier_type": authz.identifier.identifier_type,
+                    "identifier": authz.identifier.value_str(),
+                    "identifier_type": authz.identifier.type_str(),
                     "status": format!("{}", authz.status),
                     "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
                         "type": ch.challenge_type,
@@ -145,8 +145,8 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
         } else {
             outln!(
                 "Identifier: {} ({})",
-                authz.identifier.value,
-                authz.identifier.identifier_type
+                authz.identifier.value_str(),
+                authz.identifier.type_str()
             );
             outln!("Status:     {}", authz.status);
             for ch in &authz.challenges {
@@ -206,7 +206,7 @@ pub(crate) async fn cmd_finalize(
         .with_context(|| format!("not a valid URL: {finalize_url}"))?;
     let domains: Vec<String> = domains
         .iter()
-        .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
+        .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
         .collect::<Result<Vec<_>>>()?;
     let mut client = build_client(cli).await?;
     let (csr_der, key_pem) = generate_csr(&domains, cert_key_alg)?;

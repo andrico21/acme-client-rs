@@ -27,7 +27,7 @@ pub(super) async fn run_sequential(
         if !ctx.json && !ctx.silent {
             outln!(
                 "Authorization for {} - status: {}",
-                authz.identifier.value,
+                authz.identifier.value_str(),
                 authz.status
             );
         }
@@ -46,7 +46,8 @@ pub(super) async fn run_sequential(
             .with_context(|| {
                 format!(
                     "no {} challenge for {}",
-                    ctx.challenge_type, authz.identifier.value
+                    ctx.challenge_type,
+                    authz.identifier.value_str()
                 )
             })?;
         let token = if ctx.challenge_type != ChallengeType::DnsPersist01 {
@@ -83,7 +84,7 @@ pub(super) async fn run_sequential(
                 }
                 anyhow::bail!(
                     "authorization for {} did not complete within {}s",
-                    authz.identifier.value,
+                    authz.identifier.value_str(),
                     ctx.challenge_timeout
                 );
             }
@@ -113,7 +114,7 @@ pub(super) async fn run_sequential(
                         .unwrap_or_default();
                     anyhow::bail!(
                         "challenge validation failed for {}{detail}",
-                        authz.identifier.value
+                        authz.identifier.value_str()
                     );
                 } else if let Some(ref err) = ch.error {
                     tracing::debug!(
@@ -141,7 +142,7 @@ pub(super) async fn run_sequential(
                         .unwrap_or_default();
                     anyhow::bail!(
                         "authorization failed for {}{detail}",
-                        authz.identifier.value
+                        authz.identifier.value_str()
                     );
                 }
                 _ => continue,

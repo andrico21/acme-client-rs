@@ -173,8 +173,8 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
                 "{}",
                 serde_json::json!({
                     "command": "pre-authorize",
-                    "identifier": authz.identifier.value,
-                    "identifier_type": authz.identifier.identifier_type,
+                    "identifier": authz.identifier.value_str(),
+                    "identifier_type": authz.identifier.type_str(),
                     "status": format!("{}", authz.status),
                     "authz_url": authz_url,
                     "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
@@ -189,8 +189,8 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
             outln!("Authorization URL: {authz_url}");
             outln!(
                 "Identifier:  {} ({})",
-                authz.identifier.value,
-                authz.identifier.identifier_type
+                authz.identifier.value_str(),
+                authz.identifier.type_str()
             );
             outln!("Status:      {}", authz.status);
             for ch in &authz.challenges {

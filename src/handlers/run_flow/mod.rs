@@ -116,7 +116,7 @@ pub(crate) async fn cmd_run(
 
     let domains: Vec<String> = domains
         .iter()
-        .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
+        .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
         .collect::<Result<Vec<_>>>()?;
 
     let dns_checker = std::sync::Arc::new(
@@ -210,7 +210,7 @@ pub(crate) async fn cmd_run(
     let ids: Vec<Identifier> = ctx
         .domains
         .iter()
-        .map(Identifier::from_str_auto)
+        .map(|d| Identifier::from_str_auto(d))
         .collect::<Result<Vec<_>>>()?;
     let (order, order_url) = if let Some(cert_id) = ctx.ari_cert_id.take() {
         info!("Using ARI replaces field (certID: {cert_id})");

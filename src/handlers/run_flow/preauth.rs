@@ -22,10 +22,10 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
     let ids: Vec<Identifier> = ctx
         .domains
         .iter()
-        .map(Identifier::from_str_auto)
+        .map(|d| Identifier::from_str_auto(d))
         .collect::<Result<Vec<_>>>()?;
     for id in ids {
-        let domain_display = id.value.clone();
+        let domain_display = id.value_str().into_owned();
         let (authz, authz_url) = client.new_authorization(id).await?;
         if !ctx.json && !ctx.silent {
             outln!(
@@ -125,24 +125,29 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 if authz.identifier.is_ip() {
                     anyhow::bail!(
                         "dns-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value
+                        authz.identifier.value_str()
                     );
                 }
-                let txt_name = crate::challenge::dns01::record_name(&authz.identifier.value);
+                let txt_name = crate::challenge::dns01::record_name(&authz.identifier.value_str());
                 let txt_value =
                     crate::challenge::dns01::txt_record_value(token, client.account_key());
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
+                    run_dns_hook_create(
+                        hook,
+                        &authz.identifier.value_str(),
+                        &txt_name,
+                        &txt_value,
+                    )?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: authz.identifier.value.clone(),
+                            domain: authz.identifier.value_str().into_owned(),
                             txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
                     crate::challenge::dns01::print_instructions(
-                        &authz.identifier.value,
+                        &authz.identifier.value_str(),
                         token,
                         client.account_key(),
                     );
@@ -162,7 +167,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         if let Some(hook) = ctx.dns_hook {
                             run_dns_hook_cleanup_logged(
                                 hook,
-                                &authz.identifier.value,
+                                &authz.identifier.value_str(),
                                 &txt_name,
                                 &txt_value,
                             );
@@ -178,13 +183,13 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 if let Some(script) = ctx.on_challenge_ready {
                     let key_auth = crate::challenge::key_authorization(token, client.account_key());
                     let txt_name_ref =
-                        crate::challenge::dns01::record_name(&authz.identifier.value);
+                        crate::challenge::dns01::record_name(&authz.identifier.value_str());
                     let txt_value_ref =
                         crate::challenge::dns01::txt_record_value(token, client.account_key());
                     run_hook(
                         script,
                         &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
+                            ("ACME_DOMAIN", &authz.identifier.value_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", token),
                             ("ACME_KEY_AUTH", &key_auth),
@@ -200,7 +205,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 if authz.identifier.is_ip() {
                     anyhow::bail!(
                         "dns-persist-01 challenges are not supported for IP identifiers ({})",
-                        authz.identifier.value
+                        authz.identifier.value_str()
                     );
                 }
                 let issuer_names = ch
@@ -217,7 +222,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
                 let txt_name =
-                    crate::challenge::dns_persist01::record_name(&authz.identifier.value);
+                    crate::challenge::dns_persist01::record_name(&authz.identifier.value_str());
                 let txt_value = crate::challenge::dns_persist01::txt_record_value(
                     &issuer_names[0],
                     &account_uri,
@@ -225,17 +230,22 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     ctx.persist_until,
                 )?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
+                    run_dns_hook_create(
+                        hook,
+                        &authz.identifier.value_str(),
+                        &txt_name,
+                        &txt_value,
+                    )?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: authz.identifier.value.clone(),
+                            domain: authz.identifier.value_str().into_owned(),
                             txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
                     crate::challenge::dns_persist01::print_instructions(
-                        &authz.identifier.value,
+                        &authz.identifier.value_str(),
                         issuer_names,
                         &account_uri,
                         ctx.persist_policy,
@@ -257,7 +267,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         if let Some(hook) = ctx.dns_hook {
                             run_dns_hook_cleanup_logged(
                                 hook,
-                                &authz.identifier.value,
+                                &authz.identifier.value_str(),
                                 &txt_name,
                                 &txt_value,
                             );
@@ -274,7 +284,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     run_hook(
                         script,
                         &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
+                            ("ACME_DOMAIN", &authz.identifier.value_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TXT_NAME", &txt_name),
                             ("ACME_TXT_VALUE", &txt_value),
@@ -287,7 +297,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             ChallengeType::TlsAlpn01 => {
                 if !ctx.silent {
                     crate::challenge::tlsalpn01::print_instructions(
-                        &authz.identifier.value,
+                        &authz.identifier.value_str(),
                         token,
                         client.account_key(),
                     );
@@ -299,7 +309,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     run_hook(
                         script,
                         &[
-                            ("ACME_DOMAIN", &authz.identifier.value),
+                            ("ACME_DOMAIN", &authz.identifier.value_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
                             ("ACME_TOKEN", token),
                             ("ACME_KEY_AUTH", &key_auth),
