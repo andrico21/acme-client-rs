@@ -97,6 +97,35 @@ fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Warn (via `tracing::warn!`) if `path` is group- or world-readable on Unix.
+///
+/// Intended for sensitive inputs (config files, password files) where we
+/// cannot refuse to read — the user may have intentionally relaxed perms —
+/// but where lax modes likely indicate a misconfiguration. No-op on non-Unix
+/// and silently ignores stat failures (the caller will surface read errors).
+pub fn warn_if_world_readable(path: &Path, kind: &str) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mode = meta.mode() & 0o777;
+            if mode & 0o077 != 0 {
+                tracing::warn!(
+                    "{} file {} has permissive mode {:o} (group/world accessible) — consider `chmod 600 {}`",
+                    kind,
+                    path.display(),
+                    mode,
+                    path.display(),
+                );
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, kind);
+    }
+}
+
 #[cfg(unix)]
 fn fsync_dir(dir: &Path) {
     if let Ok(d) = std::fs::File::open(dir) {

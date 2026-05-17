@@ -43,7 +43,7 @@ Alternatively, build from source — see [Building](#building) below.
 - Domain mismatch protection: detects when requested domains differ from existing certificate's SANs, prevents accidental overwrites (`--reissue-on-mismatch` to explicitly allow)
 - ACME Renewal Information (ARI, RFC 9702): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
 - Certificate profiles (draft-ietf-acme-profiles-01): `list-profiles` subcommand to query available profiles, `--profile` flag on `order` and `run` to select a profile
-- Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF
+- Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF (parameters `N=16384, r=8, p=1` chosen for OpenSSL CLI interop — OpenSSL caps scrypt memory at 32 MB, which would reject the stronger `N=131072` default)
 - Step-by-step manual flow (individual subcommands)
 - Six key algorithms: ES256 (default), ES384, ES512, RSA-2048, RSA-4096, Ed25519
 - Configurable via CLI flags, config file, or environment variables

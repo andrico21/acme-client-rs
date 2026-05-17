@@ -683,6 +683,7 @@ async fn main() {
 /// ignored for most fields.
 fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
     if let Some(ref path) = cli.config {
+        fs_secure::warn_if_world_readable(path, "config");
         Ok((Some(config::Config::load(path)?), true))
     } else {
         Ok((None, false))
@@ -1297,6 +1298,7 @@ fn resolve_account_key_password(
         return Ok(Some(secrecy::SecretString::from(pw.to_string())));
     }
     if let Some(path) = file {
+        fs_secure::warn_if_world_readable(path, "password");
         let content =
             zeroize::Zeroizing::new(std::fs::read_to_string(path).with_context(|| {
                 format!(
@@ -2945,7 +2947,7 @@ async fn cmd_run(
                                 let req = String::from_utf8_lossy(&buf[..n]);
                                 if req.contains(&path) {
                                     let resp = format!(
-                                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}",
+                                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n{}",
                                         auth.len(),
                                         auth
                                     );
@@ -2954,7 +2956,7 @@ async fn cmd_run(
                                 }
                                 stream
                                     .write_all(
-                                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+                                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n",
                                     )
                                     .await?;
                             }
@@ -3738,7 +3740,10 @@ async fn cmd_run(
                                     let resp = format!(
                                         "HTTP/1.1 200 OK\r\n\
                                      Content-Type: application/octet-stream\r\n\
-                                     Content-Length: {}\r\n\r\n{}",
+                                     Content-Length: {}\r\n\
+                                     X-Content-Type-Options: nosniff\r\n\
+                                     Connection: close\r\n\
+                                     Server: acme-client-rs\r\n\r\n{}",
                                         auth.len(),
                                         auth
                                     );
@@ -3746,8 +3751,7 @@ async fn cmd_run(
                                     info!("HTTP-01: served challenge response to {addr}");
                                     return Ok(());
                                 }
-                                let not_found =
-                                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+                                let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n";
                                 stream.write_all(not_found.as_bytes()).await?;
                             }
                         }));
@@ -4072,6 +4076,7 @@ async fn cmd_run(
     let password: Option<secrecy::SecretString> = if let Some(pw) = key_password {
         Some(secrecy::SecretString::from(pw.to_string()))
     } else if let Some(path) = key_password_file {
+        fs_secure::warn_if_world_readable(path, "password");
         let content = zeroize::Zeroizing::new(
             std::fs::read_to_string(path)
                 .with_context(|| format!("failed to read password file: {}", path.display()))?,

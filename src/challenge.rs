@@ -175,6 +175,9 @@ pub mod http01 {
                     "HTTP/1.1 200 OK\r\n\
                      Content-Type: application/octet-stream\r\n\
                      Content-Length: {}\r\n\
+                     X-Content-Type-Options: nosniff\r\n\
+                     Connection: close\r\n\
+                     Server: acme-client-rs\r\n\
                      \r\n\
                      {}",
                     auth.len(),
@@ -184,7 +187,7 @@ pub mod http01 {
                 info!("HTTP-01: served challenge response");
                 return Ok(());
             }
-            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n";
             stream.write_all(not_found.as_bytes()).await?;
         }
     }
