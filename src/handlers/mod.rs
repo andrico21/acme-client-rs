@@ -187,12 +187,15 @@ pub(super) fn check_wildcard_compatible<S: AsRef<str>>(
     Ok(())
 }
 
+/// Returns true iff the challenge has reached the unrecoverable `invalid` state.
 ///
-/// Per RFC 8555 §7.5.1, a challenge with `status: "invalid"` is terminal.
-/// A challenge with `status: "pending"` and an `error` field is NOT terminal —
-/// it just means a previous validation attempt failed. Some CAs (e.g. step-ca)
-/// validate synchronously and attach errors to still-pending challenges.
-pub(super) fn is_challenge_terminal(ch: &Challenge) -> bool {
+/// Per RFC 8555 §7.1.6, `invalid` is a terminal failure state — polling cannot
+/// recover. A challenge with `status: "pending"` and an `error` field is NOT
+/// failed; it just means a previous validation attempt errored and the CA may
+/// retry. Some CAs (e.g. step-ca) validate synchronously and attach errors to
+/// still-pending challenges. This is distinct from `valid`, which is also
+/// terminal but represents success — callers handle those paths separately.
+pub(super) fn is_challenge_failed(ch: &Challenge) -> bool {
     ch.status == ChallengeStatus::Invalid
 }
 
@@ -225,37 +228,37 @@ mod tests {
     #[test]
     fn pending_without_error_is_not_terminal() {
         let ch = make_challenge(ChallengeStatus::Pending, None);
-        assert!(!is_challenge_terminal(&ch));
+        assert!(!is_challenge_failed(&ch));
     }
 
     #[test]
     fn pending_with_error_is_not_terminal() {
         // step-ca returns error on pending challenge after sync validation failure
         let ch = make_challenge(ChallengeStatus::Pending, Some(make_error()));
-        assert!(!is_challenge_terminal(&ch));
+        assert!(!is_challenge_failed(&ch));
     }
 
     #[test]
     fn processing_without_error_is_not_terminal() {
         let ch = make_challenge(ChallengeStatus::Processing, None);
-        assert!(!is_challenge_terminal(&ch));
+        assert!(!is_challenge_failed(&ch));
     }
 
     #[test]
     fn invalid_with_error_is_terminal() {
         let ch = make_challenge(ChallengeStatus::Invalid, Some(make_error()));
-        assert!(is_challenge_terminal(&ch));
+        assert!(is_challenge_failed(&ch));
     }
 
     #[test]
     fn invalid_without_error_is_terminal() {
         let ch = make_challenge(ChallengeStatus::Invalid, None);
-        assert!(is_challenge_terminal(&ch));
+        assert!(is_challenge_failed(&ch));
     }
 
     #[test]
     fn valid_is_not_terminal() {
         let ch = make_challenge(ChallengeStatus::Valid, None);
-        assert!(!is_challenge_terminal(&ch));
+        assert!(!is_challenge_failed(&ch));
     }
 }

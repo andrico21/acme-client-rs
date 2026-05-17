@@ -19,7 +19,7 @@ use crate::types::{
 };
 
 use super::super::{
-    dns_txt_check, is_challenge_terminal, run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent,
+    dns_txt_check, is_challenge_failed, run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent,
     run_hook,
 };
 use super::RunContext;
@@ -295,7 +295,7 @@ pub(super) async fn authorize(
                         .iter()
                         .find(|c| c.challenge_type == ctx.challenge_type)
                     {
-                        if is_challenge_terminal(ch) {
+                        if is_challenge_failed(ch) {
                             for q in &pending {
                                 run_dns_hook_cleanup_silent(
                                     hook,
@@ -695,7 +695,7 @@ pub(super) async fn authorize(
                     .iter()
                     .find(|c| c.challenge_type == ctx.challenge_type)
                 {
-                    if is_challenge_terminal(ch) {
+                    if is_challenge_failed(ch) {
                         if let Some(handle) = serve_task.take() {
                             handle.abort();
                         }
