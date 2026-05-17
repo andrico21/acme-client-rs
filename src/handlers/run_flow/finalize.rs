@@ -20,7 +20,7 @@ pub(super) async fn finalize(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
     order: Order,
-    order_url: &str,
+    order_url: &url::Url,
 ) -> Result<()> {
     // ── Finalize ────────────────────────────────────────────────────────
     info!(
@@ -28,8 +28,7 @@ pub(super) async fn finalize(
         if ctx.pre_authorize { 5 } else { 4 }
     );
     let (csr_der, key_pem) = generate_csr(&ctx.domains, ctx.cert_key_alg)?;
-    let finalize_url = order.finalize.clone();
-    let mut order = client.finalize_order(&finalize_url, &csr_der).await?;
+    let mut order = client.finalize_order(&order.finalize, &csr_der).await?;
     if !ctx.json && !ctx.silent {
         outln!("Order status: {}", order.status);
     }

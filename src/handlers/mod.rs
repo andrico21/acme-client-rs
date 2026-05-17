@@ -132,7 +132,9 @@ mod tests {
     fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Challenge {
         Challenge {
             challenge_type: ChallengeType::Http01,
-            url: "https://example.com/chall/1".to_string(),
+            url: "https://example.com/chall/1"
+                .parse()
+                .expect("valid test URL"),
             status,
             validated: None,
             token: Some("test-token".to_string()),

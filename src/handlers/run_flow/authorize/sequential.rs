@@ -54,23 +54,18 @@ pub(super) async fn run_sequential(
         } else {
             "" // dns-persist-01 has no token
         };
-        let challenge_url = ch.url.clone();
 
         let ProvisionResult {
             challenge_file,
             mut serve_task,
         } = match &ctx.challenge_type {
-            ChallengeType::Http01 => {
-                provision_http01(ctx, client, &authz, token, &challenge_url).await?
-            }
-            ChallengeType::Dns01 => {
-                provision_dns01(ctx, client, &authz, token, &challenge_url).await?
-            }
+            ChallengeType::Http01 => provision_http01(ctx, client, &authz, token, &ch.url).await?,
+            ChallengeType::Dns01 => provision_dns01(ctx, client, &authz, token, &ch.url).await?,
             ChallengeType::DnsPersist01 => {
-                provision_dns_persist01(ctx, client, &authz, ch, &challenge_url).await?
+                provision_dns_persist01(ctx, client, &authz, ch, &ch.url).await?
             }
             ChallengeType::TlsAlpn01 => {
-                provision_tlsalpn01(ctx, client, &authz, token, &challenge_url).await?
+                provision_tlsalpn01(ctx, client, &authz, token, &ch.url).await?
             }
             other => anyhow::bail!("unsupported challenge type: {other}"),
         };

@@ -85,13 +85,13 @@ impl<'de> Deserialize<'de> for ChallengeType {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct Directory {
-    pub new_nonce: String,
-    pub new_account: String,
-    pub new_order: String,
-    pub new_authz: Option<String>,
-    pub revoke_cert: String,
-    pub key_change: String,
-    pub renewal_info: Option<String>,
+    pub new_nonce: url::Url,
+    pub new_account: url::Url,
+    pub new_order: url::Url,
+    pub new_authz: Option<url::Url>,
+    pub revoke_cert: url::Url,
+    pub key_change: url::Url,
+    pub renewal_info: Option<url::Url>,
     pub meta: Option<DirectoryMeta>,
 }
 
@@ -292,7 +292,7 @@ pub struct Account {
     pub status: AccountStatus,
     pub contact: Option<Vec<String>>,
     pub terms_of_service_agreed: Option<bool>,
-    pub orders: Option<String>,
+    pub orders: Option<url::Url>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,9 +345,9 @@ pub struct Order {
     pub identifiers: Vec<Identifier>,
     pub not_before: Option<String>,
     pub not_after: Option<String>,
-    pub authorizations: Vec<String>,
-    pub finalize: String,
-    pub certificate: Option<String>,
+    pub authorizations: Vec<url::Url>,
+    pub finalize: url::Url,
+    pub certificate: Option<url::Url>,
     /// Certificate profile (draft-ietf-acme-profiles-01 §4).
     pub profile: Option<String>,
 }
@@ -419,7 +419,7 @@ impl std::fmt::Display for AuthorizationStatus {
 pub struct Challenge {
     #[serde(rename = "type")]
     pub challenge_type: ChallengeType,
-    pub url: String,
+    pub url: url::Url,
     pub status: ChallengeStatus,
     pub validated: Option<String>,
     pub token: Option<String>,

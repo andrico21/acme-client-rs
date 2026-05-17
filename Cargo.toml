@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["full"] }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = { version = "2", features = ["serde"] }
 x509-parser = "0.18"
 [lints.clippy]
 print_stdout = "deny"

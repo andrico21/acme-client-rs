@@ -123,13 +123,15 @@ impl AcmeResponse {
         })
     }
 
-    pub(crate) fn location(&self) -> Result<String> {
-        self.headers
+    pub(crate) fn location(&self) -> Result<url::Url> {
+        let raw = self
+            .headers
             .get("location")
             .context("no Location header in response")?
             .to_str()
-            .context("invalid Location header value")
-            .map(String::from)
+            .context("invalid Location header value")?;
+        raw.parse()
+            .with_context(|| format!("Location header is not a valid URL: {raw}"))
     }
 
     pub(crate) fn ensure_success(&self) -> Result<()> {

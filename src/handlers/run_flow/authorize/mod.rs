@@ -26,9 +26,9 @@ mod sequential;
 /// `phased_dns` submodule. Each instance represents one TXT record that has
 /// been created (via the DNS hook) and is awaiting propagation + validation.
 pub(super) struct DnsPending {
-    pub authz_url: String,
+    pub authz_url: url::Url,
     pub domain: String,
-    pub challenge_url: String,
+    pub challenge_url: url::Url,
     pub token: String,
     pub txt_name: String,
     pub txt_value: String,

@@ -33,7 +33,7 @@ pub(super) async fn provision_http01(
     client: &mut AcmeClient,
     authz: &Authorization,
     token: &str,
-    challenge_url: &str,
+    challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     let mut result = ProvisionResult::default();
 
@@ -108,7 +108,7 @@ pub(super) async fn provision_dns01(
     client: &mut AcmeClient,
     authz: &Authorization,
     token: &str,
-    challenge_url: &str,
+    challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     if authz.identifier.is_ip() {
         anyhow::bail!(
@@ -177,7 +177,7 @@ pub(super) async fn provision_dns_persist01(
     client: &mut AcmeClient,
     authz: &Authorization,
     ch: &crate::types::Challenge,
-    challenge_url: &str,
+    challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     if authz.identifier.is_ip() {
         anyhow::bail!(
@@ -257,7 +257,7 @@ pub(super) async fn provision_tlsalpn01(
     client: &mut AcmeClient,
     authz: &Authorization,
     token: &str,
-    challenge_url: &str,
+    challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     if !ctx.silent {
         crate::challenge::tlsalpn01::print_instructions(

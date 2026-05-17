@@ -2,6 +2,20 @@
 //!
 //! Every mutating request is a signed JWS POST. Nonces are cached from
 //! response headers and a single automatic retry is performed on `badNonce`.
+//!
+//! The client is decomposed into two sub-structs:
+//! - [`Directory`]: immutable after construction; holds the parsed ACME
+//!   directory document (RFC 8555 §7.1.1). Public methods borrow URLs from
+//!   here via `&self.directory.X` without ever cloning.
+//! - [`Transport`]: mutable; holds the HTTP client, nonce cache, account
+//!   URL, and the account signing key. Mutating methods take
+//!   `&mut self.transport`.
+//!
+//! Because the two live in disjoint sub-fields, calls like
+//! `self.transport.signed_request(&self.directory.new_order, …)` borrow
+//! both halves at once without conflict. This is the "Struct Decomposition
+//! for Independent Borrowing" pattern (RUST_GUIDELINES §6) and is what
+//! lets the URL fields be typed as `url::Url` end-to-end instead of `String`.
 
 use anyhow::{Context, Result, bail};
 use base64::Engine;
@@ -9,6 +23,7 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::CONTENT_TYPE;
 use std::collections::HashMap;
 use tracing::{debug, info, warn};
+use url::Url;
 
 use crate::jws::AccountKey;
 use crate::types::*;
@@ -20,13 +35,130 @@ use super::url_validation::validate_acme_url;
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
 
 pub struct AcmeClient {
-    http: reqwest::Client,
+    /// Immutable after construction (RFC 8555 §7.1.1).
     directory: Directory,
+    /// Mutable: nonce cache, account URL, HTTP client, signing key.
+    transport: Transport,
+}
+
+/// Mutable per-session state extracted from `AcmeClient` so that public
+/// methods can borrow `&self.directory.X` (URLs) and `&mut self.transport`
+/// at the same call site without a borrow conflict.
+struct Transport {
+    http: reqwest::Client,
     account_key: AccountKey,
     nonce: Option<String>,
     account_url: Option<String>,
     insecure: bool,
     allow_private: bool,
+}
+
+impl Transport {
+    fn url_policies(&self) -> (TlsPolicy, NetworkPolicy) {
+        policies_from_cli_flags(self.insecure, self.allow_private)
+    }
+
+    // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
+
+    async fn fetch_nonce(&self, new_nonce: &Url) -> Result<String> {
+        {
+            let (tls, net) = self.url_policies();
+            validate_acme_url(new_nonce.as_str(), tls, net)
+        }
+        .with_context(|| "newNonce URL failed validation".to_string())?;
+        debug!("Fetching fresh nonce via HEAD {new_nonce}");
+        let resp = self
+            .http
+            .head(new_nonce.as_str())
+            .send()
+            .await
+            .context("failed to fetch nonce")?;
+        let nonce = resp
+            .headers()
+            .get("replay-nonce")
+            .context("server did not return Replay-Nonce header")?
+            .to_str()
+            .context("Replay-Nonce is not valid ASCII")?
+            .to_string();
+        debug!("Obtained nonce: {nonce}");
+        Ok(nonce)
+    }
+
+    async fn get_nonce(&mut self, new_nonce: &Url) -> Result<String> {
+        match self.nonce.take() {
+            Some(n) => Ok(n),
+            None => self.fetch_nonce(new_nonce).await,
+        }
+    }
+
+    fn save_nonce(&mut self, headers: &reqwest::header::HeaderMap) {
+        if let Some(val) = headers.get("replay-nonce")
+            && let Ok(s) = val.to_str()
+        {
+            self.nonce = Some(s.to_string());
+        }
+    }
+
+    // ── Signed POST with badNonce retry (RFC 8555 §6.2, §6.5) ──────────
+
+    /// Send a signed POST to `url`. `new_nonce` is the directory's newNonce
+    /// endpoint, used only if the nonce cache is empty.
+    async fn signed_request(
+        &mut self,
+        url: &Url,
+        new_nonce: &Url,
+        payload: &str,
+    ) -> Result<AcmeResponse> {
+        let url_str = url.as_str();
+        {
+            let (tls, net) = self.url_policies();
+            validate_acme_url(url_str, tls, net)
+        }
+        .with_context(|| format!("signed_request target URL failed validation: {url_str}"))?;
+        for attempt in 0u8..2 {
+            let nonce = self.get_nonce(new_nonce).await?;
+
+            let body = match self.account_url {
+                Some(ref kid) => self
+                    .account_key
+                    .sign_with_kid(payload, &nonce, url_str, kid)?,
+                None => self.account_key.sign_with_jwk(payload, &nonce, url_str)?,
+            };
+
+            debug!(%url, attempt, "Sending signed POST");
+            let resp = self
+                .http
+                .post(url_str)
+                .header(CONTENT_TYPE, JOSE_CONTENT_TYPE)
+                .body(body)
+                .send()
+                .await
+                .context("signed POST request failed")?;
+
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            self.save_nonce(&headers);
+
+            let body_bytes = resp.bytes().await?.to_vec();
+
+            // On first attempt, check for badNonce and retry (RFC 8555 §6.5)
+            if attempt == 0
+                && status == reqwest::StatusCode::BAD_REQUEST
+                && let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes)
+                && err.error_type.as_deref() == Some("urn:ietf:params:acme:error:badNonce")
+            {
+                warn!("Received badNonce - retrying with fresh nonce");
+                continue;
+            }
+
+            return Ok(AcmeResponse {
+                status,
+                headers,
+                body: body_bytes,
+            });
+        }
+        bail!("signed request to {url} failed after badNonce retry");
+    }
 }
 
 impl AcmeClient {
@@ -83,17 +215,17 @@ impl AcmeClient {
             )
             .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
         }
-        if let Some(u) = directory.new_authz.as_deref() {
+        if let Some(u) = directory.new_authz.as_ref() {
             validate_acme_url(
-                u,
+                u.as_str(),
                 TlsPolicy::from_insecure(insecure),
                 NetworkPolicy::from_allow_private(allow_private),
             )
             .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
         }
-        if let Some(u) = directory.renewal_info.as_deref() {
+        if let Some(u) = directory.renewal_info.as_ref() {
             validate_acme_url(
-                u,
+                u.as_str(),
                 TlsPolicy::from_insecure(insecure),
                 NetworkPolicy::from_allow_private(allow_private),
             )
@@ -101,129 +233,35 @@ impl AcmeClient {
         }
 
         Ok(Self {
-            http,
             directory,
-            account_key,
-            nonce: None,
-            account_url: None,
-            insecure,
-            allow_private,
+            transport: Transport {
+                http,
+                account_key,
+                nonce: None,
+                account_url: None,
+                insecure,
+                allow_private,
+            },
         })
     }
 
     // ── Accessors ───────────────────────────────────────────────────────
 
-    pub fn set_account_url(&mut self, url: String) {
-        self.account_url = Some(url);
+    pub fn set_account_url(&mut self, url: impl Into<String>) {
+        self.transport.account_url = Some(url.into());
     }
 
     pub fn account_url(&self) -> Option<&str> {
-        self.account_url.as_deref()
+        self.transport.account_url.as_deref()
     }
 
     pub fn account_key(&self) -> &AccountKey {
-        &self.account_key
+        &self.transport.account_key
     }
 
     #[allow(dead_code)]
     pub fn directory(&self) -> &Directory {
         &self.directory
-    }
-
-    fn url_policies(&self) -> (TlsPolicy, NetworkPolicy) {
-        policies_from_cli_flags(self.insecure, self.allow_private)
-    }
-
-    // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
-
-    async fn fetch_nonce(&self) -> Result<String> {
-        {
-            let (tls, net) = self.url_policies();
-            validate_acme_url(&self.directory.new_nonce, tls, net)
-        }
-        .with_context(|| "newNonce URL failed validation".to_string())?;
-        debug!("Fetching fresh nonce via HEAD {}", self.directory.new_nonce);
-        let resp = self
-            .http
-            .head(&self.directory.new_nonce)
-            .send()
-            .await
-            .context("failed to fetch nonce")?;
-        let nonce = resp
-            .headers()
-            .get("replay-nonce")
-            .context("server did not return Replay-Nonce header")?
-            .to_str()
-            .context("Replay-Nonce is not valid ASCII")?
-            .to_string();
-        debug!("Obtained nonce: {}", nonce);
-        Ok(nonce)
-    }
-
-    async fn get_nonce(&mut self) -> Result<String> {
-        match self.nonce.take() {
-            Some(n) => Ok(n),
-            None => self.fetch_nonce().await,
-        }
-    }
-
-    fn save_nonce(&mut self, headers: &reqwest::header::HeaderMap) {
-        if let Some(val) = headers.get("replay-nonce")
-            && let Ok(s) = val.to_str()
-        {
-            self.nonce = Some(s.to_string());
-        }
-    }
-
-    // ── Signed POST with badNonce retry (RFC 8555 §6.2, §6.5) ──────────
-
-    async fn signed_request(&mut self, url: &str, payload: &str) -> Result<AcmeResponse> {
-        {
-            let (tls, net) = self.url_policies();
-            validate_acme_url(url, tls, net)
-        }
-        .with_context(|| format!("signed_request target URL failed validation: {url}"))?;
-        for attempt in 0u8..2 {
-            let nonce = self.get_nonce().await?;
-
-            let body = match self.account_url {
-                Some(ref kid) => self.account_key.sign_with_kid(payload, &nonce, url, kid)?,
-                None => self.account_key.sign_with_jwk(payload, &nonce, url)?,
-            };
-
-            debug!(%url, attempt, "Sending signed POST");
-            let resp = self
-                .http
-                .post(url)
-                .header(CONTENT_TYPE, JOSE_CONTENT_TYPE)
-                .body(body)
-                .send()
-                .await
-                .context("signed POST request failed")?;
-
-            let status = resp.status();
-            let headers = resp.headers().clone();
-            self.save_nonce(&headers);
-
-            let body_bytes = resp.bytes().await?.to_vec();
-
-            // On first attempt, check for badNonce and retry (RFC 8555 §6.5)
-            if attempt == 0
-                && status == reqwest::StatusCode::BAD_REQUEST
-                && let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes)
-                && err.error_type.as_deref() == Some("urn:ietf:params:acme:error:badNonce")
-            {
-                warn!("Received badNonce - retrying with fresh nonce");
-                continue;
-            }
-
-            return Ok(AcmeResponse {
-                status,
-                headers,
-                body: body_bytes,
-            });
-        }
-        bail!("signed request to {url} failed after badNonce retry");
     }
 
     // ── Account operations (RFC 8555 §7.3) ──────────────────────────────
@@ -241,8 +279,11 @@ impl AcmeClient {
         info!("Creating/looking-up ACME account");
 
         let eab_binding = if let Some((kid, hmac_key)) = eab {
-            let url = &self.directory.new_account;
-            Some(self.account_key.sign_eab(kid, hmac_key, url)?)
+            Some(self.transport.account_key.sign_eab(
+                kid,
+                hmac_key,
+                self.directory.new_account.as_str(),
+            )?)
         } else if self
             .directory
             .meta
@@ -264,29 +305,41 @@ impl AcmeClient {
             contact,
             external_account_binding: eab_binding,
         })?;
-        let url = self.directory.new_account.clone();
-        let resp = self.signed_request(&url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(
+                &self.directory.new_account,
+                &self.directory.new_nonce,
+                &payload,
+            )
+            .await?;
         resp.ensure_success()?;
 
         let account_url = resp.location()?;
         info!("Account URL: {account_url}");
-        self.account_url = Some(account_url);
+        self.transport.account_url = Some(account_url.to_string());
 
         resp.json()
     }
 
     /// Deactivate the current account (RFC 8555 §7.3.6).
     pub async fn deactivate_account(&mut self) -> Result<Account> {
-        let url = self
+        let url: Url = self
+            .transport
             .account_url
-            .clone()
-            .context("account URL not set - create an account first")?;
+            .as_deref()
+            .context("account URL not set - create an account first")?
+            .parse()
+            .context("stored account URL is not a valid URL")?;
         info!("Deactivating account: {url}");
 
         let payload = serde_json::to_string(&DeactivateAccountRequest {
             status: "deactivated".into(),
         })?;
-        let resp = self.signed_request(&url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(&url, &self.directory.new_nonce, &payload)
+            .await?;
         resp.ensure_success()?;
         resp.json()
     }
@@ -298,7 +351,7 @@ impl AcmeClient {
         &mut self,
         identifiers: Vec<Identifier>,
         profile: Option<String>,
-    ) -> Result<(Order, String)> {
+    ) -> Result<(Order, Url)> {
         self.new_order_inner(identifiers, None, profile).await
     }
 
@@ -310,7 +363,7 @@ impl AcmeClient {
         identifiers: Vec<Identifier>,
         replaces: String,
         profile: Option<String>,
-    ) -> Result<(Order, String)> {
+    ) -> Result<(Order, Url)> {
         self.new_order_inner(identifiers, Some(replaces), profile)
             .await
     }
@@ -320,7 +373,7 @@ impl AcmeClient {
         identifiers: Vec<Identifier>,
         replaces: Option<String>,
         profile: Option<String>,
-    ) -> Result<(Order, String)> {
+    ) -> Result<(Order, Url)> {
         if replaces.is_some() {
             info!("Creating replacement order (ARI)");
         } else {
@@ -333,8 +386,14 @@ impl AcmeClient {
             replaces,
             profile,
         })?;
-        let url = self.directory.new_order.clone();
-        let resp = self.signed_request(&url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(
+                &self.directory.new_order,
+                &self.directory.new_nonce,
+                &payload,
+            )
+            .await?;
         resp.ensure_success()?;
 
         let order_url = resp.location()?;
@@ -344,20 +403,26 @@ impl AcmeClient {
     }
 
     /// Finalize an order by submitting a CSR (RFC 8555 §7.4).
-    pub async fn finalize_order(&mut self, finalize_url: &str, csr_der: &[u8]) -> Result<Order> {
+    pub async fn finalize_order(&mut self, finalize_url: &Url, csr_der: &[u8]) -> Result<Order> {
         info!("Finalizing order");
         let payload = serde_json::to_string(&FinalizeRequest {
             csr: URL_SAFE_NO_PAD.encode(csr_der),
         })?;
-        let resp = self.signed_request(finalize_url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(finalize_url, &self.directory.new_nonce, &payload)
+            .await?;
         resp.ensure_success()?;
         resp.json()
     }
 
     /// Poll an order's current status (POST-as-GET).
-    pub async fn poll_order(&mut self, order_url: &str) -> Result<Order> {
+    pub async fn poll_order(&mut self, order_url: &Url) -> Result<Order> {
         debug!("Polling order: {order_url}");
-        let resp = self.signed_request(order_url, "").await?;
+        let resp = self
+            .transport
+            .signed_request(order_url, &self.directory.new_nonce, "")
+            .await?;
         resp.ensure_success()?;
         resp.json()
     }
@@ -365,9 +430,12 @@ impl AcmeClient {
     // ── Authorization & challenge (RFC 8555 §7.5) ───────────────────────
 
     /// Fetch an authorization object (POST-as-GET).
-    pub async fn get_authorization(&mut self, authz_url: &str) -> Result<Authorization> {
+    pub async fn get_authorization(&mut self, authz_url: &Url) -> Result<Authorization> {
         debug!("Fetching authorization: {authz_url}");
-        let resp = self.signed_request(authz_url, "").await?;
+        let resp = self
+            .transport
+            .signed_request(authz_url, &self.directory.new_nonce, "")
+            .await?;
         resp.ensure_success()?;
         let authz: Authorization = resp.json()?;
         validate_server_identifier(&authz.identifier)?;
@@ -377,9 +445,12 @@ impl AcmeClient {
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
     ///
     /// The payload is an empty JSON object `{}`.
-    pub async fn respond_to_challenge(&mut self, challenge_url: &str) -> Result<Challenge> {
+    pub async fn respond_to_challenge(&mut self, challenge_url: &Url) -> Result<Challenge> {
         info!("Responding to challenge: {challenge_url}");
-        let resp = self.signed_request(challenge_url, "{}").await?;
+        let resp = self
+            .transport
+            .signed_request(challenge_url, &self.directory.new_nonce, "{}")
+            .await?;
         resp.ensure_success()?;
         resp.json()
     }
@@ -387,9 +458,12 @@ impl AcmeClient {
     // ── Certificate (RFC 8555 §7.4.2, §7.6) ────────────────────────────
 
     /// Download the issued certificate chain (POST-as-GET).
-    pub async fn download_certificate(&mut self, cert_url: &str) -> Result<String> {
+    pub async fn download_certificate(&mut self, cert_url: &Url) -> Result<String> {
         info!("Downloading certificate from {cert_url}");
-        let resp = self.signed_request(cert_url, "").await?;
+        let resp = self
+            .transport
+            .signed_request(cert_url, &self.directory.new_nonce, "")
+            .await?;
         resp.ensure_success()?;
         String::from_utf8(resp.body).context("certificate response is not valid UTF-8")
     }
@@ -401,25 +475,32 @@ impl AcmeClient {
     /// and the inner JWS is signed by the **new** key.
     pub async fn key_change(&mut self, new_key: &AccountKey) -> Result<()> {
         let account_url = self
+            .transport
             .account_url
-            .as_ref()
-            .context("account URL not set - create an account first")?
-            .clone();
-        let key_change_url = self.directory.key_change.clone();
+            .as_deref()
+            .context("account URL not set - create an account first")?;
 
         info!("Rolling over account key (key-change)");
 
         // Inner payload: { "account": "<account-url>", "oldKey": <old-JWK> }
         let inner_payload = serde_json::to_string(&serde_json::json!({
             "account": account_url,
-            "oldKey": self.account_key.jwk(),
+            "oldKey": self.transport.account_key.jwk(),
         }))?;
 
         // Inner JWS signed by the NEW key (header has alg + jwk of new key + url)
-        let inner_jws = new_key.sign_key_change_inner(&inner_payload, &key_change_url)?;
+        let inner_jws =
+            new_key.sign_key_change_inner(&inner_payload, self.directory.key_change.as_str())?;
 
         // Outer JWS: POST to keyChange URL, payload is the inner JWS string
-        let resp = self.signed_request(&key_change_url, &inner_jws).await?;
+        let resp = self
+            .transport
+            .signed_request(
+                &self.directory.key_change,
+                &self.directory.new_nonce,
+                &inner_jws,
+            )
+            .await?;
         resp.ensure_success()?;
 
         info!("Key rollover successful");
@@ -433,18 +514,21 @@ impl AcmeClient {
     pub async fn new_authorization(
         &mut self,
         identifier: Identifier,
-    ) -> Result<(Authorization, String)> {
-        let url = self
+    ) -> Result<(Authorization, Url)> {
+        let new_authz = self
             .directory
             .new_authz
-            .clone()
+            .as_ref()
             .context("server does not support pre-authorization (no newAuthz in directory)")?;
         info!(
             "Pre-authorizing identifier: {} ({})",
             identifier.value, identifier.identifier_type
         );
         let payload = serde_json::to_string(&NewAuthorizationRequest { identifier })?;
-        let resp = self.signed_request(&url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(new_authz, &self.directory.new_nonce, &payload)
+            .await?;
         resp.ensure_success()?;
         let authz_url = resp.location()?;
         let authz: Authorization = resp.json()?;
@@ -459,8 +543,14 @@ impl AcmeClient {
             certificate: URL_SAFE_NO_PAD.encode(cert_der),
             reason,
         })?;
-        let url = self.directory.revoke_cert.clone();
-        let resp = self.signed_request(&url, &payload).await?;
+        let resp = self
+            .transport
+            .signed_request(
+                &self.directory.revoke_cert,
+                &self.directory.new_nonce,
+                &payload,
+            )
+            .await?;
         resp.ensure_success()?;
         Ok(())
     }
@@ -482,10 +572,20 @@ impl AcmeClient {
             .context("server does not support ARI (no renewalInfo in directory)")?;
 
         let cert_id = compute_cert_id(cert_der)?;
-        let url = format!("{base_url}/{cert_id}");
-        info!("Fetching ARI renewal info: {url}");
+        // RFC 9702 §4.1: ARI URL is `<renewalInfo>/<certID>`. Use Url::join
+        // for proper path composition (handles trailing-slash semantics and
+        // re-validates the resulting URL).
+        let mut joined = base_url.clone();
+        joined
+            .path_segments_mut()
+            .map_err(|()| anyhow::anyhow!("renewalInfo URL is cannot-be-base"))?
+            .push(&cert_id);
+        info!("Fetching ARI renewal info: {joined}");
 
-        let resp = self.signed_request(&url, "").await?;
+        let resp = self
+            .transport
+            .signed_request(&joined, &self.directory.new_nonce, "")
+            .await?;
         resp.ensure_success()?;
 
         let retry_after = resp

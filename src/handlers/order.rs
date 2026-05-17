@@ -120,8 +120,11 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_acme_url(url, tls, net)?;
+    let url: url::Url = url
+        .parse()
+        .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
-    let authz = client.get_authorization(url).await?;
+    let authz = client.get_authorization(&url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             outln!(
@@ -162,8 +165,11 @@ pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_acme_url(url, tls, net)?;
+    let url: url::Url = url
+        .parse()
+        .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
-    let ch = client.respond_to_challenge(url).await?;
+    let ch = client.respond_to_challenge(&url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             outln!(
@@ -195,6 +201,9 @@ pub(crate) async fn cmd_finalize(
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_acme_url(finalize_url, tls, net)?;
+    let finalize_url: url::Url = finalize_url
+        .parse()
+        .with_context(|| format!("not a valid URL: {finalize_url}"))?;
     let domains: Vec<String> = domains
         .iter()
         .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
@@ -231,7 +240,7 @@ pub(crate) async fn cmd_finalize(
             .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
     }
 
-    let order = client.finalize_order(finalize_url, &csr_der).await?;
+    let order = client.finalize_order(&finalize_url, &csr_der).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             outln!(
@@ -264,8 +273,11 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_acme_url(url, tls, net)?;
+    let url: url::Url = url
+        .parse()
+        .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
-    let order = client.poll_order(url).await?;
+    let order = client.poll_order(&url).await?;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             outln!(
@@ -291,8 +303,11 @@ pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) ->
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_acme_url(url, tls, net)?;
+    let url: url::Url = url
+        .parse()
+        .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
-    let cert = client.download_certificate(url).await?;
+    let cert = client.download_certificate(&url).await?;
     std::fs::write(output, &cert)
         .with_context(|| format!("failed to write certificate to {}", output.display()))?;
     if !cli.silent {
