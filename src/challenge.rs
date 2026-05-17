@@ -153,43 +153,74 @@ pub mod http01 {
         }
     }
 
-    /// Spin up a minimal TCP server that answers exactly one validation
-    /// request and then shuts down.
+    /// Serve a single accepted TCP connection: read one request, reply with
+    /// the key-authorization body when the path matches, else 404. Errors
+    /// are logged at debug level and swallowed — one malformed probe MUST
+    /// NOT terminate the listener while other parallel CA validation
+    /// probes (e.g. Let's Encrypt multi-perspective: 3+ concurrent
+    /// requests) are still in flight.
+    pub async fn serve_one_connection(
+        mut stream: tokio::net::TcpStream,
+        addr: std::net::SocketAddr,
+        auth: &str,
+        path: &str,
+    ) {
+        let mut buf = vec![0u8; 4096];
+        let n = match stream.read(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::debug!("HTTP-01: read from {addr} failed: {e}");
+                return;
+            }
+        };
+        let req = String::from_utf8_lossy(&buf[..n]);
+        let resp = if req.contains(path) {
+            info!("HTTP-01: serving challenge response to {addr}");
+            format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: application/octet-stream\r\n\
+                 Content-Length: {}\r\n\
+                 X-Content-Type-Options: nosniff\r\n\
+                 Connection: close\r\n\
+                 Server: acme-client-rs\r\n\r\n{}",
+                auth.len(),
+                auth
+            )
+        } else {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n".to_string()
+        };
+        if let Err(e) = stream.write_all(resp.as_bytes()).await {
+            tracing::debug!("HTTP-01: write to {addr} failed: {e}");
+        }
+    }
+
+    /// Run the accept loop on `listener`, spawning `serve_one_connection`
+    /// per accepted TCP connection so parallel CA validation probes are
+    /// served concurrently. Only returns if `accept` itself fails (a fatal
+    /// listener error); per-connection errors are logged and swallowed.
+    pub async fn run_accept_loop(
+        listener: tokio::net::TcpListener,
+        auth: String,
+        path: String,
+    ) -> Result<()> {
+        loop {
+            let (stream, addr) = listener.accept().await?;
+            tracing::debug!("HTTP-01: connection from {addr}");
+            let auth = auth.clone();
+            let path = path.clone();
+            tokio::spawn(async move { serve_one_connection(stream, addr, &auth, &path).await });
+        }
+    }
+
+    /// Spin up a minimal TCP server that answers ACME HTTP-01 validation
+    /// requests until aborted. Multiple concurrent probes from a CA's
+    /// multi-perspective validation are served in parallel.
     pub async fn serve(token: &str, account_key: &AccountKey, port: u16) -> Result<()> {
         let auth = response_body(token, account_key);
         let path = challenge_path(token);
-
         let listener = bind_or_suggest(port).await?;
         info!("HTTP-01 server listening on 0.0.0.0:{port}");
-
-        loop {
-            let (mut stream, addr) = listener.accept().await?;
-            info!("HTTP-01: connection from {addr}");
-
-            let mut buf = vec![0u8; 4096];
-            let n = stream.read(&mut buf).await?;
-            let request = String::from_utf8_lossy(&buf[..n]);
-
-            if request.contains(&path) {
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\n\
-                     Content-Type: application/octet-stream\r\n\
-                     Content-Length: {}\r\n\
-                     X-Content-Type-Options: nosniff\r\n\
-                     Connection: close\r\n\
-                     Server: acme-client-rs\r\n\
-                     \r\n\
-                     {}",
-                    auth.len(),
-                    auth
-                );
-                stream.write_all(response.as_bytes()).await?;
-                info!("HTTP-01: served challenge response");
-                return Ok(());
-            }
-            let not_found = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n";
-            stream.write_all(not_found.as_bytes()).await?;
-        }
+        run_accept_loop(listener, auth, path).await
     }
 }
 
