@@ -428,6 +428,22 @@ Examples:
         /// Path to the new account key (PKCS#8 PEM, generate first with generate-key)
         #[arg(long, required = true)]
         new_key: PathBuf,
+
+        /// Password to decrypt the new account key if it is encrypted (visible in process list - prefer --new-key-password-file)
+        #[arg(
+            long,
+            env = "ACME_NEW_KEY_PASSWORD",
+            conflicts_with = "new_key_password_file"
+        )]
+        new_key_password: Option<String>,
+
+        /// Read the new account key decryption password from a file (first non-empty line)
+        #[arg(
+            long,
+            env = "ACME_NEW_KEY_PASSWORD_FILE",
+            conflicts_with = "new_key_password"
+        )]
+        new_key_password_file: Option<PathBuf>,
     },
 
     /// Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1)
@@ -1114,7 +1130,19 @@ async fn run(
         Commands::PollOrder { url } => cmd_poll_order(&cli, url).await,
         Commands::DownloadCert { url, output } => cmd_download_cert(&cli, url, output).await,
         Commands::DeactivateAccount => cmd_deactivate(&cli).await,
-        Commands::KeyRollover { new_key } => cmd_key_rollover(&cli, new_key).await,
+        Commands::KeyRollover {
+            new_key,
+            new_key_password,
+            new_key_password_file,
+        } => {
+            cmd_key_rollover(
+                &cli,
+                new_key,
+                new_key_password.as_deref(),
+                new_key_password_file.as_deref(),
+            )
+            .await
+        }
         Commands::RevokeCert { cert_path, reason } => cmd_revoke(&cli, cert_path, *reason).await,
         Commands::RenewalInfo { cert_path } => cmd_renewal_info(&cli, cert_path).await,
         Commands::ListProfiles => cmd_list_profiles(&cli).await,
@@ -1271,10 +1299,6 @@ fn normalize_identifier(value: &str) -> String {
     } else {
         value.to_lowercase()
     }
-}
-
-fn load_account_key(path: &PathBuf) -> Result<AccountKey> {
-    load_account_key_with_password(path, None)
 }
 
 fn load_account_key_with_password(path: &PathBuf, password: Option<&str>) -> Result<AccountKey> {
@@ -2351,8 +2375,17 @@ async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_key_rollover(cli: &Cli, new_key_path: &PathBuf) -> Result<()> {
-    let new_key = load_account_key(new_key_path)?;
+async fn cmd_key_rollover(
+    cli: &Cli,
+    new_key_path: &PathBuf,
+    new_key_password: Option<&str>,
+    new_key_password_file: Option<&std::path::Path>,
+) -> Result<()> {
+    fs_secure::warn_if_world_readable(new_key_path, "account key");
+    use secrecy::ExposeSecret;
+    let pw = resolve_account_key_password(new_key_password, new_key_password_file)?;
+    let new_key =
+        load_account_key_with_password(new_key_path, pw.as_ref().map(|s| s.expose_secret()))?;
     let mut client = build_client(cli).await?;
 
     // key-change requires KID signing; look up account if URL not provided
