@@ -301,7 +301,9 @@ async fn run(
 
 pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     use secrecy::ExposeSecret;
-    client::validate_directory_url(&cli.directory, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    client::validate_directory_url(&cli.directory, tls, net)?;
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
@@ -320,7 +322,9 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     )
     .await?;
     if let Some(ref url) = cli.account_url {
-        client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
+        let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+        client::validate_acme_url(url, tls, net)?;
         client.set_account_url(url.clone());
     }
     Ok(client)

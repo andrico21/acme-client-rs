@@ -60,7 +60,10 @@ pub(crate) async fn cmd_order(
 }
 
 pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
-    crate::client::validate_directory_url(&cli.directory, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_directory_url(&cli.directory, tls, net)?;
     let http = crate::client::build_http_client(
         cli.insecure,
         cli.connect_timeout,
@@ -113,7 +116,10 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
 }
 
 pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
-    crate::client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_acme_url(url, tls, net)?;
     let mut client = build_client(cli).await?;
     let authz = client.get_authorization(url).await?;
     if !cli.silent {
@@ -152,7 +158,10 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
 }
 
 pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
-    crate::client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_acme_url(url, tls, net)?;
     let mut client = build_client(cli).await?;
     let ch = client.respond_to_challenge(url).await?;
     if !cli.silent {
@@ -182,7 +191,10 @@ pub(crate) async fn cmd_finalize(
     key_password_file: Option<&std::path::Path>,
     force: bool,
 ) -> Result<()> {
-    crate::client::validate_acme_url(finalize_url, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_acme_url(finalize_url, tls, net)?;
     let domains: Vec<String> = domains
         .iter()
         .map(|d| Identifier::from_str_auto(d).map(|id| id.value))
@@ -248,7 +260,10 @@ pub(crate) async fn cmd_finalize(
 }
 
 pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
-    crate::client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_acme_url(url, tls, net)?;
     let mut client = build_client(cli).await?;
     let order = client.poll_order(url).await?;
     if !cli.silent {
@@ -272,7 +287,10 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
 }
 
 pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) -> Result<()> {
-    crate::client::validate_acme_url(url, cli.insecure, cli.allow_private_network)?;
+    let (tls, net) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+
+    crate::client::validate_acme_url(url, tls, net)?;
     let mut client = build_client(cli).await?;
     let cert = client.download_certificate(url).await?;
     std::fs::write(output, &cert)

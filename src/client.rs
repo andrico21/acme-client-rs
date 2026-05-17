@@ -106,10 +106,61 @@ fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
 
 /// Validate any URL the client is about to contact.
 ///
-/// `insecure` allows plain `http://` for loopback hosts only (matches
-/// historical `validate_directory_url` semantics).
-/// `allow_private` permits private/loopback/link-local IP literals; it is
-/// implicitly true when `insecure` is set.
+/// TLS policy for ACME URL validation. Distinct enum (not `bool`) so it cannot
+/// be positionally swapped with `NetworkPolicy` at call sites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsPolicy {
+    /// `https://` only (RFC 8555 §6.1 default).
+    RequireHttps,
+    /// Permit `http://` for loopback hosts only — `--insecure`.
+    AllowHttpLoopback,
+}
+
+/// Network reachability policy for ACME URL validation. Distinct enum so it
+/// cannot be positionally swapped with `TlsPolicy`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkPolicy {
+    /// Reject private / loopback / link-local / special-purpose IP literals.
+    PublicOnly,
+    /// Permit private/special IPs — `--allow-private-network` (also implied by
+    /// `TlsPolicy::AllowHttpLoopback`).
+    AllowPrivate,
+}
+
+impl TlsPolicy {
+    fn from_insecure(insecure: bool) -> Self {
+        if insecure {
+            Self::AllowHttpLoopback
+        } else {
+            Self::RequireHttps
+        }
+    }
+}
+
+impl NetworkPolicy {
+    fn from_allow_private(allow_private: bool) -> Self {
+        if allow_private {
+            Self::AllowPrivate
+        } else {
+            Self::PublicOnly
+        }
+    }
+}
+
+/// Build (tls, network) policy pair from the CLI flags as a single call. The
+/// canonical conversion used by every handler — keeps the bool→enum hop in one
+/// place so call sites read `let (tls, net) = policies_from_cli_flags(...)`.
+pub fn policies_from_cli_flags(insecure: bool, allow_private: bool) -> (TlsPolicy, NetworkPolicy) {
+    (
+        TlsPolicy::from_insecure(insecure),
+        NetworkPolicy::from_allow_private(allow_private),
+    )
+}
+
+/// `tls = AllowHttpLoopback` permits plain `http://` for loopback hosts only
+/// (matches historical `--insecure` semantics).
+/// `net = AllowPrivate` permits private/loopback/link-local IP literals; it is
+/// also implicitly granted when `tls = AllowHttpLoopback`.
 ///
 /// Hostnames (non-literal) are NOT resolved here — that check happens
 /// connect-time inside `SsrfSafeResolver`, which closes the DNS-rebinding
@@ -122,7 +173,7 @@ fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
 /// protocol-sanity check.
 pub const MAX_ACME_URL_LEN: usize = 8000;
 
-pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
+pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
     if url.len() > MAX_ACME_URL_LEN {
         bail!(
             "URL exceeds {MAX_ACME_URL_LEN} octets ({} bytes); refusing",
@@ -150,7 +201,7 @@ pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Resu
         .map(|ip| ip.is_loopback())
         .unwrap_or_else(|| matches!(host, "localhost"));
     if scheme == "http" {
-        if !insecure {
+        if tls == TlsPolicy::RequireHttps {
             bail!(
                 "URL must use https:// (RFC 8555 §6.1). Got http:// for {url:?}. \
                  Pass --insecure only for local testing against a loopback ACME server."
@@ -163,9 +214,13 @@ pub fn validate_acme_url(url: &str, insecure: bool, allow_private: bool) -> Resu
             );
         }
     }
-    let allow_private = allow_private || insecure;
+    let effective_net = if tls == TlsPolicy::AllowHttpLoopback {
+        NetworkPolicy::AllowPrivate
+    } else {
+        net
+    };
     if let Some(ip) = host_ip
-        && !allow_private
+        && effective_net == NetworkPolicy::PublicOnly
         && is_private_or_special_ip(ip)
     {
         bail!(
@@ -348,9 +403,8 @@ pub fn build_http_client(
 /// Validate an ACME directory URL against RFC 8555 §6.1 ("Use of HTTPS is
 /// REQUIRED"). Thin wrapper over `validate_acme_url` that also emits the
 /// loopback-testing warning when `http://` is permitted via `--insecure`.
-pub fn validate_directory_url(url: &str, insecure: bool, allow_private: bool) -> Result<()> {
-    validate_acme_url(url, insecure, allow_private)
-        .with_context(|| format!("invalid directory URL {url:?}"))?;
+pub fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
+    validate_acme_url(url, tls, net).with_context(|| format!("invalid directory URL {url:?}"))?;
     if reqwest::Url::parse(url)
         .map(|u| u.scheme() == "http")
         .unwrap_or(false)
@@ -489,16 +543,28 @@ impl AcmeClient {
             ("revokeCert", directory.revoke_cert.as_str()),
             ("keyChange", directory.key_change.as_str()),
         ] {
-            validate_acme_url(url, insecure, allow_private)
-                .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
+            validate_acme_url(
+                url,
+                TlsPolicy::from_insecure(insecure),
+                NetworkPolicy::from_allow_private(allow_private),
+            )
+            .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
         }
         if let Some(u) = directory.new_authz.as_deref() {
-            validate_acme_url(u, insecure, allow_private)
-                .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
+            validate_acme_url(
+                u,
+                TlsPolicy::from_insecure(insecure),
+                NetworkPolicy::from_allow_private(allow_private),
+            )
+            .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
         }
         if let Some(u) = directory.renewal_info.as_deref() {
-            validate_acme_url(u, insecure, allow_private)
-                .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
+            validate_acme_url(
+                u,
+                TlsPolicy::from_insecure(insecure),
+                NetworkPolicy::from_allow_private(allow_private),
+            )
+            .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
         }
 
         Ok(Self {
@@ -531,11 +597,18 @@ impl AcmeClient {
         &self.directory
     }
 
+    fn url_policies(&self) -> (TlsPolicy, NetworkPolicy) {
+        policies_from_cli_flags(self.insecure, self.allow_private)
+    }
+
     // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
 
     async fn fetch_nonce(&self) -> Result<String> {
-        validate_acme_url(&self.directory.new_nonce, self.insecure, self.allow_private)
-            .with_context(|| "newNonce URL failed validation".to_string())?;
+        {
+            let (tls, net) = self.url_policies();
+            validate_acme_url(&self.directory.new_nonce, tls, net)
+        }
+        .with_context(|| "newNonce URL failed validation".to_string())?;
         debug!("Fetching fresh nonce via HEAD {}", self.directory.new_nonce);
         let resp = self
             .http
@@ -572,8 +645,11 @@ impl AcmeClient {
     // ── Signed POST with badNonce retry (RFC 8555 §6.2, §6.5) ──────────
 
     async fn signed_request(&mut self, url: &str, payload: &str) -> Result<AcmeResponse> {
-        validate_acme_url(url, self.insecure, self.allow_private)
-            .with_context(|| format!("signed_request target URL failed validation: {url}"))?;
+        {
+            let (tls, net) = self.url_policies();
+            validate_acme_url(url, tls, net)
+        }
+        .with_context(|| format!("signed_request target URL failed validation: {url}"))?;
         for attempt in 0u8..2 {
             let nonce = self.get_nonce().await?;
 
@@ -954,7 +1030,12 @@ mod tests {
             "ftp://x/",
         ] {
             assert!(
-                validate_acme_url(url, true, true).is_err(),
+                validate_acme_url(
+                    url,
+                    TlsPolicy::AllowHttpLoopback,
+                    NetworkPolicy::AllowPrivate
+                )
+                .is_err(),
                 "{url} should be rejected"
             );
         }
@@ -965,8 +1046,8 @@ mod tests {
         assert!(
             validate_acme_url(
                 "https://acme-v02.api.letsencrypt.org/directory",
-                false,
-                false
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::PublicOnly
             )
             .is_ok()
         );
@@ -974,7 +1055,14 @@ mod tests {
 
     #[test]
     fn http_rejected_without_insecure() {
-        assert!(validate_acme_url("http://localhost:14000/dir", false, false).is_err());
+        assert!(
+            validate_acme_url(
+                "http://localhost:14000/dir",
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::PublicOnly
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -985,7 +1073,8 @@ mod tests {
             "http://[::1]/dir",
         ] {
             assert!(
-                validate_acme_url(url, true, false).is_ok(),
+                validate_acme_url(url, TlsPolicy::AllowHttpLoopback, NetworkPolicy::PublicOnly)
+                    .is_ok(),
                 "{url} should pass"
             );
         }
@@ -993,7 +1082,14 @@ mod tests {
 
     #[test]
     fn http_non_loopback_rejected_even_with_insecure() {
-        assert!(validate_acme_url("http://10.0.0.5/dir", true, true).is_err());
+        assert!(
+            validate_acme_url(
+                "http://10.0.0.5/dir",
+                TlsPolicy::AllowHttpLoopback,
+                NetworkPolicy::AllowPrivate
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1006,7 +1102,7 @@ mod tests {
             "https://100.64.0.1/dir",
         ] {
             assert!(
-                validate_acme_url(url, false, false).is_err(),
+                validate_acme_url(url, TlsPolicy::RequireHttps, NetworkPolicy::PublicOnly).is_err(),
                 "{url} should be rejected"
             );
         }
@@ -1014,7 +1110,14 @@ mod tests {
 
     #[test]
     fn private_ipv4_literal_allowed_with_opt_in() {
-        assert!(validate_acme_url("https://10.0.0.5/dir", false, true).is_ok());
+        assert!(
+            validate_acme_url(
+                "https://10.0.0.5/dir",
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::AllowPrivate
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1025,7 +1128,7 @@ mod tests {
             "https://[fe80::1]/dir",
         ] {
             assert!(
-                validate_acme_url(url, false, false).is_err(),
+                validate_acme_url(url, TlsPolicy::RequireHttps, NetworkPolicy::PublicOnly).is_err(),
                 "{url} should be rejected"
             );
         }
@@ -1033,8 +1136,22 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_ipv6_blocked_as_ipv4() {
-        assert!(validate_acme_url("https://[::ffff:10.0.0.5]/dir", false, false).is_err());
-        assert!(validate_acme_url("https://[::ffff:10.0.0.5]/dir", false, true).is_ok());
+        assert!(
+            validate_acme_url(
+                "https://[::ffff:10.0.0.5]/dir",
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::PublicOnly
+            )
+            .is_err()
+        );
+        assert!(
+            validate_acme_url(
+                "https://[::ffff:10.0.0.5]/dir",
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::AllowPrivate
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1097,7 +1214,7 @@ mod tests {
             "https://:pw@trusted-ca.example/dir",
         ] {
             assert!(
-                validate_acme_url(url, false, false).is_err(),
+                validate_acme_url(url, TlsPolicy::RequireHttps, NetworkPolicy::PublicOnly).is_err(),
                 "{url} should be rejected"
             );
         }
@@ -1109,9 +1226,18 @@ mod tests {
         let pad_len = MAX_ACME_URL_LEN - host.len();
         let just_ok = format!("{host}{}", "a".repeat(pad_len));
         assert_eq!(just_ok.len(), MAX_ACME_URL_LEN);
-        assert!(validate_acme_url(&just_ok, false, false).is_ok());
+        assert!(
+            validate_acme_url(&just_ok, TlsPolicy::RequireHttps, NetworkPolicy::PublicOnly).is_ok()
+        );
         let too_long = format!("{host}{}", "a".repeat(pad_len + 1));
-        assert!(validate_acme_url(&too_long, false, false).is_err());
+        assert!(
+            validate_acme_url(
+                &too_long,
+                TlsPolicy::RequireHttps,
+                NetworkPolicy::PublicOnly
+            )
+            .is_err()
+        );
     }
 
     #[test]
