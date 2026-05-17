@@ -117,7 +117,6 @@ pub(crate) async fn cmd_key_rollover(
     new_key_password: Option<&str>,
     new_key_password_file: Option<&std::path::Path>,
 ) -> Result<()> {
-    crate::fs_secure::warn_if_world_readable(new_key_path, "account key");
     use secrecy::ExposeSecret;
     let pw = resolve_account_key_password(new_key_password, new_key_password_file)?;
     let new_key =

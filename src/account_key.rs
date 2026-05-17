@@ -9,6 +9,7 @@ pub(crate) fn load_account_key_with_password(
     path: &PathBuf,
     password: Option<&str>,
 ) -> Result<AccountKey> {
+    fs_secure::warn_if_world_readable(path, "account key");
     // SEC-07: wrap PEM in Zeroizing so the on-heap key material is wiped
     // when this function returns, even on the error path.
     let pem = zeroize::Zeroizing::new(
