@@ -2697,6 +2697,31 @@ fn run_hook(script: &std::path::Path, env_vars: &[(&str, &str)]) -> Result<()> {
     Ok(())
 }
 
+/// Invoke a DNS hook to create a DNS-01 challenge TXT record.
+///
+/// Wraps the standard `ACME_DOMAIN` / `ACME_TXT_NAME` / `ACME_TXT_VALUE` /
+/// `ACME_ACTION=create` env contract documented in README. Returns an error
+/// if the hook fails to spawn or exits non-zero — callers MUST treat that
+/// as fatal because the upcoming validation will fail without the record.
+fn run_dns_hook_create(
+    hook: &std::path::Path,
+    domain: &str,
+    txt_name: &str,
+    txt_value: &str,
+) -> Result<()> {
+    let status = std::process::Command::new(hook)
+        .env("ACME_DOMAIN", domain)
+        .env("ACME_TXT_NAME", txt_name)
+        .env("ACME_TXT_VALUE", txt_value)
+        .env("ACME_ACTION", "create")
+        .status()
+        .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
+    if !status.success() {
+        anyhow::bail!("DNS hook (create) exited with {status}");
+    }
+    Ok(())
+}
+
 /// Reject wildcard identifiers paired with a non-DNS challenge type.
 ///
 /// RFC 8555 §7.1.3 / §8.4: wildcard certificates can only be validated via
@@ -3125,18 +3150,7 @@ async fn cmd_run(
                     let txt_name = challenge::dns01::record_name(&authz.identifier.value);
                     let txt_value = challenge::dns01::txt_record_value(token, client.account_key());
                     if let Some(hook) = dns_hook {
-                        let status = std::process::Command::new(hook)
-                            .env("ACME_DOMAIN", &authz.identifier.value)
-                            .env("ACME_TXT_NAME", &txt_name)
-                            .env("ACME_TXT_VALUE", &txt_value)
-                            .env("ACME_ACTION", "create")
-                            .status()
-                            .with_context(|| {
-                                format!("failed to run DNS hook: {}", hook.display())
-                            })?;
-                        if !status.success() {
-                            anyhow::bail!("DNS hook (create) exited with {status}");
-                        }
+                        run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
                     } else if !silent {
                         challenge::dns01::print_instructions(
                             &authz.identifier.value,
@@ -3227,18 +3241,7 @@ async fn cmd_run(
                         persist_until,
                     )?;
                     if let Some(hook) = dns_hook {
-                        let status = std::process::Command::new(hook)
-                            .env("ACME_DOMAIN", &authz.identifier.value)
-                            .env("ACME_TXT_NAME", &txt_name)
-                            .env("ACME_TXT_VALUE", &txt_value)
-                            .env("ACME_ACTION", "create")
-                            .status()
-                            .with_context(|| {
-                                format!("failed to run DNS hook: {}", hook.display())
-                            })?;
-                        if !status.success() {
-                            anyhow::bail!("DNS hook (create) exited with {status}");
-                        }
+                        run_dns_hook_create(hook, &authz.identifier.value, &txt_name, &txt_value)?;
                     } else if !silent {
                         challenge::dns_persist01::print_instructions(
                             &authz.identifier.value,
