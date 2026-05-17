@@ -16,10 +16,9 @@ mod renewal;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::cert_info::{cert_days_remaining, cert_san_identifiers, normalize_identifier};
 use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
-use crate::client::{AcmeClient, compute_cert_id};
-use crate::csr::{encrypt_private_key, generate_csr, pem_to_der};
+use crate::client::AcmeClient;
+use crate::csr::{encrypt_private_key, generate_csr};
 use crate::dns_check::DnsChecker;
 use crate::types::{
     AuthorizationStatus, CHALLENGE_TYPE_DNS_PERSIST01, CHALLENGE_TYPE_DNS01, CHALLENGE_TYPE_HTTP01,
@@ -31,6 +30,51 @@ use super::{
     check_wildcard_compatible, dns_txt_check, is_challenge_terminal, parse_eab,
     run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent, run_dns_hook_create, run_hook,
 };
+
+/// Shared state for every phase of the run subcommand.
+///
+/// Built once in `cmd_run` from CLI args and normalized inputs; each phase
+/// module borrows it mutably. Mutable fields (`ari_cert_id`, `early_client`)
+/// are set by the renewal phase and consumed by later phases.
+pub(super) struct RunContext<'a> {
+    pub cli: &'a Cli,
+    pub challenge_type: &'a str,
+    pub http_port: u16,
+    pub challenge_dir: Option<&'a std::path::Path>,
+    pub dns_hook: Option<&'a std::path::Path>,
+    pub dns_wait: Option<u64>,
+    pub dns_propagation_concurrency: usize,
+    pub challenge_timeout: u64,
+    pub cert_output: &'a std::path::Path,
+    pub key_output: &'a std::path::Path,
+    pub days: Option<u32>,
+    pub key_password: Option<&'a str>,
+    pub key_password_file: Option<&'a std::path::Path>,
+    pub on_challenge_ready: Option<&'a std::path::Path>,
+    pub on_cert_issued: Option<&'a std::path::Path>,
+    pub eab_kid: Option<&'a str>,
+    pub eab_hmac_key: Option<&'a str>,
+    pub pre_authorize: bool,
+    pub ari: bool,
+    pub reissue_on_mismatch: bool,
+    pub print_cert: bool,
+    pub persist_policy: Option<&'a str>,
+    pub persist_until: Option<u64>,
+    pub cert_key_alg: CertKeyAlgorithm,
+    pub profile: Option<&'a str>,
+    pub force: bool,
+    pub contact: Option<String>,
+    pub cleanup_registry: &'a crate::cleanup::CleanupRegistry,
+
+    pub domains: Vec<String>,
+    pub dns_checker: std::sync::Arc<DnsChecker>,
+    pub json: bool,
+    pub silent: bool,
+
+    pub ari_cert_id: Option<String>,
+    pub early_client: Option<AcmeClient>,
+}
+
 // ── Full automated flow ─────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -86,237 +130,92 @@ pub(crate) async fn cmd_run(
             .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
     );
 
-    // ── 0. Renewal check ────────────────────────────────────────────────
     let json = cli.output_format == OutputFormat::Json;
     let silent = cli.silent;
 
-    // Track cert ID for ARI replaceOrder (set during ARI check)
-    let mut ari_cert_id: Option<String> = None;
+    let mut ctx = RunContext {
+        cli,
+        challenge_type,
+        http_port,
+        challenge_dir,
+        dns_hook,
+        dns_wait,
+        dns_propagation_concurrency,
+        challenge_timeout,
+        cert_output,
+        key_output,
+        days,
+        key_password,
+        key_password_file,
+        on_challenge_ready,
+        on_cert_issued,
+        eab_kid,
+        eab_hmac_key,
+        pre_authorize,
+        ari,
+        reissue_on_mismatch,
+        print_cert,
+        persist_policy,
+        persist_until,
+        cert_key_alg,
+        profile,
+        force,
+        contact,
+        cleanup_registry,
+        domains,
+        dns_checker,
+        json,
+        silent,
+        ari_cert_id: None,
+        early_client: None,
+    };
 
-    // Reuse client built during ARI check to avoid double directory+account fetch
-    let mut early_client: Option<AcmeClient> = None;
-
-    if cert_output.exists() {
-        // ── 0pre. Domain mismatch check ────────────────────────────────
-        let mut skip_renewal_checks = false;
-
-        let requested: std::collections::BTreeSet<String> =
-            domains.iter().map(|d| normalize_identifier(d)).collect();
-
-        match cert_san_identifiers(cert_output) {
-            Ok(cert_sans) => {
-                if requested != cert_sans {
-                    let added: Vec<&str> = requested
-                        .difference(&cert_sans)
-                        .map(|s| s.as_str())
-                        .collect();
-                    let removed: Vec<&str> = cert_sans
-                        .difference(&requested)
-                        .map(|s| s.as_str())
-                        .collect();
-
-                    if reissue_on_mismatch {
-                        if !silent {
-                            if json {
-                                outln!(
-                                    "{}",
-                                    serde_json::json!({
-                                        "command": "run",
-                                        "action": "reissue",
-                                        "reason": "domain_mismatch",
-                                        "cert_domains": cert_sans,
-                                        "requested_domains": requested,
-                                        "added": added,
-                                        "removed": removed,
-                                    })
-                                );
-                            } else {
-                                outln!(
-                                    "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
-                                    added.join(", "),
-                                    removed.join(", "),
-                                );
-                            }
-                        }
-                        // Skip ARI/days checks — proceed directly to issuance
-                        // (ari_cert_id stays None: this is reissuance, not renewal)
-                        skip_renewal_checks = true;
-                    } else {
-                        if !silent {
-                            if json {
-                                outln!(
-                                    "{}",
-                                    serde_json::json!({
-                                        "command": "run",
-                                        "action": "skip",
-                                        "reason": "domain_mismatch",
-                                        "hint": "use --reissue-on-mismatch to override",
-                                        "cert_domains": cert_sans,
-                                        "requested_domains": requested,
-                                        "added": added,
-                                        "removed": removed,
-                                    })
-                                );
-                            } else {
-                                outln!(
-                                    "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
-                                     Use --reissue-on-mismatch to override.",
-                                    cert_sans
-                                        .iter()
-                                        .map(|s| s.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                    requested
-                                        .iter()
-                                        .map(|s| s.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", "),
-                                    added.join(", "),
-                                    removed.join(", "),
-                                );
-                            }
-                        }
-                        return Ok(());
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Could not read SANs from {}: {e} — skipping domain mismatch check",
-                    cert_output.display()
-                );
-            }
-        }
-
-        if !skip_renewal_checks {
-            // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
-            if ari {
-                match std::fs::read_to_string(cert_output) {
-                    Ok(pem_data) => {
-                        match pem_to_der(&pem_data) {
-                            Ok(cert_der) => {
-                                // Build client early so we reuse directory + account for step 1
-                                let mut ari_client = build_client(cli).await?;
-                                // ARI uses POST-as-GET, needs KID
-                                ari_client.create_account(None, true, None).await?;
-
-                                if ari_client.supports_ari() {
-                                    match ari_client.get_renewal_info(&cert_der).await {
-                                        Ok((info, _retry_after)) => {
-                                            let now = time::OffsetDateTime::now_utc();
-                                            if let Ok(start) = time::OffsetDateTime::parse(
-                                                &info.suggested_window.start,
-                                                &time::format_description::well_known::Rfc3339,
-                                            ) {
-                                                if now < start {
-                                                    if !silent {
-                                                        if json {
-                                                            outln!(
-                                                                "{}",
-                                                                serde_json::json!({
-                                                                    "command": "run",
-                                                                    "action": "skip",
-                                                                    "reason": "ari",
-                                                                    "window_start": info.suggested_window.start,
-                                                                    "window_end": info.suggested_window.end,
-                                                                    "cert_path": cert_output.display().to_string(),
-                                                                })
-                                                            );
-                                                        } else {
-                                                            outln!(
-                                                                "ARI: renewal window starts {} - skipping renewal",
-                                                                info.suggested_window.start
-                                                            );
-                                                        }
-                                                    }
-                                                    return Ok(());
-                                                }
-                                                if !json && !silent {
-                                                    outln!(
-                                                        "ARI: renewal window is open ({} - {}), renewing...",
-                                                        info.suggested_window.start,
-                                                        info.suggested_window.end
-                                                    );
-                                                }
-                                            }
-                                            // Set cert_id for replaceOrder
-                                            if let Ok(cid) = compute_cert_id(&cert_der) {
-                                                ari_cert_id = Some(cid);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "ARI check failed: {e} - falling back to --days check"
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    tracing::warn!(
-                                        "Server does not support ARI - falling back to --days check"
-                                    );
-                                }
-                                early_client = Some(ari_client);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Could not parse certificate {}: {e}",
-                                    cert_output.display()
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not read certificate {}: {e}", cert_output.display());
-                    }
-                }
-            }
-
-            // ── 0b. Days-based renewal check (fallback / standalone) ────────
-            if ari_cert_id.is_none()
-                && let Some(threshold) = days
-            {
-                match cert_days_remaining(cert_output) {
-                    Ok(remaining) if remaining > threshold as i64 => {
-                        if json {
-                            if !silent {
-                                outln!(
-                                    "{}",
-                                    serde_json::json!({
-                                        "command": "run",
-                                        "action": "skip",
-                                        "reason": "days",
-                                        "days_remaining": remaining,
-                                        "threshold": threshold,
-                                        "cert_path": cert_output.display().to_string(),
-                                    })
-                                );
-                            }
-                        } else if !silent {
-                            outln!(
-                                "Certificate {} has {remaining} days remaining (threshold: {threshold}), skipping renewal",
-                                cert_output.display()
-                            );
-                        }
-                        return Ok(());
-                    }
-                    Ok(remaining) => {
-                        if !json && !silent {
-                            outln!(
-                                "Certificate {} expires in {remaining} days (threshold: {threshold}), renewing...",
-                                cert_output.display()
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Could not read certificate {}: {e} - proceeding with renewal",
-                            cert_output.display()
-                        );
-                    }
-                }
-            }
-        } // if !skip_renewal_checks
+    match renewal::check(&mut ctx).await? {
+        renewal::RenewalDecision::Skip => return Ok(()),
+        renewal::RenewalDecision::Reissue | renewal::RenewalDecision::Renew => {}
     }
+
+    cmd_run_after_renewal(ctx).await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn cmd_run_after_renewal(ctx: RunContext<'_>) -> Result<()> {
+    // Re-bind ctx fields as locals so the inlined post-renewal body
+    // (extracted in subsequent commits) keeps reading them by their
+    // original names. This is a transitional bridge — phases 3-5 of
+    // the refactor will replace these with phase fn calls that take
+    // `&mut RunContext` directly.
+    let cli = ctx.cli;
+    let challenge_type = ctx.challenge_type;
+    let http_port = ctx.http_port;
+    let challenge_dir = ctx.challenge_dir;
+    let dns_hook = ctx.dns_hook;
+    let dns_wait = ctx.dns_wait;
+    let dns_propagation_concurrency = ctx.dns_propagation_concurrency;
+    let challenge_timeout = ctx.challenge_timeout;
+    let cert_output = ctx.cert_output;
+    let key_output = ctx.key_output;
+    let key_password = ctx.key_password;
+    let key_password_file = ctx.key_password_file;
+    let on_challenge_ready = ctx.on_challenge_ready;
+    let on_cert_issued = ctx.on_cert_issued;
+    let eab_kid = ctx.eab_kid;
+    let eab_hmac_key = ctx.eab_hmac_key;
+    let pre_authorize = ctx.pre_authorize;
+    let print_cert = ctx.print_cert;
+    let persist_policy = ctx.persist_policy;
+    let persist_until = ctx.persist_until;
+    let cert_key_alg = ctx.cert_key_alg;
+    let profile = ctx.profile;
+    let force = ctx.force;
+    let contact = ctx.contact;
+    let cleanup_registry = ctx.cleanup_registry;
+    let domains = ctx.domains;
+    let dns_checker = ctx.dns_checker;
+    let json = ctx.json;
+    let silent = ctx.silent;
+    let ari_cert_id = ctx.ari_cert_id;
+    let mut early_client = ctx.early_client;
 
     // ── 1. Account ──────────────────────────────────────────────────────
     info!("Step 1: Creating / looking up account");
