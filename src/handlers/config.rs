@@ -89,11 +89,7 @@ impl<'a> RenderContext<'a> {
 
     /// Source resolver for a `[run]` or `[account]` config-only field.
     fn cfg_source(&self, has_val: bool) -> &'static str {
-        if has_val {
-            "config"
-        } else {
-            "default"
-        }
+        if has_val { "config" } else { "default" }
     }
 
     /// Render an optional secret, honoring `--show-secrets`.
