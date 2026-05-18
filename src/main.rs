@@ -9,6 +9,7 @@ mod cli_config;
 mod client;
 mod config;
 mod csr;
+mod defaults;
 mod dns_check;
 mod fs_secure;
 mod handlers;

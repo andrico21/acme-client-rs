@@ -81,7 +81,7 @@ pub(crate) struct Cli {
         long,
         global = true,
         env = "ACME_DIRECTORY_URL",
-        default_value = "https://localhost:14000/dir"
+        default_value = crate::defaults::global::DIRECTORY_URL
     )]
     pub(crate) directory: String,
 
@@ -91,7 +91,7 @@ pub(crate) struct Cli {
         long,
         global = true,
         env = "ACME_ACCOUNT_KEY_FILE",
-        default_value = "account.key"
+        default_value = crate::defaults::global::ACCOUNT_KEY_FILE
     )]
     pub(crate) account_key: PathBuf,
 
@@ -129,7 +129,7 @@ pub(crate) struct Cli {
     #[arg(
         long,
         global = true,
-        default_value_t = 15,
+        default_value_t = crate::defaults::global::CONNECT_TIMEOUT_SECS,
         env = "ACME_CONNECT_TIMEOUT"
     )]
     pub(crate) connect_timeout: u64,
@@ -296,7 +296,7 @@ Examples:
         #[arg(long, value_parser = crate::types::ChallengeToken::parse)]
         token: crate::types::ChallengeToken,
         /// Port to listen on (standalone mode)
-        #[arg(long, default_value_t = 80)]
+        #[arg(long, default_value_t = crate::defaults::run::HTTP_PORT)]
         port: u16,
         /// Write challenge file to this directory instead of starting a server
         #[arg(long)]
@@ -356,7 +356,7 @@ Examples:
         #[arg(long)]
         finalize_url: String,
         /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
-        #[arg(long, default_value = "ec-p256")]
+        #[arg(long, default_value = crate::defaults::run::CERT_KEY_ALGORITHM)]
         cert_key_algorithm: CertKeyAlgorithm,
         // Priority 2 (public API): --key-output is REQUIRED to prevent the
         // SEC-20 footgun where a CSR is submitted to the CA but the freshly
@@ -401,7 +401,7 @@ Examples:
         #[arg(required = true)]
         url: String,
         /// Output file
-        #[arg(long, default_value = "certificate.pem")]
+        #[arg(long, default_value = crate::defaults::run::CERT_OUTPUT_FILE)]
         output: PathBuf,
     },
 
@@ -467,7 +467,7 @@ Note: Not all ACME servers support pre-authorization.
         #[arg(long, required = true)]
         domain: String,
         /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
-        #[arg(long, default_value = "http-01")]
+        #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
         challenge_type: String,
     },
 
@@ -567,10 +567,10 @@ Examples:
         #[arg(long)]
         contact: Option<String>,
         /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
-        #[arg(long, default_value = "http-01")]
+        #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
         challenge_type: String,
         /// HTTP-01 server port (standalone mode)
-        #[arg(long, default_value_t = 80)]
+        #[arg(long, default_value_t = crate::defaults::run::HTTP_PORT)]
         http_port: u16,
         /// Write HTTP-01 challenge files to this directory instead of starting a server
         #[arg(long)]
@@ -582,16 +582,16 @@ Examples:
         #[arg(long)]
         dns_wait: Option<u64>,
         /// Max concurrent DNS propagation checks (default: 5)
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value_t = crate::defaults::run::DNS_PROPAGATION_CONCURRENCY)]
         dns_propagation_concurrency: usize,
         /// Max seconds to wait for challenge validation (default: 300)
-        #[arg(long, default_value_t = 300)]
+        #[arg(long, default_value_t = crate::defaults::run::CHALLENGE_TIMEOUT_SECS)]
         challenge_timeout: u64,
         /// Save the certificate to this file
-        #[arg(long, default_value = "certificate.pem")]
+        #[arg(long, default_value = crate::defaults::run::CERT_OUTPUT_FILE)]
         cert_output: PathBuf,
         /// Save the private key to this file
-        #[arg(long, default_value = "private.key")]
+        #[arg(long, default_value = crate::defaults::run::KEY_OUTPUT_FILE)]
         key_output: PathBuf,
         /// Skip renewal if existing certificate has more than N days remaining
         #[arg(long)]
@@ -633,7 +633,7 @@ Examples:
         #[arg(long)]
         persist_until: Option<u64>,
         /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
-        #[arg(long, default_value = "ec-p256")]
+        #[arg(long, default_value = crate::defaults::run::CERT_KEY_ALGORITHM)]
         cert_key_algorithm: CertKeyAlgorithm,
         /// Certificate profile (draft-ietf-acme-profiles-01)
         #[arg(long, env = "ACME_PROFILE")]
@@ -642,4 +642,81 @@ Examples:
         #[arg(long)]
         force: bool,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Drift detector. If a clap `default_value*` literal is ever inlined again
+    /// instead of pointing at `crate::defaults`, the const and the CLI will
+    /// disagree and this test will fail. See [`crate::defaults`].
+    #[test]
+    fn clap_defaults_match_defaults_module() {
+        let cmd = Cli::command();
+
+        let global_expected: &[(&str, &str)] = &[
+            ("directory", crate::defaults::global::DIRECTORY_URL),
+            ("account_key", crate::defaults::global::ACCOUNT_KEY_FILE),
+            (
+                "connect_timeout",
+                &crate::defaults::global::CONNECT_TIMEOUT_SECS.to_string(),
+            ),
+        ];
+        for (arg_id, expected) in global_expected {
+            let arg = cmd
+                .get_arguments()
+                .find(|a| a.get_id() == *arg_id)
+                .unwrap_or_else(|| panic!("global arg `{arg_id}` missing"));
+            let got: Vec<String> = arg
+                .get_default_values()
+                .iter()
+                .map(|v| v.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                got,
+                vec![expected.to_string()],
+                "global arg `{arg_id}` default drifted from crate::defaults",
+            );
+        }
+
+        let run_expected: &[(&str, &str)] = &[
+            ("challenge_type", crate::defaults::run::CHALLENGE_TYPE),
+            ("http_port", &crate::defaults::run::HTTP_PORT.to_string()),
+            (
+                "dns_propagation_concurrency",
+                &crate::defaults::run::DNS_PROPAGATION_CONCURRENCY.to_string(),
+            ),
+            (
+                "challenge_timeout",
+                &crate::defaults::run::CHALLENGE_TIMEOUT_SECS.to_string(),
+            ),
+            ("cert_output", crate::defaults::run::CERT_OUTPUT_FILE),
+            ("key_output", crate::defaults::run::KEY_OUTPUT_FILE),
+            (
+                "cert_key_algorithm",
+                crate::defaults::run::CERT_KEY_ALGORITHM,
+            ),
+        ];
+        let run = cmd
+            .find_subcommand("run")
+            .expect("`run` subcommand missing");
+        for (arg_id, expected) in run_expected {
+            let arg = run
+                .get_arguments()
+                .find(|a| a.get_id() == *arg_id)
+                .unwrap_or_else(|| panic!("run arg `{arg_id}` missing"));
+            let got: Vec<String> = arg
+                .get_default_values()
+                .iter()
+                .map(|v| v.to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(
+                got,
+                vec![expected.to_string()],
+                "run arg `{arg_id}` default drifted from crate::defaults",
+            );
+        }
+    }
 }

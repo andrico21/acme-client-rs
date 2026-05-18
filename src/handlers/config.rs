@@ -7,6 +7,7 @@ use clap::parser::ValueSource;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::cli::{Cli, OutputFormat};
+use crate::defaults;
 use crate::{out, outln};
 
 pub(crate) fn cmd_generate_config(silent: bool) -> Result<()> {
@@ -136,7 +137,7 @@ fn opt_u32(v: Option<u32>) -> String {
     v.map_or("(not set)".to_string(), |v| v.to_string())
 }
 fn opt_u16(v: Option<u16>) -> String {
-    v.map_or("80".to_string(), |v| v.to_string())
+    v.map_or_else(|| defaults::run::HTTP_PORT.to_string(), |v| v.to_string())
 }
 fn opt_bool(v: Option<bool>) -> String {
     v.unwrap_or(false).to_string()
@@ -212,15 +213,15 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
         let mut rv = serde_json::json!({
             "domains": { "value": r.domains },
             "contact": { "value": r.contact },
-            "challenge_type": { "value": r.challenge_type.as_deref().unwrap_or("http-01") },
-            "http_port": { "value": r.http_port.unwrap_or(80) },
+            "challenge_type": { "value": r.challenge_type.as_deref().unwrap_or(defaults::run::CHALLENGE_TYPE) },
+            "http_port": { "value": r.http_port.unwrap_or(defaults::run::HTTP_PORT) },
             "challenge_dir": { "value": r.challenge_dir.as_ref().map(|p| p.display().to_string()) },
             "dns_hook": { "value": r.dns_hook.as_ref().map(|p| p.display().to_string()) },
             "dns_wait": { "value": r.dns_wait },
             "dns_propagation_concurrency": { "value": r.dns_propagation_concurrency },
-            "challenge_timeout": { "value": r.challenge_timeout.unwrap_or(300) },
-            "cert_output": { "value": r.cert_output.as_ref().map_or("certificate.pem".to_string(), |p| p.display().to_string()) },
-            "key_output": { "value": r.key_output.as_ref().map_or("private.key".to_string(), |p| p.display().to_string()) },
+            "challenge_timeout": { "value": r.challenge_timeout.unwrap_or(defaults::run::CHALLENGE_TIMEOUT_SECS) },
+            "cert_output": { "value": r.cert_output.as_ref().map_or_else(|| defaults::run::CERT_OUTPUT_FILE.to_string(), |p| p.display().to_string()) },
+            "key_output": { "value": r.key_output.as_ref().map_or_else(|| defaults::run::KEY_OUTPUT_FILE.to_string(), |p| p.display().to_string()) },
             "days": { "value": r.days },
             "key_password_file": { "value": r.key_password_file.as_ref().map(|p| p.display().to_string()) },
             "on_challenge_ready": { "value": r.on_challenge_ready.as_ref().map(|p| p.display().to_string()) },
@@ -233,7 +234,7 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
             "print_cert": { "value": r.print_cert.unwrap_or(false) },
             "persist_policy": { "value": r.persist_policy },
             "persist_until": { "value": r.persist_until },
-            "cert_key_algorithm": { "value": r.cert_key_algorithm.as_deref().unwrap_or("ec-p256") },
+            "cert_key_algorithm": { "value": r.cert_key_algorithm.as_deref().unwrap_or(defaults::run::CERT_KEY_ALGORITHM) },
             "profile": { "value": r.profile },
         });
         if ctx.verbose {
@@ -266,13 +267,14 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
             ] {
                 let has = !rv[key]["value"].is_null()
                     && rv[key]["value"] != serde_json::json!(false)
-                    && rv[key]["value"] != serde_json::json!("http-01")
-                    && rv[key]["value"] != serde_json::json!(80)
-                    && rv[key]["value"] != serde_json::json!(5)
-                    && rv[key]["value"] != serde_json::json!(300)
-                    && rv[key]["value"] != serde_json::json!("certificate.pem")
-                    && rv[key]["value"] != serde_json::json!("private.key")
-                    && rv[key]["value"] != serde_json::json!("ec-p256");
+                    && rv[key]["value"] != serde_json::json!(defaults::run::CHALLENGE_TYPE)
+                    && rv[key]["value"] != serde_json::json!(defaults::run::HTTP_PORT)
+                    && rv[key]["value"]
+                        != serde_json::json!(defaults::run::DNS_PROPAGATION_CONCURRENCY)
+                    && rv[key]["value"] != serde_json::json!(defaults::run::CHALLENGE_TIMEOUT_SECS)
+                    && rv[key]["value"] != serde_json::json!(defaults::run::CERT_OUTPUT_FILE)
+                    && rv[key]["value"] != serde_json::json!(defaults::run::KEY_OUTPUT_FILE)
+                    && rv[key]["value"] != serde_json::json!(defaults::run::CERT_KEY_ALGORITHM);
                 rv[key]["source"] = serde_json::json!(ctx.cfg_source(has));
             }
         }
@@ -421,7 +423,9 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
         );
         outln!(
             "  challenge_type     = {}{}",
-            r.challenge_type.as_deref().unwrap_or("http-01"),
+            r.challenge_type
+                .as_deref()
+                .unwrap_or(defaults::run::CHALLENGE_TYPE),
             ctx.src_annot(ctx.cfg_source(r.challenge_type.is_some()))
         );
         outln!(
@@ -446,26 +450,30 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
         );
         outln!(
             "  dns_propagation_concurrency = {}{}",
-            r.dns_propagation_concurrency.unwrap_or(5),
+            r.dns_propagation_concurrency
+                .unwrap_or(defaults::run::DNS_PROPAGATION_CONCURRENCY),
             ctx.src_annot(ctx.cfg_source(r.dns_propagation_concurrency.is_some()))
         );
         outln!(
             "  challenge_timeout  = {}{}",
-            r.challenge_timeout.unwrap_or(300),
+            r.challenge_timeout
+                .unwrap_or(defaults::run::CHALLENGE_TIMEOUT_SECS),
             ctx.src_annot(ctx.cfg_source(r.challenge_timeout.is_some()))
         );
         outln!(
             "  cert_output        = {}{}",
-            r.cert_output
-                .as_ref()
-                .map_or("certificate.pem".to_string(), |p| p.display().to_string()),
+            r.cert_output.as_ref().map_or_else(
+                || defaults::run::CERT_OUTPUT_FILE.to_string(),
+                |p| p.display().to_string()
+            ),
             ctx.src_annot(ctx.cfg_source(r.cert_output.is_some()))
         );
         outln!(
             "  key_output         = {}{}",
-            r.key_output
-                .as_ref()
-                .map_or("private.key".to_string(), |p| p.display().to_string()),
+            r.key_output.as_ref().map_or_else(
+                || defaults::run::KEY_OUTPUT_FILE.to_string(),
+                |p| p.display().to_string()
+            ),
             ctx.src_annot(ctx.cfg_source(r.key_output.is_some()))
         );
         outln!(
@@ -530,7 +538,9 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
         );
         outln!(
             "  cert_key_algorithm = {}{}",
-            r.cert_key_algorithm.as_deref().unwrap_or("ec-p256"),
+            r.cert_key_algorithm
+                .as_deref()
+                .unwrap_or(defaults::run::CERT_KEY_ALGORITHM),
             ctx.src_annot(ctx.cfg_source(r.cert_key_algorithm.is_some()))
         );
         outln!(
