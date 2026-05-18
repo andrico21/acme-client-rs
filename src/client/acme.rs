@@ -1,7 +1,9 @@
 //! `AcmeClient` — RFC 8555 protocol driver.
 //!
-//! Every mutating request is a signed JWS POST. Nonces are cached from
-//! response headers and a single automatic retry is performed on `badNonce`.
+//! Every mutating request is a signed JWS POST. Nonces are cached from the
+//! `Replay-Nonce` response header (RFC 8555 §6.5) and a single automatic
+//! retry is performed on `badNonce` using the fresh nonce returned by the
+//! rejecting response.
 //!
 //! The client is decomposed into two sub-structs:
 //! - [`Directory`]: immutable after construction; holds the parsed ACME

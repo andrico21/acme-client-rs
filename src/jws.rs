@@ -4,11 +4,11 @@
 //! Serialization.  The protected header MUST include "alg", "nonce", "url",
 //! and exactly one of "jwk" or "kid" (mutually exclusive).
 //!
-//! Supported account key algorithms:
+//! Supported account key algorithms (JWS `alg` → underlying key types):
 //! - ES256 (ECDSA P-256 + SHA-256) - RFC 8555 §6.2 mandatory
 //! - ES384 (ECDSA P-384 + SHA-384)
 //! - ES512 (ECDSA P-521 + SHA-512)
-//! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256)
+//! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256) - used for both RSA-2048 and RSA-4096 keys
 //! - EdDSA (Ed25519)
 
 use anyhow::{Context, Result, bail};
