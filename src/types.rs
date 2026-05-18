@@ -548,11 +548,142 @@ pub struct FinalizeRequest {
 
 // ── Error (RFC 8555 §6.7, RFC 7807) ─────────────────────────────────────────
 
+/// Canonical RFC 8555 §6.7 ACME error type URN.
+///
+/// Wire format is the full URN `urn:ietf:params:acme:error:<kind>`.
+/// The 24 standard kinds map to named variants; CA-specific or
+/// post-RFC-8555 extensions deserialize as [`AcmeErrorType::Unknown`]
+/// carrying the verbatim wire string (forward-compat per RFC 8555
+/// §6.7's "Other error types MAY also be used" clause).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum AcmeErrorType {
+    AccountDoesNotExist,
+    AlreadyRevoked,
+    BadCsr,
+    BadNonce,
+    BadPublicKey,
+    BadRevocationReason,
+    BadSignatureAlgorithm,
+    Caa,
+    Compound,
+    Connection,
+    Dns,
+    ExternalAccountRequired,
+    IncorrectResponse,
+    InvalidContact,
+    Malformed,
+    OrderNotReady,
+    RateLimited,
+    RejectedIdentifier,
+    ServerInternal,
+    Tls,
+    Unauthorized,
+    UnsupportedContact,
+    UnsupportedIdentifier,
+    UserActionRequired,
+    /// Catch-all for CA-specific or post-RFC-8555 error URIs (e.g.
+    /// RFC 8739 auto-renewal errors, RFC 9799 onionCAARequired). The
+    /// inner string is the verbatim wire URN; round-trips losslessly.
+    Unknown(String),
+}
+
+const ACME_ERROR_URN_PREFIX: &str = "urn:ietf:params:acme:error:";
+
+impl AcmeErrorType {
+    fn kind(&self) -> Option<&'static str> {
+        match self {
+            Self::AccountDoesNotExist => Some("accountDoesNotExist"),
+            Self::AlreadyRevoked => Some("alreadyRevoked"),
+            Self::BadCsr => Some("badCSR"),
+            Self::BadNonce => Some("badNonce"),
+            Self::BadPublicKey => Some("badPublicKey"),
+            Self::BadRevocationReason => Some("badRevocationReason"),
+            Self::BadSignatureAlgorithm => Some("badSignatureAlgorithm"),
+            Self::Caa => Some("caa"),
+            Self::Compound => Some("compound"),
+            Self::Connection => Some("connection"),
+            Self::Dns => Some("dns"),
+            Self::ExternalAccountRequired => Some("externalAccountRequired"),
+            Self::IncorrectResponse => Some("incorrectResponse"),
+            Self::InvalidContact => Some("invalidContact"),
+            Self::Malformed => Some("malformed"),
+            Self::OrderNotReady => Some("orderNotReady"),
+            Self::RateLimited => Some("rateLimited"),
+            Self::RejectedIdentifier => Some("rejectedIdentifier"),
+            Self::ServerInternal => Some("serverInternal"),
+            Self::Tls => Some("tls"),
+            Self::Unauthorized => Some("unauthorized"),
+            Self::UnsupportedContact => Some("unsupportedContact"),
+            Self::UnsupportedIdentifier => Some("unsupportedIdentifier"),
+            Self::UserActionRequired => Some("userActionRequired"),
+            Self::Unknown(_) => None,
+        }
+    }
+
+    /// `true` if this is the RFC 8555 §6.5 `badNonce` error, which
+    /// callers must treat specially (retry the request with a fresh
+    /// nonce instead of bubbling up).
+    pub fn is_bad_nonce(&self) -> bool {
+        matches!(self, Self::BadNonce)
+    }
+}
+
+impl std::fmt::Display for AcmeErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind() {
+            Some(k) => write!(f, "{ACME_ERROR_URN_PREFIX}{k}"),
+            None => match self {
+                Self::Unknown(s) => f.write_str(s),
+                _ => unreachable!("kind() returns Some for all non-Unknown variants"),
+            },
+        }
+    }
+}
+
+impl From<AcmeErrorType> for String {
+    fn from(e: AcmeErrorType) -> String {
+        e.to_string()
+    }
+}
+
+impl From<String> for AcmeErrorType {
+    fn from(s: String) -> Self {
+        match s.strip_prefix(ACME_ERROR_URN_PREFIX) {
+            Some("accountDoesNotExist") => Self::AccountDoesNotExist,
+            Some("alreadyRevoked") => Self::AlreadyRevoked,
+            Some("badCSR") => Self::BadCsr,
+            Some("badNonce") => Self::BadNonce,
+            Some("badPublicKey") => Self::BadPublicKey,
+            Some("badRevocationReason") => Self::BadRevocationReason,
+            Some("badSignatureAlgorithm") => Self::BadSignatureAlgorithm,
+            Some("caa") => Self::Caa,
+            Some("compound") => Self::Compound,
+            Some("connection") => Self::Connection,
+            Some("dns") => Self::Dns,
+            Some("externalAccountRequired") => Self::ExternalAccountRequired,
+            Some("incorrectResponse") => Self::IncorrectResponse,
+            Some("invalidContact") => Self::InvalidContact,
+            Some("malformed") => Self::Malformed,
+            Some("orderNotReady") => Self::OrderNotReady,
+            Some("rateLimited") => Self::RateLimited,
+            Some("rejectedIdentifier") => Self::RejectedIdentifier,
+            Some("serverInternal") => Self::ServerInternal,
+            Some("tls") => Self::Tls,
+            Some("unauthorized") => Self::Unauthorized,
+            Some("unsupportedContact") => Self::UnsupportedContact,
+            Some("unsupportedIdentifier") => Self::UnsupportedIdentifier,
+            Some("userActionRequired") => Self::UserActionRequired,
+            _ => Self::Unknown(s),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct AcmeError {
     #[serde(rename = "type")]
-    pub error_type: Option<String>,
+    pub error_type: Option<AcmeErrorType>,
     pub detail: Option<String>,
     pub status: Option<u16>,
     pub subproblems: Option<Vec<Subproblem>>,
@@ -592,7 +723,7 @@ impl std::fmt::Display for AcmeError {
 #[allow(dead_code)]
 pub struct Subproblem {
     #[serde(rename = "type")]
-    pub error_type: String,
+    pub error_type: AcmeErrorType,
     pub detail: Option<String>,
     pub identifier: Option<Identifier>,
 }
@@ -824,17 +955,17 @@ mod tests {
     #[test]
     fn acme_error_display_includes_subproblems_and_status() {
         let err = AcmeError {
-            error_type: Some("urn:ietf:params:acme:error:rejectedIdentifier".into()),
+            error_type: Some(AcmeErrorType::RejectedIdentifier),
             detail: Some("Some identifiers were rejected".into()),
             status: Some(400),
             subproblems: Some(vec![
                 Subproblem {
-                    error_type: "urn:ietf:params:acme:error:malformed".into(),
+                    error_type: AcmeErrorType::Malformed,
                     detail: Some("DNS name has wildcard".into()),
                     identifier: Some(Identifier::dns("*.evil.example").unwrap()),
                 },
                 Subproblem {
-                    error_type: "urn:ietf:params:acme:error:invalidContact".into(),
+                    error_type: AcmeErrorType::InvalidContact,
                     detail: None,
                     identifier: None,
                 },
@@ -852,12 +983,44 @@ mod tests {
     #[test]
     fn acme_error_display_empty_subproblems_omitted() {
         let err = AcmeError {
-            error_type: Some("urn:ietf:params:acme:error:badNonce".into()),
+            error_type: Some(AcmeErrorType::BadNonce),
             detail: Some("Bad nonce".into()),
             status: None,
             subproblems: Some(vec![]),
         };
         let s = format!("{err}");
         assert!(!s.contains("subproblems"));
+    }
+
+    #[test]
+    fn acme_error_type_serde_roundtrip_standard() {
+        let json = "\"urn:ietf:params:acme:error:badNonce\"";
+        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed, AcmeErrorType::BadNonce);
+        assert!(parsed.is_bad_nonce());
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+    }
+
+    #[test]
+    fn acme_error_type_serde_unknown_roundtrip_lossless() {
+        let json = "\"urn:ietf:params:acme:error:onionCAARequired\"";
+        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed,
+            AcmeErrorType::Unknown("urn:ietf:params:acme:error:onionCAARequired".into())
+        );
+        assert!(!parsed.is_bad_nonce());
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+    }
+
+    #[test]
+    fn acme_error_type_serde_non_acme_urn_preserved() {
+        let json = "\"urn:example:custom-error\"";
+        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            parsed,
+            AcmeErrorType::Unknown("urn:example:custom-error".into())
+        );
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
     }
 }

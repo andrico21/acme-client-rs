@@ -127,7 +127,7 @@ pub(super) fn is_challenge_failed(ch: &Challenge) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AcmeError, Challenge, ChallengeStatus, ChallengeType};
+    use crate::types::{AcmeError, AcmeErrorType, Challenge, ChallengeStatus, ChallengeType};
 
     fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Challenge {
         Challenge {
@@ -145,7 +145,7 @@ mod tests {
 
     fn make_error() -> AcmeError {
         AcmeError {
-            error_type: Some("urn:ietf:params:acme:error:connection".to_string()),
+            error_type: Some(AcmeErrorType::Connection),
             detail: Some("The server could not connect to validation target".to_string()),
             status: None,
             subproblems: None,

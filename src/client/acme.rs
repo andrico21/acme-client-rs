@@ -145,7 +145,10 @@ impl Transport {
             if attempt == 0
                 && status == reqwest::StatusCode::BAD_REQUEST
                 && let Ok(err) = serde_json::from_slice::<AcmeError>(&body_bytes)
-                && err.error_type.as_deref() == Some("urn:ietf:params:acme:error:badNonce")
+                && err
+                    .error_type
+                    .as_ref()
+                    .is_some_and(AcmeErrorType::is_bad_nonce)
             {
                 warn!("Received badNonce - retrying with fresh nonce");
                 continue;
