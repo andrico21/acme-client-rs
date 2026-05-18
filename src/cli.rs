@@ -293,8 +293,8 @@ Examples:
   acme-client-rs serve-http01 --token <TOKEN> --challenge-dir /var/www/html")]
     ServeHttp01 {
         /// Challenge token
-        #[arg(long)]
-        token: String,
+        #[arg(long, value_parser = crate::types::ChallengeToken::parse)]
+        token: crate::types::ChallengeToken,
         /// Port to listen on (standalone mode)
         #[arg(long, default_value_t = 80)]
         port: u16,
@@ -312,8 +312,8 @@ Examples:
         #[arg(long)]
         domain: String,
         /// Challenge token
-        #[arg(long)]
-        token: String,
+        #[arg(long, value_parser = crate::types::ChallengeToken::parse)]
+        token: crate::types::ChallengeToken,
     },
 
     /// Show DNS-PERSIST-01 setup instructions (draft-ietf-acme-dns-persist)

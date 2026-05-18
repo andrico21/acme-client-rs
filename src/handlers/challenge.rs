@@ -10,13 +10,12 @@ use crate::{build_client, outln};
 use super::check_wildcard_compatible;
 pub(crate) async fn cmd_serve_http01(
     cli: &Cli,
-    token: &str,
+    token: &crate::types::ChallengeToken,
     port: u16,
     challenge_dir: Option<&std::path::Path>,
     fmt: OutputFormat,
     silent: bool,
 ) -> Result<()> {
-    crate::challenge::http01::validate_token(token)?;
     use secrecy::ExposeSecret;
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
@@ -52,7 +51,7 @@ pub(crate) async fn cmd_serve_http01(
 pub(crate) fn cmd_show_dns01(
     cli: &Cli,
     domain: &str,
-    token: &str,
+    token: &crate::types::ChallengeToken,
     fmt: OutputFormat,
     silent: bool,
 ) -> Result<()> {

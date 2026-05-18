@@ -496,6 +496,73 @@ impl std::fmt::Display for AuthorizationStatus {
 
 // ── Challenge (RFC 8555 §7.1.5, §8) ─────────────────────────────────────────
 
+/// Validated ACME challenge token (RFC 8555 §8.1).
+///
+/// Tokens are emitted by the CA and echoed back to it inside path components
+/// (HTTP-01 well-known URL), DNS labels, and filesystem paths. A malformed
+/// or malicious token (path-traversal sequences, NULs, whitespace) would
+/// escape every one of those contexts. This newtype enforces the RFC
+/// `[A-Za-z0-9_-]{1,128}` base64url alphabet at every construction site:
+/// invalid tokens cannot be represented, so callers cannot forget to
+/// validate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct ChallengeToken(String);
+
+/// Maximum accepted token length. Real ACME tokens are ~43 base64url chars
+/// (32 random bytes); RFC 8555 does not fix an upper bound, so we apply a
+/// defensive cap to prevent unbounded log/path growth.
+const MAX_CHALLENGE_TOKEN_LEN: usize = 128;
+
+impl ChallengeToken {
+    pub fn parse(s: &str) -> Result<Self> {
+        if s.is_empty() {
+            bail!("ACME challenge token is empty");
+        }
+        if s.len() > MAX_CHALLENGE_TOKEN_LEN {
+            bail!(
+                "ACME challenge token is {} bytes; refusing (max {})",
+                s.len(),
+                MAX_CHALLENGE_TOKEN_LEN
+            );
+        }
+        for b in s.as_bytes() {
+            let ok = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_');
+            if !ok {
+                bail!(
+                    "ACME challenge token contains invalid character {:?}; \
+                     expected base64url alphabet [A-Za-z0-9_-]",
+                    *b as char
+                );
+            }
+        }
+        Ok(Self(s.to_string()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for ChallengeToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl TryFrom<String> for ChallengeToken {
+    type Error = anyhow::Error;
+    fn try_from(s: String) -> Result<Self> {
+        Self::parse(&s)
+    }
+}
+
+impl From<ChallengeToken> for String {
+    fn from(t: ChallengeToken) -> String {
+        t.0
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
@@ -505,7 +572,7 @@ pub struct Challenge {
     pub url: url::Url,
     pub status: ChallengeStatus,
     pub validated: Option<String>,
-    pub token: Option<String>,
+    pub token: Option<ChallengeToken>,
     pub error: Option<AcmeError>,
     /// For dns-persist-01: issuer domain names provided by the CA.
     #[serde(default)]
@@ -1022,5 +1089,49 @@ mod tests {
             AcmeErrorType::Unknown("urn:example:custom-error".into())
         );
         assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+    }
+
+    #[test]
+    fn challenge_token_parse_accepts_base64url() {
+        let t = ChallengeToken::parse("LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0").unwrap();
+        assert_eq!(t.as_str(), "LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0");
+    }
+
+    #[test]
+    fn challenge_token_parse_rejects_empty() {
+        assert!(ChallengeToken::parse("").is_err());
+    }
+
+    #[test]
+    fn challenge_token_parse_rejects_path_traversal() {
+        assert!(ChallengeToken::parse("../../etc/passwd").is_err());
+        assert!(ChallengeToken::parse("a/b").is_err());
+        assert!(ChallengeToken::parse("a\\b").is_err());
+    }
+
+    #[test]
+    fn challenge_token_parse_rejects_oversize() {
+        let big = "a".repeat(129);
+        assert!(ChallengeToken::parse(&big).is_err());
+        let max = "a".repeat(128);
+        assert!(ChallengeToken::parse(&max).is_ok());
+    }
+
+    #[test]
+    fn challenge_token_parse_rejects_non_base64url_chars() {
+        for bad in ["a b", "a+b", "a=b", "a.b", "a\nb", "a\0b"] {
+            assert!(
+                ChallengeToken::parse(bad).is_err(),
+                "token {bad:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn challenge_token_serde_wire_validation() {
+        let parsed: ChallengeToken = serde_json::from_str("\"abc-DEF_123\"").unwrap();
+        assert_eq!(parsed.as_str(), "abc-DEF_123");
+        assert!(serde_json::from_str::<ChallengeToken>("\"bad/token\"").is_err());
+        assert!(serde_json::from_str::<ChallengeToken>("\"\"").is_err());
     }
 }

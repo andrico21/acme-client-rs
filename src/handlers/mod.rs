@@ -127,7 +127,9 @@ pub(super) fn is_challenge_failed(ch: &Challenge) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AcmeError, AcmeErrorType, Challenge, ChallengeStatus, ChallengeType};
+    use crate::types::{
+        AcmeError, AcmeErrorType, Challenge, ChallengeStatus, ChallengeToken, ChallengeType,
+    };
 
     fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Challenge {
         Challenge {
@@ -137,7 +139,7 @@ mod tests {
                 .expect("valid test URL"),
             status,
             validated: None,
-            token: Some("test-token".to_string()),
+            token: Some(ChallengeToken::parse("test-token").expect("valid test token")),
             error,
             issuer_domain_names: None,
         }

@@ -51,11 +51,8 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             .with_context(|| {
                 format!("no {} challenge for {}", ctx.challenge_type, domain_display)
             })?;
-        let token = if ctx.challenge_type != ChallengeType::DnsPersist01 {
-            ch.token.as_deref().context("challenge has no token")?
-        } else {
-            "" // dns-persist-01 has no token
-        };
+        let token = ch.token.as_ref();
+        let require_token = || token.context("challenge has no token");
         let challenge_url = ch.url.clone();
 
         let mut challenge_file: Option<std::path::PathBuf> = None;
@@ -64,6 +61,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
 
         match &ctx.challenge_type {
             ChallengeType::Http01 => {
+                let token = require_token()?;
                 if let Some(dir) = ctx.challenge_dir {
                     let file = crate::challenge::http01::write_challenge_file(
                         dir,
@@ -123,6 +121,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 }
             }
             ChallengeType::Dns01 => {
+                let token = require_token()?;
                 let dns = dns_for_hook.as_ref().ok_or_else(|| {
                     anyhow::anyhow!(
                         "dns-01 challenges are not supported for IP identifiers ({domain_display})"
@@ -173,7 +172,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         &[
                             ("ACME_DOMAIN", dns.as_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", token),
+                            ("ACME_TOKEN", token.as_str()),
                             ("ACME_KEY_AUTH", &key_auth),
                             ("ACME_TXT_NAME", txt_name.as_str()),
                             ("ACME_TXT_VALUE", &txt_value),
@@ -265,6 +264,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 client.respond_to_challenge(&challenge_url).await?;
             }
             ChallengeType::TlsAlpn01 => {
+                let token = require_token()?;
                 if !ctx.silent {
                     crate::challenge::tlsalpn01::print_instructions(
                         &authz.identifier.value_str(),
@@ -281,7 +281,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         &[
                             ("ACME_DOMAIN", &authz.identifier.value_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", token),
+                            ("ACME_TOKEN", token.as_str()),
                             ("ACME_KEY_AUTH", &key_auth),
                         ],
                     )?;

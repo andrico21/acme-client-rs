@@ -63,14 +63,10 @@ pub(super) async fn run_phased_dns(
                     authz.identifier.value_str()
                 )
             })?;
-            let t = ch
-                .token
-                .as_deref()
-                .context("challenge has no token")?
-                .to_string();
+            let t = ch.token.clone().context("challenge has no token")?;
             let name = crate::challenge::dns01::record_name(dns);
             let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
-            (t, name, value)
+            (Some(t), name, value)
         } else {
             // dns-persist-01
             let dns = authz.identifier.as_dns().ok_or_else(|| {
@@ -99,7 +95,7 @@ pub(super) async fn run_phased_dns(
                 ctx.persist_policy,
                 ctx.persist_until,
             )?;
-            (String::new(), name, value)
+            (None, name, value)
         };
 
         // Run create hook
@@ -218,14 +214,17 @@ pub(super) async fn run_phased_dns(
         for p in &pending {
             if let Some(script) = ctx.on_challenge_ready {
                 if ctx.challenge_type == ChallengeType::Dns01 {
-                    let key_auth =
-                        crate::challenge::key_authorization(&p.token, client.account_key());
+                    let token = p
+                        .token
+                        .as_ref()
+                        .expect("dns-01 DnsPending always carries a token");
+                    let key_auth = crate::challenge::key_authorization(token, client.account_key());
                     run_hook(
                         script,
                         &[
                             ("ACME_DOMAIN", p.domain.as_str()),
                             ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", &p.token),
+                            ("ACME_TOKEN", token.as_str()),
                             ("ACME_KEY_AUTH", &key_auth),
                             ("ACME_TXT_NAME", p.txt_name.as_str()),
                             ("ACME_TXT_VALUE", &p.txt_value),

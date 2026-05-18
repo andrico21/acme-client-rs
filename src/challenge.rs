@@ -7,10 +7,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
 
 use crate::jws::AccountKey;
+use crate::types::ChallengeToken;
 
 /// Key authorization string (RFC 8555 §8.1):
 ///   `keyAuthorization = token || '.' || base64url(Thumbprint(accountKey))`
-pub fn key_authorization(token: &str, account_key: &AccountKey) -> String {
+pub fn key_authorization(token: &ChallengeToken, account_key: &AccountKey) -> String {
     format!("{}.{}", token, account_key.thumbprint())
 }
 
@@ -23,51 +24,13 @@ pub mod http01 {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tracing::info;
 
-    /// Maximum accepted token length (defensive upper bound; real ACME tokens
-    /// are ~43 base64url chars from 32 random bytes, but the RFC does not
-    /// fix a length).
-    const MAX_TOKEN_LEN: usize = 128;
-
-    /// Validate an ACME HTTP-01 challenge token before using it as a path
-    /// segment or URL component.
-    ///
-    /// RFC 8555 §8.3 requires the token to be a base64url string. We accept
-    /// only `[A-Za-z0-9_-]{1,128}` and reject anything that could be
-    /// interpreted as a path traversal, separator, or empty segment. This
-    /// guards against a malicious or compromised ACME server (or unsafe
-    /// `serve-http01 --token` input) writing/removing files outside the
-    /// challenge directory.
-    pub fn validate_token(token: &str) -> Result<()> {
-        if token.is_empty() {
-            bail!("ACME challenge token is empty");
-        }
-        if token.len() > MAX_TOKEN_LEN {
-            bail!(
-                "ACME challenge token is {} bytes; refusing (max {})",
-                token.len(),
-                MAX_TOKEN_LEN
-            );
-        }
-        for b in token.as_bytes() {
-            let ok = matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_');
-            if !ok {
-                bail!(
-                    "ACME challenge token contains invalid character {:?}; \
-                     expected base64url alphabet [A-Za-z0-9_-]",
-                    *b as char
-                );
-            }
-        }
-        Ok(())
-    }
-
     /// The key authorization value to serve as the response body.
-    pub fn response_body(token: &str, account_key: &AccountKey) -> String {
+    pub fn response_body(token: &ChallengeToken, account_key: &AccountKey) -> String {
         key_authorization(token, account_key)
     }
 
     /// The well-known path the ACME server will request.
-    pub fn challenge_path(token: &str) -> String {
+    pub fn challenge_path(token: &ChallengeToken) -> String {
         format!("/.well-known/acme-challenge/{token}")
     }
 
@@ -75,16 +38,16 @@ pub mod http01 {
     ///
     /// Returns the full path to the written file (for cleanup).
     ///
-    /// The token is validated against [`validate_token`] before any
-    /// filesystem operation. The file itself is created with `O_NOFOLLOW`
-    /// where supported to avoid following an attacker-planted symlink in a
-    /// shared webroot.
+    /// The token is a [`ChallengeToken`], which guarantees the RFC 8555 §8.1
+    /// `[A-Za-z0-9_-]{1,128}` base64url alphabet — no path-traversal or
+    /// separator bytes can appear in `file_path`. The file itself is created
+    /// with `O_NOFOLLOW` where supported to avoid following an
+    /// attacker-planted symlink in a shared webroot.
     pub fn write_challenge_file(
         challenge_dir: &Path,
-        token: &str,
+        token: &ChallengeToken,
         account_key: &AccountKey,
     ) -> Result<PathBuf> {
-        validate_token(token)?;
         let auth = response_body(token, account_key);
         let well_known = challenge_dir.join(".well-known").join("acme-challenge");
         std::fs::create_dir_all(&well_known).with_context(|| {
@@ -93,7 +56,7 @@ pub mod http01 {
                 well_known.display()
             )
         })?;
-        let file_path = well_known.join(token);
+        let file_path = well_known.join(token.as_str());
 
         use std::fs::OpenOptions;
         use std::io::Write;
@@ -215,7 +178,7 @@ pub mod http01 {
     /// Spin up a minimal TCP server that answers ACME HTTP-01 validation
     /// requests until aborted. Multiple concurrent probes from a CA's
     /// multi-perspective validation are served in parallel.
-    pub async fn serve(token: &str, account_key: &AccountKey, port: u16) -> Result<()> {
+    pub async fn serve(token: &ChallengeToken, account_key: &AccountKey, port: u16) -> Result<()> {
         let auth = response_body(token, account_key);
         let path = challenge_path(token);
         let listener = bind_or_suggest(port).await?;
@@ -232,7 +195,7 @@ pub mod dns01 {
 
     /// The value for the `_acme-challenge.<domain>` TXT record:
     ///   `base64url(SHA-256(keyAuthorization))`
-    pub fn txt_record_value(token: &str, account_key: &AccountKey) -> String {
+    pub fn txt_record_value(token: &ChallengeToken, account_key: &AccountKey) -> String {
         let auth = key_authorization(token, account_key);
         let digest = Sha256::digest(auth.as_bytes());
         URL_SAFE_NO_PAD.encode(digest)
@@ -255,7 +218,7 @@ pub mod dns01 {
     /// Print human-readable instructions for manual DNS record setup.
     pub fn print_instructions(
         domain: &crate::types::DnsName,
-        token: &str,
+        token: &ChallengeToken,
         account_key: &AccountKey,
     ) {
         let name = record_name(domain);
@@ -360,7 +323,7 @@ pub mod tlsalpn01 {
     ///
     /// This is the SHA-256 hash of the key authorization wrapped in an ASN.1
     /// OCTET STRING (tag 0x04, length 0x20, 32 bytes of hash).
-    pub fn acme_identifier_value(token: &str, account_key: &AccountKey) -> Vec<u8> {
+    pub fn acme_identifier_value(token: &ChallengeToken, account_key: &AccountKey) -> Vec<u8> {
         let auth = key_authorization(token, account_key);
         let hash = Sha256::digest(auth.as_bytes());
         let mut der = Vec::with_capacity(34);
@@ -371,7 +334,7 @@ pub mod tlsalpn01 {
     }
 
     /// Print human-readable instructions for manual TLS-ALPN-01 setup.
-    pub fn print_instructions(domain: &str, token: &str, account_key: &AccountKey) {
+    pub fn print_instructions(domain: &str, token: &ChallengeToken, account_key: &AccountKey) {
         let value = acme_identifier_value(token, account_key);
         let hex: String = value.iter().map(|b| format!("{b:02x}")).collect();
         outln!();

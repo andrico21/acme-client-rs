@@ -12,7 +12,7 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::client::AcmeClient;
-use crate::types::{ChallengeType, DnsName, Order};
+use crate::types::{ChallengeToken, ChallengeType, DnsName, Order};
 
 use super::RunContext;
 
@@ -29,7 +29,7 @@ pub(super) struct DnsPending {
     pub authz_url: url::Url,
     pub domain: DnsName,
     pub challenge_url: url::Url,
-    pub token: String,
+    pub token: Option<ChallengeToken>,
     pub txt_name: DnsName,
     pub txt_value: String,
 }

@@ -13,7 +13,7 @@ use tracing::info;
 
 use crate::client::AcmeClient;
 use crate::outln;
-use crate::types::Authorization;
+use crate::types::{Authorization, ChallengeToken};
 
 use super::super::super::run_hook;
 use super::super::RunContext;
@@ -32,7 +32,7 @@ pub(super) async fn provision_http01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
     authz: &Authorization,
-    token: &str,
+    token: &ChallengeToken,
     challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     let mut result = ProvisionResult::default();
@@ -108,7 +108,7 @@ pub(super) async fn provision_dns01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
     authz: &Authorization,
-    token: &str,
+    token: &ChallengeToken,
     challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     let dns = authz.identifier.as_dns().ok_or_else(|| {
@@ -157,7 +157,7 @@ pub(super) async fn provision_dns01(
             &[
                 ("ACME_DOMAIN", dns.as_str()),
                 ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                ("ACME_TOKEN", token),
+                ("ACME_TOKEN", token.as_str()),
                 ("ACME_KEY_AUTH", &key_auth),
                 ("ACME_TXT_NAME", txt_name.as_str()),
                 ("ACME_TXT_VALUE", &txt_value),
@@ -255,7 +255,7 @@ pub(super) async fn provision_tlsalpn01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
     authz: &Authorization,
-    token: &str,
+    token: &ChallengeToken,
     challenge_url: &url::Url,
 ) -> Result<ProvisionResult> {
     if !ctx.silent {
@@ -275,7 +275,7 @@ pub(super) async fn provision_tlsalpn01(
             &[
                 ("ACME_DOMAIN", &authz.identifier.value_str()),
                 ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                ("ACME_TOKEN", token),
+                ("ACME_TOKEN", token.as_str()),
                 ("ACME_KEY_AUTH", &key_auth),
             ],
         )?;
