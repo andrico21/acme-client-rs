@@ -14,7 +14,7 @@ use crate::types::{AuthorizationStatus, ChallengeType, Order};
 
 use super::super::super::{
     dns_txt_check, is_challenge_failed, run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent,
-    run_hook,
+    run_dns_hook_create, run_hook,
 };
 use super::super::RunContext;
 use super::DnsPending;
@@ -56,73 +56,62 @@ pub(super) async fn run_phased_dns(
                 )
             })?;
 
-        let (token, txt_name, txt_value) = if ctx.challenge_type == ChallengeType::Dns01 {
-            let dns = authz.identifier.as_dns().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "dns-01 challenges are not supported for IP identifiers ({})",
-                    authz.identifier.value_str()
-                )
-            })?;
-            let t = ch.token.clone().context("challenge has no token")?;
-            let name = crate::challenge::dns01::record_name(dns);
-            let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
-            (Some(t), name, value)
-        } else {
-            // dns-persist-01
-            let dns = authz.identifier.as_dns().ok_or_else(|| {
-                anyhow::anyhow!(
-                    "dns-persist-01 challenges are not supported for IP identifiers ({})",
-                    authz.identifier.value_str()
-                )
-            })?;
-            let issuer_names = ch
-                .issuer_domain_names
-                .as_ref()
-                .context("dns-persist-01 challenge has no issuer-domain-names")?;
-            if issuer_names.is_empty() || issuer_names.len() > 10 {
-                anyhow::bail!(
-                    "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
-                );
-            }
-            let account_uri = client
-                .account_url()
-                .context("account URL not known - cannot construct dns-persist-01 record")?
-                .to_string();
-            let name = crate::challenge::dns_persist01::record_name(dns);
-            let value = crate::challenge::dns_persist01::txt_record_value(
-                &issuer_names[0],
-                &account_uri,
-                ctx.persist_policy,
-                ctx.persist_until,
-            )?;
-            (None, name, value)
-        };
+        let (token, dns_for_pending, txt_name, txt_value) =
+            if ctx.challenge_type == ChallengeType::Dns01 {
+                let dns = authz.identifier.as_dns().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dns-01 challenges are not supported for IP identifiers ({})",
+                        authz.identifier.value_str()
+                    )
+                })?;
+                let t = ch.token.clone().context("challenge has no token")?;
+                let name = crate::challenge::dns01::record_name(dns);
+                let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
+                (Some(t), dns.clone(), name, value)
+            } else {
+                // dns-persist-01
+                let dns = authz.identifier.as_dns().ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "dns-persist-01 challenges are not supported for IP identifiers ({})",
+                        authz.identifier.value_str()
+                    )
+                })?;
+                let issuer_names = ch
+                    .issuer_domain_names
+                    .as_ref()
+                    .context("dns-persist-01 challenge has no issuer-domain-names")?;
+                if issuer_names.is_empty() || issuer_names.len() > 10 {
+                    anyhow::bail!(
+                        "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
+                    );
+                }
+                let account_uri = client
+                    .account_url()
+                    .context("account URL not known - cannot construct dns-persist-01 record")?
+                    .to_string();
+                let name = crate::challenge::dns_persist01::record_name(dns);
+                let value = crate::challenge::dns_persist01::txt_record_value(
+                    &issuer_names[0],
+                    &account_uri,
+                    ctx.persist_policy,
+                    ctx.persist_until,
+                )?;
+                (None, dns.clone(), name, value)
+            };
 
         // Run create hook
         info!(
             "Calling DNS hook (create): {} for {}",
             hook.display(),
-            authz.identifier.value_str()
+            dns_for_pending.as_str()
         );
-        let status = std::process::Command::new(hook)
-            .env("ACME_DOMAIN", authz.identifier.value_str().as_ref())
-            .env("ACME_TXT_NAME", txt_name.as_str())
-            .env("ACME_TXT_VALUE", &txt_value)
-            .env("ACME_ACTION", "create")
-            .status()
-            .with_context(|| format!("failed to run DNS hook: {}", hook.display()))?;
-        if !status.success() {
+        if let Err(e) = run_dns_hook_create(hook, &dns_for_pending, &txt_name, &txt_value) {
             // Clean up any records we already created
             for p in &pending {
                 run_dns_hook_cleanup_silent(hook, &p.domain, &p.txt_name, &p.txt_value);
             }
-            anyhow::bail!("DNS hook (create) exited with {status}");
+            return Err(e);
         }
-        let dns_for_pending = authz
-            .identifier
-            .as_dns()
-            .expect("DNS branch above guarantees DNS identifier")
-            .clone();
         ctx.cleanup_registry
             .register(crate::cleanup::CleanupAction::DnsRecord {
                 hook: hook.to_path_buf(),
