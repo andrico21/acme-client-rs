@@ -1,4 +1,4 @@
-﻿# Test Cases - acme-client-rs
+# Test Cases - acme-client-rs
 
 This document describes test cases for the ACME client using **Pebble** as the test CA.
 
@@ -446,7 +446,7 @@ acme --insecure --account-key e2e-account.key run --contact e2e@example.com --ch
   Order status: pending
   Authorization for e2e-test.example.com - status: pending
   HTTP-01 server listening on 0.0.0.0:5002
-    Challenge response sent - waiting for validationâ€¦
+    Challenge response sent - waiting for validation…
     Authorization status: valid
   Order status: valid
   Certificate saved to certificate.pem
@@ -641,7 +641,7 @@ acme --account-key test-account.key order test.example.com
 ```
 
 **Expected:**
-- The client creates a new account automatically (via `build_client` â†’ `AcmeClient::new`), or
+- The client creates a new account automatically (via `build_client` → `AcmeClient::new`), or
 - If using the individual `order` command without prior `account`, the signed request uses JWK mode and the CA may reject it
 
 > **Note:** The `run` command handles this automatically by calling `create_account` first.
@@ -650,7 +650,7 @@ acme --account-key test-account.key order test.example.com
 
 ## TC-32: badNonce Retry
 
-**Goal:** Verify the client retries on `badNonce` errors (RFC 8555 Â§6.5).
+**Goal:** Verify the client retries on `badNonce` errors (RFC 8555 §6.5).
 
 > Use `PEBBLE_WFE_NONCEREJECT=50` to make Pebble randomly reject 50% of nonces.
 
@@ -1482,41 +1482,41 @@ Tested against a **step-ca** ACME server on **2026-03-11** using version **1.7.0
 
 | TC | Test | Key | Challenge | Result |
 |----|------|-----|-----------|--------|
-| 01 | Generate key (ES256) | ES256 | - | âœ… Pass |
-| 01 | Generate key (ES512) | ES512 | - | âœ… Pass |
-| 01 | Generate key (RSA2048) | RSA2048 | - | âœ… Pass |
-| 01 | Generate key (Ed25519) | Ed25519 | - | âœ… Pass |
-| 02 | Generate key - overwrite | ES256 | - | âœ… Pass |
-| 03 | Account creation (standalone) | ES256 | - | âœ… Pass |
-| 04 | Account idempotent lookup | ES256 | - | âœ… Pass |
-| 05 | Account - no contact | ES256 | - | âœ… Pass |
-| 06 | Place an order (single domain) | ES256 | - | âœ… Pass |
-| 07 | Place an order - multiple domains (SAN) | ES256 | - | âœ… Pass |
-| 08 | Fetch authorization | ES256 | - | âœ… Pass |
-| 09 | Respond to challenge | ES256 | HTTP-01 | âœ… Pass |
-| 10 | Serve HTTP-01 standalone + curl | ES256 | HTTP-01 | âœ… Pass |
-| 11 | Serve HTTP-01 - port busy | ES256 | HTTP-01 | âœ… Pass |
-| 12 | Show DNS-01 instructions | ES256 | DNS-01 | âœ… Pass |
-| 13 | Finalize order | ES256 | - | âœ… Pass |
-| 14 | Poll order status | ES256 | - | âœ… Pass |
-| 15 | Download certificate | ES256 | - | âœ… Pass |
-| 16 | Revoke cert + double-revoke error | ES256 | - | âœ… Pass |
-| 17 | Revoke with reason code (4=superseded) | ES256 | - | âœ… Pass |
-| 18 | Account deactivation | ES256 | - | âœ… Pass |
-| 19 | Order after deactivation (rejected) | ES256 | - | âœ… Pass |
-| 20 | Full e2e run + cert issuance | ES256 | HTTP-01 | âœ… Pass |
-| 20 | Full e2e run + cert issuance | ES384 | HTTP-01 | âœ… Pass |
-| 20 | Full e2e run + revoke | ES512 | HTTP-01 | âœ… Pass |
-| 20 | Full e2e run + revoke | RSA2048 | HTTP-01 | âœ… Pass |
-| 20 | Full e2e run + revoke | Ed25519 | HTTP-01 | âœ… Pass |
-| 23 | Environment variable configuration | ES256 | - | âœ… Pass |
-| 24 | Global args after subcommand | ES256 | - | âœ… Pass |
-| 25 | Missing key file | - | - | âœ… Pass |
-| 26 | Invalid directory URL | ES256 | - | âœ… Pass |
-| 27 | Directory 404 | ES256 | - | âœ… Pass |
-| 28 | Rejected identifier (name constraints) | ES256 | HTTP-01 | âœ… Pass |
-| 29 | `RUST_LOG=debug` verbose output | ES256 | - | âœ… Pass |
-| 30 | Wrong port - warning + clean failure | ES256 | HTTP-01 | âœ… Pass |
-| 31 | Missing account URL - handled gracefully | ES256 | - | âœ… Pass |
-| 22 | Multi-SAN e2e (2 domains) | ES256 | HTTP-01 | âœ… Pass |
-| 21 | DNS-01 e2e (interactive) | ES256 | DNS-01 | âœ… Pass |
+| 01 | Generate key (ES256) | ES256 | - | ✅ Pass |
+| 01 | Generate key (ES512) | ES512 | - | ✅ Pass |
+| 01 | Generate key (RSA2048) | RSA2048 | - | ✅ Pass |
+| 01 | Generate key (Ed25519) | Ed25519 | - | ✅ Pass |
+| 02 | Generate key - overwrite | ES256 | - | ✅ Pass |
+| 03 | Account creation (standalone) | ES256 | - | ✅ Pass |
+| 04 | Account idempotent lookup | ES256 | - | ✅ Pass |
+| 05 | Account - no contact | ES256 | - | ✅ Pass |
+| 06 | Place an order (single domain) | ES256 | - | ✅ Pass |
+| 07 | Place an order - multiple domains (SAN) | ES256 | - | ✅ Pass |
+| 08 | Fetch authorization | ES256 | - | ✅ Pass |
+| 09 | Respond to challenge | ES256 | HTTP-01 | ✅ Pass |
+| 10 | Serve HTTP-01 standalone + curl | ES256 | HTTP-01 | ✅ Pass |
+| 11 | Serve HTTP-01 - port busy | ES256 | HTTP-01 | ✅ Pass |
+| 12 | Show DNS-01 instructions | ES256 | DNS-01 | ✅ Pass |
+| 13 | Finalize order | ES256 | - | ✅ Pass |
+| 14 | Poll order status | ES256 | - | ✅ Pass |
+| 15 | Download certificate | ES256 | - | ✅ Pass |
+| 16 | Revoke cert + double-revoke error | ES256 | - | ✅ Pass |
+| 17 | Revoke with reason code (4=superseded) | ES256 | - | ✅ Pass |
+| 18 | Account deactivation | ES256 | - | ✅ Pass |
+| 19 | Order after deactivation (rejected) | ES256 | - | ✅ Pass |
+| 20 | Full e2e run + cert issuance | ES256 | HTTP-01 | ✅ Pass |
+| 20 | Full e2e run + cert issuance | ES384 | HTTP-01 | ✅ Pass |
+| 20 | Full e2e run + revoke | ES512 | HTTP-01 | ✅ Pass |
+| 20 | Full e2e run + revoke | RSA2048 | HTTP-01 | ✅ Pass |
+| 20 | Full e2e run + revoke | Ed25519 | HTTP-01 | ✅ Pass |
+| 23 | Environment variable configuration | ES256 | - | ✅ Pass |
+| 24 | Global args after subcommand | ES256 | - | ✅ Pass |
+| 25 | Missing key file | - | - | ✅ Pass |
+| 26 | Invalid directory URL | ES256 | - | ✅ Pass |
+| 27 | Directory 404 | ES256 | - | ✅ Pass |
+| 28 | Rejected identifier (name constraints) | ES256 | HTTP-01 | ✅ Pass |
+| 29 | `RUST_LOG=debug` verbose output | ES256 | - | ✅ Pass |
+| 30 | Wrong port - warning + clean failure | ES256 | HTTP-01 | ✅ Pass |
+| 31 | Missing account URL - handled gracefully | ES256 | - | ✅ Pass |
+| 22 | Multi-SAN e2e (2 domains) | ES256 | HTTP-01 | ✅ Pass |
+| 21 | DNS-01 e2e (interactive) | ES256 | DNS-01 | ✅ Pass |

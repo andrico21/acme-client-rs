@@ -111,7 +111,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 Клиент выводит TXT-запись для создания, затем ожидает нажатия Enter:
 
-```
+```text
 === DNS-01 Challenge ===
 Create a DNS TXT record:
   Name:  _acme-challenge.your.domain.com
@@ -200,7 +200,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 Клиент выводит TXT-запись для создания, затем ожидает нажатия Enter:
 
-```
+```text
 === DNS-PERSIST-01 Challenge ===
 Create a DNS TXT record:
   Name:  _validation-persist.your.domain.com
@@ -223,7 +223,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 Создаётся запись вида:
 
-```
+```text
 letsencrypt.org; accounturi=https://acme-server/acme/acct/123; policy=wildcard; persistUntil=1767225600
 ```
 
@@ -535,7 +535,7 @@ acme-client-rs show-config --verbose
 
 Протокол ACME (RFC 8555) автоматизирует выпуск сертификатов через процесс вызов-ответ. Вот как каждый шаг соответствует командам `acme-client-rs`:
 
-```
+```text
 Клиент                                ACME-сервер (напр. Let's Encrypt)
   |                                         |
   |  1. GET /directory                      |
@@ -738,7 +738,7 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 
 Вывод:
 
-```
+```text
 CertID:   <base64url(AKI)>.<base64url(Serial)>
 Suggested renewal window:
   Start:  2026-04-01T00:00:00Z
@@ -793,7 +793,7 @@ acme-client-rs run --ari --days 30 --cert-output /etc/ssl/certs/example.com.pem 
 
 **Без `--reissue-on-mismatch`** (безопасное поведение по умолчанию): фиксирует несовпадение и пропускает — существующий сертификат никогда не перезаписывается. Это защищает рабочие сертификаты от случайного изменения доменов:
 
-```
+```text
 $ acme-client-rs run --days 30 --cert-output cert.pem example.com api.example.com
 Domain mismatch: cert has [example.com, www.example.com], requested [api.example.com, example.com] (added: [api.example.com], removed: [www.example.com]). Use --reissue-on-mismatch to override.
 ```

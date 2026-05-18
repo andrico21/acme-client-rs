@@ -111,7 +111,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 The client prints the TXT record to create, then waits for Enter:
 
-```
+```text
 === DNS-01 Challenge ===
 Create a DNS TXT record:
   Name:  _acme-challenge.your.domain.com
@@ -200,7 +200,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 The client prints the TXT record to create, then waits for Enter:
 
-```
+```text
 === DNS-PERSIST-01 Challenge ===
 Create a DNS TXT record:
   Name:  _validation-persist.your.domain.com
@@ -223,7 +223,7 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 This creates a record like:
 
-```
+```text
 letsencrypt.org; accounturi=https://acme-server/acme/acct/123; policy=wildcard; persistUntil=1767225600
 ```
 
@@ -535,7 +535,7 @@ Each value is annotated with its source: `(cli)`, `(env)`, `(config)`, or `(defa
 
 The ACME protocol (RFC 8555) automates certificate issuance through a challenge-response flow. Here's how each step maps to `acme-client-rs` commands:
 
-```
+```text
 Client                                ACME Server (e.g. Let's Encrypt)
   |                                         |
   |  1. GET /directory                      |
@@ -740,7 +740,7 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 
 Output:
 
-```
+```text
 CertID:   <base64url(AKI)>.<base64url(Serial)>
 Suggested renewal window:
   Start:  2026-04-01T00:00:00Z
@@ -795,7 +795,7 @@ When the certificate file already exists, the tool compares the requested domain
 
 **Without `--reissue-on-mismatch`** (safe default): logs the mismatch and skips — the existing certificate is never overwritten. This protects production certificates from accidental domain changes:
 
-```
+```text
 $ acme-client-rs run --days 30 --cert-output cert.pem example.com api.example.com
 Domain mismatch: cert has [example.com, www.example.com], requested [api.example.com, example.com] (added: [api.example.com], removed: [www.example.com]). Use --reissue-on-mismatch to override.
 ```

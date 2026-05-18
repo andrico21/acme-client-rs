@@ -573,7 +573,9 @@ graph TD
 
 ### Run Flow Details
 
-1. **Config precedence**: CLI > config file > env > defaults. Config overrides env in **both** modes. In config_mode, non-secret env vars (ACME_DIRECTORY_URL, ACME_ACCOUNT_KEY_FILE, etc.) are actively stripped.
+1. **Config precedence**:
+   - **Without `--config` / `ACME_CONFIG`** (legacy mode): CLI > env > defaults.
+   - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_CONNECT_TIMEOUT`) are actively stripped so the config file is the single source of truth. Secret/safety env vars (`ACME_INSECURE`, `ACME_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
 2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9702) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
 3. **Authorization path split**: `--dns-hook` + DNS challenge type triggers **phased parallel** (5 phases with concurrent propagation checks); everything else goes **sequential**. Sequential DNS paths are always manual (no hook) — hook-based DNS always takes the parallel path.
 4. **Parallel phase 2 is conditional**: DNS propagation wait (phase 2) only runs if `--dns-wait` is set. Without it, phase 1 goes directly to phase 3.
