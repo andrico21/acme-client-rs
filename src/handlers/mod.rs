@@ -38,8 +38,31 @@ pub(crate) use run_flow::cmd_run;
 
 use anyhow::{Context, Result};
 
+use crate::cli::{Cli, OutputFormat};
 use crate::dns_check::DnsChecker;
+use crate::outln;
 use crate::types::{Challenge, ChallengeStatus, ChallengeType};
+
+// ── Result emission (JSON or text, respects --silent) ──────────────────────
+
+/// Emit a command's result in either JSON or text form, honoring `--silent`.
+///
+/// The `json` closure is only invoked on the JSON path, so callers can build
+/// `serde_json::Value` lazily without paying for it in text or silent mode.
+pub(super) fn emit_result(
+    cli: &Cli,
+    json: impl FnOnce() -> serde_json::Value,
+    text: impl FnOnce(),
+) {
+    if cli.silent {
+        return;
+    }
+    if cli.output_format == OutputFormat::Json {
+        outln!("{}", json());
+    } else {
+        text();
+    }
+}
 
 // ── DNS TXT propagation check (hickory-resolver, see dns_check.rs) ─────────
 

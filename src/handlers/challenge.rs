@@ -163,25 +163,24 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
 
     let (authz, authz_url) = client.new_authorization(identifier).await?;
 
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "pre-authorize",
-                    "identifier": authz.identifier.value_str(),
-                    "identifier_type": authz.identifier.type_str(),
-                    "status": format!("{}", authz.status),
-                    "authz_url": authz_url,
-                    "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
-                        "type": ch.challenge_type,
-                        "status": format!("{}", ch.status),
-                        "url": ch.url,
-                        "token": ch.token,
-                    })).collect::<Vec<_>>(),
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "pre-authorize",
+                "identifier": authz.identifier.value_str(),
+                "identifier_type": authz.identifier.type_str(),
+                "status": format!("{}", authz.status),
+                "authz_url": authz_url,
+                "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
+                    "type": ch.challenge_type,
+                    "status": format!("{}", ch.status),
+                    "url": ch.url,
+                    "token": ch.token,
+                })).collect::<Vec<_>>(),
+            })
+        },
+        || {
             outln!("Authorization URL: {authz_url}");
             outln!(
                 "Identifier:  {} ({})",
@@ -201,7 +200,7 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
                     }
                 }
             }
-        }
-    }
+        },
+    );
     Ok(())
 }

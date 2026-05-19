@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::cli::{Cli, OutputFormat};
+use crate::cli::Cli;
 use crate::client::compute_cert_id;
 use crate::csr::pem_to_der;
 use crate::{build_client, outln};
@@ -22,20 +22,17 @@ pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8
         .with_context(|| format!("failed to read certificate from {}", cert_path.display()))?;
     let cert_der = pem_to_der(&pem_data)?;
     client.revoke_certificate(&cert_der, reason).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "revoke-cert",
-                    "path": cert_path.display().to_string(),
-                    "reason": reason,
-                })
-            );
-        } else {
-            outln!("Certificate revoked");
-        }
-    }
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "revoke-cert",
+                "path": cert_path.display().to_string(),
+                "reason": reason,
+            })
+        },
+        || outln!("Certificate revoked"),
+    );
     Ok(())
 }
 
@@ -53,21 +50,20 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<(
     let cert_id = compute_cert_id(&cert_der)?;
     let (info, retry_after) = client.get_renewal_info(&cert_der).await?;
 
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "renewal-info",
-                    "cert_id": cert_id,
-                    "suggested_window": {
-                        "start": info.suggested_window.start,
-                        "end": info.suggested_window.end,
-                    },
-                    "retry_after": retry_after,
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "renewal-info",
+                "cert_id": cert_id,
+                "suggested_window": {
+                    "start": info.suggested_window.start,
+                    "end": info.suggested_window.end,
+                },
+                "retry_after": retry_after,
+            })
+        },
+        || {
             outln!("CertID:   {cert_id}");
             outln!("Suggested renewal window:");
             outln!("  Start:  {}", info.suggested_window.start);
@@ -99,7 +95,7 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<(
             if let Some(secs) = retry_after {
                 outln!("Retry-After: {secs}s");
             }
-        }
-    }
+        },
+    );
     Ok(())
 }

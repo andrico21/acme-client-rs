@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
+use crate::cli::{CertKeyAlgorithm, Cli};
 use crate::csr::{encrypt_private_key, generate_csr};
 use crate::types::Identifier;
 use crate::{build_client, outln};
@@ -31,20 +31,19 @@ pub(crate) async fn cmd_order(
         .map(|d| Identifier::from_str_auto(d))
         .collect::<Result<Vec<_>>>()?;
     let (order, order_url) = client.new_order(ids, profile).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "order",
-                    "order_url": order_url,
-                    "status": format!("{}", order.status),
-                    "finalize_url": order.finalize,
-                    "authorizations": order.authorizations,
-                    "profile": order.profile,
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "order",
+                "order_url": order_url,
+                "status": format!("{}", order.status),
+                "finalize_url": order.finalize,
+                "authorizations": order.authorizations,
+                "profile": order.profile,
+            })
+        },
+        || {
             outln!("Order URL:    {order_url}");
             outln!("Status:       {}", order.status);
             if let Some(ref p) = order.profile {
@@ -54,8 +53,8 @@ pub(crate) async fn cmd_order(
             for url in &order.authorizations {
                 outln!("  authz: {url}");
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
@@ -81,36 +80,21 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     let dir: crate::types::Directory = resp.json().await.context("failed to parse directory")?;
     let profiles = dir.meta.as_ref().and_then(|m| m.profiles.as_ref());
     match profiles {
-        Some(profiles) if !cli.silent => {
-            if cli.output_format == OutputFormat::Json {
-                outln!(
-                    "{}",
-                    serde_json::json!({
-                        "command": "list-profiles",
-                        "profiles": profiles,
-                    })
-                );
-            } else {
+        Some(profiles) => super::emit_result(
+            cli,
+            || serde_json::json!({ "command": "list-profiles", "profiles": profiles }),
+            || {
                 outln!("Available certificate profiles:");
                 for (name, description) in profiles {
                     outln!("  {name}: {description}");
                 }
-            }
-        }
-        None if !cli.silent => {
-            if cli.output_format == OutputFormat::Json {
-                outln!(
-                    "{}",
-                    serde_json::json!({
-                        "command": "list-profiles",
-                        "profiles": null,
-                    })
-                );
-            } else {
-                outln!("Server does not advertise any profiles.");
-            }
-        }
-        _ => {}
+            },
+        ),
+        None => super::emit_result(
+            cli,
+            || serde_json::json!({ "command": "list-profiles", "profiles": null }),
+            || outln!("Server does not advertise any profiles."),
+        ),
     }
     Ok(())
 }
@@ -125,24 +109,23 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
         .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
     let authz = client.get_authorization(&url).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "get-authz",
-                    "identifier": authz.identifier.value_str(),
-                    "identifier_type": authz.identifier.type_str(),
-                    "status": format!("{}", authz.status),
-                    "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
-                        "type": ch.challenge_type,
-                        "status": format!("{}", ch.status),
-                        "url": ch.url,
-                        "token": ch.token,
-                    })).collect::<Vec<_>>(),
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "get-authz",
+                "identifier": authz.identifier.value_str(),
+                "identifier_type": authz.identifier.type_str(),
+                "status": format!("{}", authz.status),
+                "challenges": authz.challenges.iter().map(|ch| serde_json::json!({
+                    "type": ch.challenge_type,
+                    "status": format!("{}", ch.status),
+                    "url": ch.url,
+                    "token": ch.token,
+                })).collect::<Vec<_>>(),
+            })
+        },
+        || {
             outln!(
                 "Identifier: {} ({})",
                 authz.identifier.value_str(),
@@ -155,8 +138,8 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
                     outln!("    token: {t}");
                 }
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
@@ -170,19 +153,11 @@ pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
         .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
     let ch = client.respond_to_challenge(&url).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "respond-challenge",
-                    "status": format!("{}", ch.status),
-                })
-            );
-        } else {
-            outln!("Challenge status: {}", ch.status);
-        }
-    }
+    super::emit_result(
+        cli,
+        || serde_json::json!({ "command": "respond-challenge", "status": format!("{}", ch.status) }),
+        || outln!("Challenge status: {}", ch.status),
+    );
     Ok(())
 }
 
@@ -241,19 +216,18 @@ pub(crate) async fn cmd_finalize(
     }
 
     let order = client.finalize_order(&finalize_url, &csr_der).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "finalize",
-                    "status": format!("{}", order.status),
-                    "certificate_url": order.certificate,
-                    "key_path": key_output.display().to_string(),
-                    "key_encrypted": key_encrypted,
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "finalize",
+                "status": format!("{}", order.status),
+                "certificate_url": order.certificate,
+                "key_path": key_output.display().to_string(),
+                "key_encrypted": key_encrypted,
+            })
+        },
+        || {
             if key_encrypted {
                 outln!("Private key saved to {} (encrypted)", key_output.display());
             } else {
@@ -263,8 +237,8 @@ pub(crate) async fn cmd_finalize(
             if let Some(ref cert_url) = order.certificate {
                 outln!("Certificate URL: {cert_url}");
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
@@ -278,23 +252,22 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
         .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
     let order = client.poll_order(&url).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "poll-order",
-                    "status": format!("{}", order.status),
-                    "certificate_url": order.certificate,
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "poll-order",
+                "status": format!("{}", order.status),
+                "certificate_url": order.certificate,
+            })
+        },
+        || {
             outln!("Order status: {}", order.status);
             if let Some(ref cert_url) = order.certificate {
                 outln!("Certificate URL: {cert_url}");
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
@@ -310,18 +283,10 @@ pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) ->
     let cert = client.download_certificate(&url).await?;
     std::fs::write(output, &cert)
         .with_context(|| format!("failed to write certificate to {}", output.display()))?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "download-cert",
-                    "path": output.display().to_string(),
-                })
-            );
-        } else {
-            outln!("Certificate saved to {}", output.display());
-        }
-    }
+    super::emit_result(
+        cli,
+        || serde_json::json!({ "command": "download-cert", "path": output.display().to_string() }),
+        || outln!("Certificate saved to {}", output.display()),
+    );
     Ok(())
 }

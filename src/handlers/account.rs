@@ -72,42 +72,38 @@ pub(crate) async fn cmd_account(
         (kid.as_str(), key.expose_secret().as_slice())
     });
     let account = client.create_account(contact, agree_tos, eab_ref).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "account",
-                    "status": format!("{}", account.status),
-                    "url": client.account_url(),
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "account",
+                "status": format!("{}", account.status),
+                "url": client.account_url(),
+            })
+        },
+        || {
             outln!("Account status: {}", account.status);
             if let Some(url) = client.account_url() {
                 outln!("Account URL:    {url}");
             }
-        }
-    }
+        },
+    );
     Ok(())
 }
 
 pub(crate) async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     let mut client = build_client(cli).await?;
     let account = client.deactivate_account().await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "deactivate-account",
-                    "status": format!("{}", account.status),
-                })
-            );
-        } else {
-            outln!("Account status: {}", account.status);
-        }
-    }
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "deactivate-account",
+                "status": format!("{}", account.status),
+            })
+        },
+        || outln!("Account status: {}", account.status),
+    );
     Ok(())
 }
 
@@ -129,19 +125,18 @@ pub(crate) async fn cmd_key_rollover(
     }
 
     client.key_change(&new_key).await?;
-    if !cli.silent {
-        if cli.output_format == OutputFormat::Json {
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "key-rollover",
-                    "new_key": new_key_path.display().to_string(),
-                })
-            );
-        } else {
+    super::emit_result(
+        cli,
+        || {
+            serde_json::json!({
+                "command": "key-rollover",
+                "new_key": new_key_path.display().to_string(),
+            })
+        },
+        || {
             outln!("Account key rolled over successfully");
             outln!("From now on, use the new key: {}", new_key_path.display());
-        }
-    }
+        },
+    );
     Ok(())
 }
