@@ -237,7 +237,7 @@ acme --account-key test-account.key --account-url <account-url> respond-challeng
 
 ```sh
 # Terminal 1: start server
-acme --account-key test-account.key serve-http01 --token <token> --port 5002
+acme --account-key test-account.key serve-http-01 --token <token> --port 5002
 
 # Terminal 2: simulate validation request
 curl http://localhost:5002/.well-known/acme-challenge/<token>
@@ -254,7 +254,7 @@ curl http://localhost:5002/.well-known/acme-challenge/<token>
 **Goal:** Write the challenge file to a directory instead of starting a server.
 
 ```sh
-acme --account-key test-account.key serve-http01 --token <token> --challenge-dir /var/www/acme
+acme --account-key test-account.key serve-http-01 --token <token> --challenge-dir /var/www/acme
 ```
 
 **Expected:**
@@ -272,7 +272,7 @@ acme --account-key test-account.key serve-http01 --token <token> --challenge-dir
 python -m http.server 5002
 
 # Terminal 2: try to serve
-acme --account-key test-account.key serve-http01 --token dummy --port 5002
+acme --account-key test-account.key serve-http-01 --token dummy --port 5002
 ```
 
 **Expected:**
@@ -294,7 +294,7 @@ acme --account-key test-account.key serve-http01 --token dummy --port 5002
 **Goal:** Display the TXT record value for DNS-01 validation.
 
 ```sh
-acme --account-key test-account.key show-dns01 --domain test.example.com --token <token>
+acme --account-key test-account.key show-dns-01 --domain test.example.com --token <token>
 ```
 
 **Expected:**
@@ -622,7 +622,7 @@ RUST_LOG=debug acme --account-key test-account.key account --contact test@exampl
 **Goal:** HTTP-01 server binds to a non-default port.
 
 ```sh
-acme --account-key test-account.key serve-http01 --token test-token --port 8080
+acme --account-key test-account.key serve-http-01 --token test-token --port 8080
 ```
 
 **Expected:**
@@ -889,12 +889,12 @@ acme --insecure --output-format json --account-key json-key.key --account-url <u
 
 ---
 
-## TC-53: show-dns01 --output-format json
+## TC-53: show-dns-01 --output-format json
 
-**Goal:** JSON output from `show-dns01`.
+**Goal:** JSON output from `show-dns-01`.
 
 ```sh
-acme --output-format json --account-key json-key.key show-dns01 --domain test.example.com --token test-token
+acme --output-format json --account-key json-key.key show-dns-01 --domain test.example.com --token test-token
 ```
 
 **Expected:**
@@ -1396,10 +1396,10 @@ The following test cases require special server configurations and are not inclu
 | 07 | `order` (multi SAN) | - | Multiple authz URLs | Yes |
 | 08 | `get-authz` | - | Challenges listed | Yes |
 | 09 | `respond-challenge` | - | Challenge progresses | Yes |
-| 10 | `serve-http01` (standalone) | HTTP-01 | Token served | Yes |
-| 10b | `serve-http01` (challenge-dir) | HTTP-01 | File written | Yes |
-| 11 | `serve-http01` (port busy) | HTTP-01 | Clear error | Yes |
-| 12 | `show-dns01` | DNS-01 | TXT instructions | Yes |
+| 10 | `serve-http-01` (standalone) | HTTP-01 | Token served | Yes |
+| 10b | `serve-http-01` (challenge-dir) | HTTP-01 | File written | Yes |
+| 11 | `serve-http-01` (port busy) | HTTP-01 | Clear error | Yes |
+| 12 | `show-dns-01` | DNS-01 | TXT instructions | Yes |
 | 13 | `finalize` | - | CSR submitted | Yes |
 | 14 | `poll-order` | - | Status returned | Yes |
 | 15 | `download-cert` | - | PEM saved | Yes |
@@ -1440,7 +1440,7 @@ The following test cases require special server configurations and are not inclu
 | 50 | `generate-key` JSON | - | Structured JSON | Yes |
 | 51 | `account` JSON | - | Structured JSON | Yes |
 | 52 | `order` JSON | - | Structured JSON | Yes |
-| 53 | `show-dns01` JSON | - | Structured JSON | Yes |
+| 53 | `show-dns-01` JSON | - | Structured JSON | Yes |
 | 54 | `run` JSON (e2e) | HTTP-01 | `action: issued` | Yes |
 | 55 | `run` JSON (renewal skip) | HTTP-01 | `action: skip` | Yes |
 | 56 | Text mode unchanged | - | No JSON in text | Yes |

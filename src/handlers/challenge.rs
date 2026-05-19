@@ -1,4 +1,4 @@
-//! Challenge-helper subcommands (serve-http01, show-dns01, show-dns-persist01, pre-authorize).
+//! Challenge-helper subcommands (serve-http-01, show-dns-01, show-dns-persist-01, pre-authorize).
 
 use anyhow::{Context, Result};
 
@@ -28,7 +28,7 @@ pub(crate) async fn cmd_serve_http01(
                 cli,
                 || {
                     serde_json::json!({
-                        "command": "serve-http01",
+                        "command": "serve-http-01",
                         "mode": "challenge-dir",
                         "path": file.display().to_string(),
                     })
@@ -51,7 +51,8 @@ pub(crate) fn cmd_show_dns01(
     token: &crate::types::ChallengeToken,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
-    let domain = crate::types::DnsName::parse(domain).context("invalid --domain for show-dns01")?;
+    let domain =
+        crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-01")?;
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
@@ -64,7 +65,7 @@ pub(crate) fn cmd_show_dns01(
             let name = crate::challenge::dns01::record_name(&domain);
             let value = crate::challenge::dns01::txt_record_value(token, &key);
             serde_json::json!({
-                "command": "show-dns01",
+                "command": "show-dns-01",
                 "domain": domain,
                 "record_name": name,
                 "record_type": "TXT",
@@ -84,12 +85,12 @@ pub(crate) async fn cmd_show_dns_persist01(
     persist_until: Option<u64>,
 ) -> Result<()> {
     let domain =
-        crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-persist01")?;
+        crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-persist-01")?;
     let _issuer_check = crate::client::validate_issuer_domain_name(issuer_domain_name)
-        .context("invalid --issuer-domain-name for show-dns-persist01")?;
+        .context("invalid --issuer-domain-name for show-dns-persist-01")?;
     if let Some(p) = persist_policy {
         crate::client::validate_caa_parameter_value(p)
-            .context("invalid --persist-policy for show-dns-persist01")?;
+            .context("invalid --persist-policy for show-dns-persist-01")?;
     }
     let mut client = build_client(cli).await?;
 
@@ -116,7 +117,7 @@ pub(crate) async fn cmd_show_dns_persist01(
             outln!(
                 "{}",
                 serde_json::json!({
-                    "command": "show-dns-persist01",
+                    "command": "show-dns-persist-01",
                     "domain": domain,
                     "record_name": name,
                     "record_type": "TXT",

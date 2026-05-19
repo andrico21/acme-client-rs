@@ -252,16 +252,16 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 #### Просмотр инструкций по настройке записи
 
-Субкоманда `show-dns-persist01` выводит запись, которую нужно создать, без запуска полного ACME-процесса:
+Субкоманда `show-dns-persist-01` выводит запись, которую нужно создать, без запуска полного ACME-процесса:
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory show-dns-persist01 --domain your.domain.com --issuer-domain-name letsencrypt.org
+acme-client-rs --directory https://your-acme-server/directory show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org
 ```
 
 С JSON-выводом:
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
+acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
 ```
 
 > **Примечание:** DNS-PERSIST-01 определён в [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Pebble уже поддерживает его. Поддержка Let's Encrypt staging ожидается в конце Q1 2026, production - в Q2 2026.
@@ -554,7 +554,7 @@ acme-client-rs show-config --verbose
   |  ------------------------------------>  |   Получение вызовов для каждого домена
   |  <------------------------------------  |   [http-01, dns-01, dns-persist-01, tls-alpn-01]
   |                                         |
-  |  5. Подтверждение владения доменом      |   -- serve-http01 / show-dns01 --
+  |  5. Подтверждение владения доменом      |   -- serve-http-01 / show-dns-01 --
   |     HTTP-01: токен на порту 80          |
   |     DNS-01:  TXT-запись _acme-challenge |
   |     DNS-PERSIST-01: постоянная TXT-зап. |
@@ -687,7 +687,7 @@ acme-client-rs get-authz https://acme-v02.api.letsencrypt.org/acme/authz/abc123
 # Output: challenge type, token, URL
 
 # 4. Serve the challenge (standalone, port 80)
-acme-client-rs serve-http01 --token <token> --port 80 &
+acme-client-rs serve-http-01 --token <token> --port 80 &
 
 # 5. Tell the server to validate
 acme-client-rs respond-challenge https://acme-v02.api.letsencrypt.org/acme/chall/xyz789
@@ -1192,7 +1192,7 @@ acme-client-rs get-authz <authz-url>
 # -> Note the challenge URL and token for your chosen type
 
 # d) (HTTP-01) Start the challenge server in one terminal
-acme-client-rs serve-http01 --token <token> --port 5002
+acme-client-rs serve-http-01 --token <token> --port 5002
 
 # e) In another terminal, tell the CA the challenge is ready
 acme-client-rs respond-challenge <challenge-url>
@@ -1262,9 +1262,9 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `order <domains...>` | Создание нового заказа на сертификат |
 | `get-authz <url>` | Получение объекта авторизации |
 | `respond-challenge <url>` | Сообщить серверу, что вызов готов |
-| `serve-http01` | Обслуживание ответа на вызов HTTP-01 |
-| `show-dns01` | Показать инструкции по настройке TXT-записи DNS-01 |
-| `show-dns-persist01` | Показать инструкции по настройке постоянной TXT-записи DNS-PERSIST-01 |
+| `serve-http-01` | Обслуживание ответа на вызов HTTP-01 |
+| `show-dns-01` | Показать инструкции по настройке TXT-записи DNS-01 |
+| `show-dns-persist-01` | Показать инструкции по настройке постоянной TXT-записи DNS-PERSIST-01 |
 | `finalize` | Финализация заказа с новым CSR |
 | `poll-order <url>` | Опрос текущего статуса заказа |
 | `download-cert <url>` | Загрузка выпущенного сертификата |

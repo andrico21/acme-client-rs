@@ -35,9 +35,9 @@ graph TD
     CMD -- order --> NEW_ORD["Create new order"]
     CMD -- get-authz --> GET_AZ["Fetch authorization"]
     CMD -- respond-challenge --> RESP_CH["Respond to challenge"]
-    CMD -- serve-http01 --> SERVE["Start HTTP-01 server"]
-    CMD -- show-dns01 --> SH_DNS["Print DNS TXT value"]
-    CMD -- show-dns-persist01 --> SH_DNSP["Print DNS-PERSIST<br/>TXT value"]
+    CMD -- serve-http-01 --> SERVE["Start HTTP-01 server"]
+    CMD -- show-dns-01 --> SH_DNS["Print DNS TXT value"]
+    CMD -- show-dns-persist-01 --> SH_DNSP["Print DNS-PERSIST<br/>TXT value"]
     CMD -- finalize --> FIN_CMD["Generate CSR & finalize"]
     CMD -- poll-order --> POLL_ORD["Poll order status"]
     CMD -- download-cert --> DL_CERT["Download certificate"]
@@ -445,8 +445,8 @@ graph TD
 
 ```mermaid
 graph TD
-    %% === serve-http01 ===
-    SH["serve-http01"] --> SH_LOAD["Load account key"]
+    %% === serve-http-01 ===
+    SH["serve-http-01"] --> SH_LOAD["Load account key"]
     SH_LOAD --> SH_MODE{"--challenge-dir?"}
 
     SH_MODE -- Yes --> SH_FILE["Write token file<br/>to directory"]
@@ -462,16 +462,16 @@ graph TD
     SH_SERVER --> SH_SERVE["Serve challenge<br/>response (blocking)"]
     SH_SERVE --> SH_DONE
 
-    %% === show-dns01 ===
-    SD["show-dns01"] --> SD_LOAD["Load account key"]
+    %% === show-dns-01 ===
+    SD["show-dns-01"] --> SD_LOAD["Load account key"]
     SD_LOAD --> SD_FMT{"--output-format?"}
     SD_FMT -- json --> SD_JSON["JSON: domain,<br/>record_name,<br/>type=TXT,<br/>record_value"]
     SD_FMT -- text --> SD_TEXT["print_instructions()<br/>(record name + value)"]
     SD_JSON --> SD_DONE["DONE"]
     SD_TEXT --> SD_DONE
 
-    %% === show-dns-persist01 ===
-    SDP["show-dns-persist01"] --> SDP_URL{"account_url<br/>known?"}
+    %% === show-dns-persist-01 ===
+    SDP["show-dns-persist-01"] --> SDP_URL{"account_url<br/>known?"}
     SDP_URL -- No --> SDP_LOOKUP["Auto-lookup account"]
     SDP_URL -- Yes --> SDP_COMPUTE
     SDP_LOOKUP --> SDP_COMPUTE["Compute TXT value<br/>(issuer, account_uri,<br/>--persist-policy,<br/>--persist-until)"]
@@ -568,7 +568,7 @@ graph TD
 ### Common Patterns
 
 - **Output format branching**: Every command except `generate-config` checks `--output-format` (json/text) and formats output accordingly. JSON mode prints machine-readable objects; text mode prints human-friendly messages.
-- **Account auto-lookup**: Five commands (`show-dns-persist01`, `key-rollover`, `revoke`, `renewal-info`, `pre-authorize`) need an account URL for KID-based JWS signing. If `--account-url` is not provided, they automatically call `create_account(None, true, None)` to look up/register the account.
+- **Account auto-lookup**: Five commands (`show-dns-persist-01`, `key-rollover`, `revoke`, `renewal-info`, `pre-authorize`) need an account URL for KID-based JWS signing. If `--account-url` is not provided, they automatically call `create_account(None, true, None)` to look up/register the account.
 - **Silent mode**: The global `--silent` flag suppresses all stdout output across every command handler. Two patterns are used: **early-return** (`show-config` and `generate-config` skip entirely) and **output gating** (all other commands perform their work but skip print statements). Side effects (file writes, ACME API calls, hooks) still execute normally.
 
 ### Run Flow Details

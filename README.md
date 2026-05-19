@@ -252,16 +252,16 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 #### Show record setup instructions
 
-The `show-dns-persist01` subcommand displays the record you need to create, without running the full ACME flow:
+The `show-dns-persist-01` subcommand displays the record you need to create, without running the full ACME flow:
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory show-dns-persist01 --domain your.domain.com --issuer-domain-name letsencrypt.org
+acme-client-rs --directory https://your-acme-server/directory show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org
 ```
 
 With JSON output:
 
 ```sh
-acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
+acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
 ```
 
 > **Note:** DNS-PERSIST-01 is defined in [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Pebble already supports it. Let's Encrypt staging support is expected late Q1 2026, production Q2 2026.
@@ -554,7 +554,7 @@ Client                                ACME Server (e.g. Let's Encrypt)
   |  ------------------------------------>  |   Get challenges for each domain
   |  <------------------------------------  |   [http-01, dns-01, dns-persist-01, tls-alpn-01]
   |                                         |
-  |  5. Prove domain control                |   -- serve-http01 / show-dns01 --
+  |  5. Prove domain control                |   -- serve-http-01 / show-dns-01 --
   |     HTTP-01: serve token on port 80     |
   |     DNS-01:  create _acme-challenge TXT |
   |     DNS-PERSIST-01: persistent TXT rec  |
@@ -687,7 +687,7 @@ acme-client-rs get-authz https://acme-v02.api.letsencrypt.org/acme/authz/abc123
 # Output: challenge type, token, URL
 
 # 4. Serve the challenge (standalone, port 80)
-acme-client-rs serve-http01 --token <token> --port 80 &
+acme-client-rs serve-http-01 --token <token> --port 80 &
 
 # 5. Tell the server to validate
 acme-client-rs respond-challenge https://acme-v02.api.letsencrypt.org/acme/chall/xyz789
@@ -1195,7 +1195,7 @@ acme-client-rs get-authz <authz-url>
 # -> Note the challenge URL and token for your chosen type
 
 # d) (HTTP-01) Start the challenge server in one terminal
-acme-client-rs serve-http01 --token <token> --port 5002
+acme-client-rs serve-http-01 --token <token> --port 5002
 
 # e) In another terminal, tell the CA the challenge is ready
 acme-client-rs respond-challenge <challenge-url>
@@ -1265,9 +1265,9 @@ Global options can be placed before or after the subcommand.
 | `order <domains...>` | Request a new certificate order |
 | `get-authz <url>` | Fetch an authorization object |
 | `respond-challenge <url>` | Tell the server a challenge is ready |
-| `serve-http01` | Serve an HTTP-01 challenge response |
-| `show-dns01` | Show DNS-01 TXT record setup instructions |
-| `show-dns-persist01` | Show DNS-PERSIST-01 persistent TXT record setup instructions |
+| `serve-http-01` | Serve an HTTP-01 challenge response |
+| `show-dns-01` | Show DNS-01 TXT record setup instructions |
+| `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions |
 | `finalize` | Finalize an order with a new CSR |
 | `poll-order <url>` | Poll an order's current status |
 | `download-cert <url>` | Download the issued certificate |

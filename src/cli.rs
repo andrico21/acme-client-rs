@@ -284,13 +284,14 @@ Examples:
     #[command(after_long_help = "\
 Examples:
   # Standalone server on port 80
-  acme-client-rs serve-http01 --token <TOKEN>
+  acme-client-rs serve-http-01 --token <TOKEN>
 
   # Custom port (ensure port 80 is forwarded)
-  acme-client-rs serve-http01 --token <TOKEN> --port 5002
+  acme-client-rs serve-http-01 --token <TOKEN> --port 5002
 
   # Write to webroot instead of starting a server
-  acme-client-rs serve-http01 --token <TOKEN> --challenge-dir /var/www/html")]
+  acme-client-rs serve-http-01 --token <TOKEN> --challenge-dir /var/www/html")]
+    #[command(name = "serve-http-01")]
     ServeHttp01 {
         /// Challenge token
         #[arg(long, value_parser = crate::types::ChallengeToken::parse)]
@@ -306,7 +307,8 @@ Examples:
     /// Show DNS-01 setup instructions
     #[command(after_long_help = "\
 Examples:
-  acme-client-rs show-dns01 --domain example.com --token <TOKEN>")]
+  acme-client-rs show-dns-01 --domain example.com --token <TOKEN>")]
+    #[command(name = "show-dns-01")]
     ShowDns01 {
         /// Domain name
         #[arg(long)]
@@ -322,13 +324,14 @@ Examples:
   # Basic (FQDN-only authorization)
   acme-client-rs --directory https://acme-server/directory \\
     --account-url https://acme-server/acme/acct/123 \\
-    show-dns-persist01 --domain example.com \\
+    show-dns-persist-01 --domain example.com \\
     --issuer-domain-name letsencrypt.org
 
   # With wildcard policy and expiration
-  acme-client-rs show-dns-persist01 --domain example.com \\
+  acme-client-rs show-dns-persist-01 --domain example.com \\
     --issuer-domain-name letsencrypt.org \\
     --persist-policy wildcard --persist-until 1767225600")]
+    #[command(name = "show-dns-persist-01")]
     ShowDnsPersist01 {
         /// Domain name
         #[arg(long)]
