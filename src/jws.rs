@@ -133,7 +133,7 @@ impl AccountKey {
                      pass --account-key-password or --account-key-password-file"
                 )
             })?;
-            let enc = pkcs8::EncryptedPrivateKeyInfo::try_from(parsed.contents())
+            let enc = pkcs8::EncryptedPrivateKeyInfoRef::try_from(parsed.contents())
                 .map_err(|e| anyhow::anyhow!("failed to parse encrypted PKCS#8: {e}"))?;
             let decrypted = enc
                 .decrypt(password.as_bytes())

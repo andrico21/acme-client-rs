@@ -39,19 +39,20 @@ pub(crate) fn encrypt_private_key(key_pem: &str, password: &str) -> Result<Strin
     use rand_core::RngCore;
 
     let parsed = pem::parse(key_pem).context("failed to parse private key PEM")?;
-    let pk_info = pkcs8::PrivateKeyInfo::try_from(parsed.contents())
+    let pk_info = pkcs8::PrivateKeyInfoRef::try_from(parsed.contents())
         .map_err(|e| anyhow::anyhow!("failed to parse PKCS#8 private key: {e}"))?;
 
     // Use log_n=14 (N=16384) for OpenSSL CLI compatibility.
     // Default log_n=17 (N=131072) requires ~128 MB which exceeds OpenSSL's 32 MB scrypt limit.
-    let scrypt_params = scrypt::Params::new(14, 8, 1, 32)
+    let scrypt_params = scrypt::Params::new(14, 8, 1)
         .map_err(|e| anyhow::anyhow!("invalid scrypt parameters: {e}"))?;
     let mut salt = [0u8; 16];
     rand_core::OsRng.fill_bytes(&mut salt);
     let mut iv = [0u8; 16];
     rand_core::OsRng.fill_bytes(&mut iv);
-    let pbes2_params = pkcs8::pkcs5::pbes2::Parameters::scrypt_aes256cbc(scrypt_params, &salt, &iv)
-        .map_err(|e| anyhow::anyhow!("failed to build PBES2 parameters: {e}"))?;
+    let pbes2_params =
+        pkcs8::pkcs5::pbes2::Parameters::generate_scrypt_aes256cbc(scrypt_params, &salt, iv)
+            .map_err(|e| anyhow::anyhow!("failed to build PBES2 parameters: {e}"))?;
 
     let encrypted_doc = pk_info
         .encrypt_with_params(pbes2_params, password.as_bytes())
