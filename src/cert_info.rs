@@ -51,14 +51,21 @@ pub(crate) fn cert_san_identifiers(
                     ids.insert(addr.to_string());
                 }
             }
-            _ => {} // Other GeneralName types (rfc822Name, URI, ...) are not used by ACME.
+            GeneralName::OtherName(..)
+            | GeneralName::RFC822Name(_)
+            | GeneralName::X400Address(_)
+            | GeneralName::DirectoryName(_)
+            | GeneralName::EDIPartyName(_)
+            | GeneralName::URI(_)
+            | GeneralName::RegisteredID(_)
+            | GeneralName::Invalid(..) => {}
         }
     }
 
     Ok(ids)
 }
 
-/// Decode a SubjectAlternativeName IP address octet string into an `IpAddr`.
+/// Decode a `SubjectAlternativeName` IP address octet string into an `IpAddr`.
 ///
 /// Per RFC 5280 §4.2.1.6, SAN iPAddress is exactly 4 octets (IPv4) or 16 octets
 /// (IPv6). Anything else is malformed and ignored.
@@ -90,29 +97,33 @@ pub(crate) fn normalize_identifier(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::decode_san_ip;
+    use anyhow::Context;
     use std::net::IpAddr;
 
     #[test]
-    fn decode_san_ip_v4() {
-        let addr = decode_san_ip(&[192, 0, 2, 1]).unwrap();
-        assert_eq!(addr, "192.0.2.1".parse::<IpAddr>().unwrap());
+    fn decode_san_ip_v4() -> anyhow::Result<()> {
+        let addr = decode_san_ip(&[192, 0, 2, 1]).context("decode failed")?;
+        assert_eq!(addr, "192.0.2.1".parse::<IpAddr>()?);
+        Ok(())
     }
 
     #[test]
-    fn decode_san_ip_v6() {
+    fn decode_san_ip_v6() -> anyhow::Result<()> {
         let bytes = [
             0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01,
         ];
-        let addr = decode_san_ip(&bytes).unwrap();
-        assert_eq!(addr, "2001:db8::1".parse::<IpAddr>().unwrap());
+        let addr = decode_san_ip(&bytes).context("decode failed")?;
+        assert_eq!(addr, "2001:db8::1".parse::<IpAddr>()?);
+        Ok(())
     }
 
     #[test]
-    fn decode_san_ip_rejects_other_lengths() {
+    fn decode_san_ip_rejects_other_lengths() -> anyhow::Result<()> {
         assert!(decode_san_ip(&[]).is_none());
         assert!(decode_san_ip(&[1, 2, 3]).is_none());
         assert!(decode_san_ip(&[0; 5]).is_none());
         assert!(decode_san_ip(&[0; 15]).is_none());
         assert!(decode_san_ip(&[0; 17]).is_none());
+        Ok(())
     }
 }

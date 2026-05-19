@@ -163,7 +163,7 @@ impl AsRef<str> for DnsName {
 }
 
 impl From<DnsName> for String {
-    fn from(n: DnsName) -> String {
+    fn from(n: DnsName) -> Self {
         n.0
     }
 }
@@ -558,14 +558,14 @@ impl TryFrom<String> for ChallengeToken {
 }
 
 impl From<ChallengeToken> for String {
-    fn from(t: ChallengeToken) -> String {
+    fn from(t: ChallengeToken) -> Self {
         t.0
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[allow(dead_code, clippy::struct_field_names)]
 pub struct Challenge {
     #[serde(rename = "type")]
     pub challenge_type: ChallengeType,
@@ -658,36 +658,6 @@ pub enum AcmeErrorType {
 const ACME_ERROR_URN_PREFIX: &str = "urn:ietf:params:acme:error:";
 
 impl AcmeErrorType {
-    fn kind(&self) -> Option<&'static str> {
-        match self {
-            Self::AccountDoesNotExist => Some("accountDoesNotExist"),
-            Self::AlreadyRevoked => Some("alreadyRevoked"),
-            Self::BadCsr => Some("badCSR"),
-            Self::BadNonce => Some("badNonce"),
-            Self::BadPublicKey => Some("badPublicKey"),
-            Self::BadRevocationReason => Some("badRevocationReason"),
-            Self::BadSignatureAlgorithm => Some("badSignatureAlgorithm"),
-            Self::Caa => Some("caa"),
-            Self::Compound => Some("compound"),
-            Self::Connection => Some("connection"),
-            Self::Dns => Some("dns"),
-            Self::ExternalAccountRequired => Some("externalAccountRequired"),
-            Self::IncorrectResponse => Some("incorrectResponse"),
-            Self::InvalidContact => Some("invalidContact"),
-            Self::Malformed => Some("malformed"),
-            Self::OrderNotReady => Some("orderNotReady"),
-            Self::RateLimited => Some("rateLimited"),
-            Self::RejectedIdentifier => Some("rejectedIdentifier"),
-            Self::ServerInternal => Some("serverInternal"),
-            Self::Tls => Some("tls"),
-            Self::Unauthorized => Some("unauthorized"),
-            Self::UnsupportedContact => Some("unsupportedContact"),
-            Self::UnsupportedIdentifier => Some("unsupportedIdentifier"),
-            Self::UserActionRequired => Some("userActionRequired"),
-            Self::Unknown(_) => None,
-        }
-    }
-
     /// `true` if this is the RFC 8555 §6.5 `badNonce` error, which
     /// callers must treat specially (retry the request with a fresh
     /// nonce instead of bubbling up).
@@ -698,18 +668,39 @@ impl AcmeErrorType {
 
 impl std::fmt::Display for AcmeErrorType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind() {
-            Some(k) => write!(f, "{ACME_ERROR_URN_PREFIX}{k}"),
-            None => match self {
-                Self::Unknown(s) => f.write_str(s),
-                _ => unreachable!("kind() returns Some for all non-Unknown variants"),
-            },
-        }
+        let kind = match self {
+            Self::AccountDoesNotExist => "accountDoesNotExist",
+            Self::AlreadyRevoked => "alreadyRevoked",
+            Self::BadCsr => "badCSR",
+            Self::BadNonce => "badNonce",
+            Self::BadPublicKey => "badPublicKey",
+            Self::BadRevocationReason => "badRevocationReason",
+            Self::BadSignatureAlgorithm => "badSignatureAlgorithm",
+            Self::Caa => "caa",
+            Self::Compound => "compound",
+            Self::Connection => "connection",
+            Self::Dns => "dns",
+            Self::ExternalAccountRequired => "externalAccountRequired",
+            Self::IncorrectResponse => "incorrectResponse",
+            Self::InvalidContact => "invalidContact",
+            Self::Malformed => "malformed",
+            Self::OrderNotReady => "orderNotReady",
+            Self::RateLimited => "rateLimited",
+            Self::RejectedIdentifier => "rejectedIdentifier",
+            Self::ServerInternal => "serverInternal",
+            Self::Tls => "tls",
+            Self::Unauthorized => "unauthorized",
+            Self::UnsupportedContact => "unsupportedContact",
+            Self::UnsupportedIdentifier => "unsupportedIdentifier",
+            Self::UserActionRequired => "userActionRequired",
+            Self::Unknown(s) => return f.write_str(s),
+        };
+        write!(f, "{ACME_ERROR_URN_PREFIX}{kind}")
     }
 }
 
 impl From<AcmeErrorType> for String {
-    fn from(e: AcmeErrorType) -> String {
+    fn from(e: AcmeErrorType) -> Self {
         e.to_string()
     }
 }
@@ -828,7 +819,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn challenge_type_roundtrips_through_string_for_known_variants() {
+    fn challenge_type_roundtrips_through_string_for_known_variants() -> anyhow::Result<()> {
         for (variant, wire) in [
             (ChallengeType::Http01, "http-01"),
             (ChallengeType::Dns01, "dns-01"),
@@ -837,12 +828,13 @@ mod tests {
         ] {
             assert_eq!(variant.as_str(), wire);
             assert_eq!(ChallengeType::from(wire.to_string()), variant);
-            assert_eq!(ChallengeType::parse_strict(wire).unwrap(), variant);
+            assert_eq!(ChallengeType::parse_strict(wire)?, variant);
         }
+        Ok(())
     }
 
     #[test]
-    fn challenge_type_preserves_unknown_via_from_string() {
+    fn challenge_type_preserves_unknown_via_from_string() -> anyhow::Result<()> {
         // Wire-side MUST tolerate unknown variants (forward-compat with future
         // RFCs); strict parser MUST reject them.
         let unknown = ChallengeType::from("custom-future-01".to_string());
@@ -852,175 +844,201 @@ mod tests {
         );
         assert_eq!(unknown.as_str(), "custom-future-01");
         assert!(ChallengeType::parse_strict("custom-future-01").is_err());
+        Ok(())
     }
 
     #[test]
-    fn challenge_type_serde_roundtrip_through_json() {
-        let j = serde_json::to_string(&ChallengeType::DnsPersist01).unwrap();
+    fn challenge_type_serde_roundtrip_through_json() -> anyhow::Result<()> {
+        let j = serde_json::to_string(&ChallengeType::DnsPersist01)?;
         assert_eq!(j, "\"dns-persist-01\"");
-        let parsed: ChallengeType = serde_json::from_str("\"dns-01\"").unwrap();
+        let parsed: ChallengeType = serde_json::from_str("\"dns-01\"")?;
         assert_eq!(parsed, ChallengeType::Dns01);
-        let unknown: ChallengeType = serde_json::from_str("\"future-02\"").unwrap();
+        let unknown: ChallengeType = serde_json::from_str("\"future-02\"")?;
         assert_eq!(unknown, ChallengeType::Unknown("future-02".to_string()));
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_lowercases_and_strips_trailing_dot() {
+    fn dns_normalize_lowercases_and_strips_trailing_dot() -> anyhow::Result<()> {
         assert_eq!(
-            validate_and_normalize_dns("EXAMPLE.com.").unwrap(),
+            validate_and_normalize_dns("EXAMPLE.com.")?,
             "example.com"
         );
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_idn_to_punycode() {
+    fn dns_normalize_idn_to_punycode() -> anyhow::Result<()> {
         assert_eq!(
-            validate_and_normalize_dns("café.example").unwrap(),
+            validate_and_normalize_dns("café.example")?,
             "xn--caf-dma.example"
         );
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_accepts_simple_wildcard() {
+    fn dns_normalize_accepts_simple_wildcard() -> anyhow::Result<()> {
         assert_eq!(
-            validate_and_normalize_dns("*.example.com").unwrap(),
+            validate_and_normalize_dns("*.example.com")?,
             "*.example.com"
         );
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_double_wildcard() {
+    fn dns_normalize_rejects_double_wildcard() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("**.example.com").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_non_leftmost_wildcard() {
+    fn dns_normalize_rejects_non_leftmost_wildcard() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("foo.*.example.com").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_bare_wildcard_dot() {
+    fn dns_normalize_rejects_bare_wildcard_dot() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("*.").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_empty() {
+    fn dns_normalize_rejects_empty() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("").is_err());
         assert!(validate_and_normalize_dns(".").is_err());
+        Ok(())
     }
 
     #[test]
-    fn from_str_auto_routes_ip_vs_dns() {
-        let ip = Identifier::from_str_auto("1.2.3.4").unwrap();
+    fn from_str_auto_routes_ip_vs_dns() -> anyhow::Result<()> {
+        let ip = Identifier::from_str_auto("1.2.3.4")?;
         assert!(ip.is_ip());
-        let dns = Identifier::from_str_auto("Example.COM").unwrap();
+        let dns = Identifier::from_str_auto("Example.COM")?;
         assert!(!dns.is_ip());
         assert_eq!(dns.value_str(), "example.com");
+        Ok(())
     }
 
     #[test]
-    fn server_identifier_accepts_normalized_dns() {
-        let id = Identifier::dns("example.com").unwrap();
+    fn server_identifier_accepts_normalized_dns() -> anyhow::Result<()> {
+        let id = Identifier::dns("example.com")?;
         assert!(validate_server_identifier(&id).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn dns_constructor_normalizes_uppercase() {
-        let id = Identifier::dns("Example.COM").unwrap();
+    fn dns_constructor_normalizes_uppercase() -> anyhow::Result<()> {
+        let id = Identifier::dns("Example.COM")?;
         assert_eq!(id.value_str(), "example.com");
+        Ok(())
     }
 
     #[test]
-    fn dns_constructor_rejects_dig_flag_injection() {
+    fn dns_constructor_rejects_dig_flag_injection() -> anyhow::Result<()> {
         assert!(Identifier::dns("-X").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_constructor_rejects_shell_metacharacters() {
+    fn dns_constructor_rejects_shell_metacharacters() -> anyhow::Result<()> {
         assert!(Identifier::dns("foo;rm -rf /").is_err());
+        Ok(())
     }
 
     #[test]
-    fn server_identifier_accepts_valid_ip() {
-        let id = Identifier::ip("192.0.2.1").unwrap();
+    fn server_identifier_accepts_valid_ip() -> anyhow::Result<()> {
+        let id = Identifier::ip("192.0.2.1")?;
         assert!(validate_server_identifier(&id).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn ip_constructor_rejects_invalid_input() {
+    fn ip_constructor_rejects_invalid_input() -> anyhow::Result<()> {
         assert!(Identifier::ip("not-an-ip").is_err());
+        Ok(())
     }
 
     #[test]
-    fn deserialize_rejects_invalid_ip() {
+    fn deserialize_rejects_invalid_ip() -> anyhow::Result<()> {
         let bad = r#"{"type":"ip","value":"not-an-ip"}"#;
         assert!(serde_json::from_str::<Identifier>(bad).is_err());
+        Ok(())
     }
 
     #[test]
-    fn deserialize_rejects_unknown_type() {
+    fn deserialize_rejects_unknown_type() -> anyhow::Result<()> {
         let bad = r#"{"type":"evil","value":"anything"}"#;
         assert!(serde_json::from_str::<Identifier>(bad).is_err());
+        Ok(())
     }
 
     #[test]
-    fn deserialize_rejects_unnormalized_dns() {
+    fn deserialize_rejects_unnormalized_dns() -> anyhow::Result<()> {
         let bad = r#"{"type":"dns","value":"Example.COM"}"#;
         assert!(serde_json::from_str::<Identifier>(bad).is_err());
+        Ok(())
     }
 
     #[test]
-    fn deserialize_accepts_canonical_dns() {
+    fn deserialize_accepts_canonical_dns() -> anyhow::Result<()> {
         let ok = r#"{"type":"dns","value":"example.com"}"#;
-        let id: Identifier = serde_json::from_str(ok).unwrap();
+        let id: Identifier = serde_json::from_str(ok)?;
         assert!(matches!(id, Identifier::Dns(ref n) if n.as_str() == "example.com"));
+        Ok(())
     }
 
     #[test]
-    fn deserialize_accepts_ipv4() {
+    fn deserialize_accepts_ipv4() -> anyhow::Result<()> {
         let ok = r#"{"type":"ip","value":"192.0.2.1"}"#;
-        let id: Identifier = serde_json::from_str(ok).unwrap();
+        let id: Identifier = serde_json::from_str(ok)?;
         assert!(matches!(id, Identifier::Ip(_)));
         assert_eq!(id.value_str(), "192.0.2.1");
+        Ok(())
     }
 
     #[test]
-    fn serialize_round_trip_preserves_wire_format() {
-        let id = Identifier::dns("example.com").unwrap();
-        let json = serde_json::to_string(&id).unwrap();
+    fn serialize_round_trip_preserves_wire_format() -> anyhow::Result<()> {
+        let id = Identifier::dns("example.com")?;
+        let json = serde_json::to_string(&id)?;
         assert_eq!(json, r#"{"type":"dns","value":"example.com"}"#);
-        let ip = Identifier::ip("192.0.2.1").unwrap();
-        let json = serde_json::to_string(&ip).unwrap();
+        let ip = Identifier::ip("192.0.2.1")?;
+        let json = serde_json::to_string(&ip)?;
         assert_eq!(json, r#"{"type":"ip","value":"192.0.2.1"}"#);
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_label_with_leading_or_trailing_dash() {
+    fn dns_normalize_rejects_label_with_leading_or_trailing_dash() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("foo-.example").is_err());
         assert!(validate_and_normalize_dns("foo.-bar.example").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_empty_label() {
+    fn dns_normalize_rejects_empty_label() -> anyhow::Result<()> {
         assert!(validate_and_normalize_dns("foo..example").is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_rejects_label_over_63_chars() {
+    fn dns_normalize_rejects_label_over_63_chars() -> anyhow::Result<()> {
         let long = "a".repeat(64);
         assert!(validate_and_normalize_dns(&format!("{long}.example")).is_err());
+        Ok(())
     }
 
     #[test]
-    fn dns_normalize_accepts_underscore_label() {
+    fn dns_normalize_accepts_underscore_label() -> anyhow::Result<()> {
         assert_eq!(
-            validate_and_normalize_dns("_acme-challenge.example.com").unwrap(),
+            validate_and_normalize_dns("_acme-challenge.example.com")?,
             "_acme-challenge.example.com"
         );
+        Ok(())
     }
 
     #[test]
-    fn acme_error_display_includes_subproblems_and_status() {
+    fn acme_error_display_includes_subproblems_and_status() -> anyhow::Result<()> {
         let err = AcmeError {
             error_type: Some(AcmeErrorType::RejectedIdentifier),
             detail: Some("Some identifiers were rejected".into()),
@@ -1029,7 +1047,7 @@ mod tests {
                 Subproblem {
                     error_type: AcmeErrorType::Malformed,
                     detail: Some("DNS name has wildcard".into()),
-                    identifier: Some(Identifier::dns("*.evil.example").unwrap()),
+                    identifier: Some(Identifier::dns("*.evil.example")?),
                 },
                 Subproblem {
                     error_type: AcmeErrorType::InvalidContact,
@@ -1045,10 +1063,11 @@ mod tests {
         assert!(s.contains("dns=*.evil.example"));
         assert!(s.contains("DNS name has wildcard"));
         assert!(s.contains("invalidContact"));
+        Ok(())
     }
 
     #[test]
-    fn acme_error_display_empty_subproblems_omitted() {
+    fn acme_error_display_empty_subproblems_omitted() -> anyhow::Result<()> {
         let err = AcmeError {
             error_type: Some(AcmeErrorType::BadNonce),
             detail: Some("Bad nonce".into()),
@@ -1057,81 +1076,91 @@ mod tests {
         };
         let s = format!("{err}");
         assert!(!s.contains("subproblems"));
+        Ok(())
     }
 
     #[test]
-    fn acme_error_type_serde_roundtrip_standard() {
+    fn acme_error_type_serde_roundtrip_standard() -> anyhow::Result<()> {
         let json = "\"urn:ietf:params:acme:error:badNonce\"";
-        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        let parsed: AcmeErrorType = serde_json::from_str(json)?;
         assert_eq!(parsed, AcmeErrorType::BadNonce);
         assert!(parsed.is_bad_nonce());
-        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+        assert_eq!(serde_json::to_string(&parsed)?, json);
+        Ok(())
     }
 
     #[test]
-    fn acme_error_type_serde_unknown_roundtrip_lossless() {
+    fn acme_error_type_serde_unknown_roundtrip_lossless() -> anyhow::Result<()> {
         let json = "\"urn:ietf:params:acme:error:onionCAARequired\"";
-        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        let parsed: AcmeErrorType = serde_json::from_str(json)?;
         assert_eq!(
             parsed,
             AcmeErrorType::Unknown("urn:ietf:params:acme:error:onionCAARequired".into())
         );
         assert!(!parsed.is_bad_nonce());
-        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+        assert_eq!(serde_json::to_string(&parsed)?, json);
+        Ok(())
     }
 
     #[test]
-    fn acme_error_type_serde_non_acme_urn_preserved() {
+    fn acme_error_type_serde_non_acme_urn_preserved() -> anyhow::Result<()> {
         let json = "\"urn:example:custom-error\"";
-        let parsed: AcmeErrorType = serde_json::from_str(json).unwrap();
+        let parsed: AcmeErrorType = serde_json::from_str(json)?;
         assert_eq!(
             parsed,
             AcmeErrorType::Unknown("urn:example:custom-error".into())
         );
-        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+        assert_eq!(serde_json::to_string(&parsed)?, json);
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_parse_accepts_base64url() {
-        let t = ChallengeToken::parse("LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0").unwrap();
+    fn challenge_token_parse_accepts_base64url() -> anyhow::Result<()> {
+        let t = ChallengeToken::parse("LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0")?;
         assert_eq!(t.as_str(), "LoqXcYV8q5ONbJQxbmR7SCTNo3tiAXDfowyjxAjEuX0");
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_parse_rejects_empty() {
+    fn challenge_token_parse_rejects_empty() -> anyhow::Result<()> {
         assert!(ChallengeToken::parse("").is_err());
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_parse_rejects_path_traversal() {
+    fn challenge_token_parse_rejects_path_traversal() -> anyhow::Result<()> {
         assert!(ChallengeToken::parse("../../etc/passwd").is_err());
         assert!(ChallengeToken::parse("a/b").is_err());
         assert!(ChallengeToken::parse("a\\b").is_err());
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_parse_rejects_oversize() {
+    fn challenge_token_parse_rejects_oversize() -> anyhow::Result<()> {
         let big = "a".repeat(129);
         assert!(ChallengeToken::parse(&big).is_err());
         let max = "a".repeat(128);
         assert!(ChallengeToken::parse(&max).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_parse_rejects_non_base64url_chars() {
+    fn challenge_token_parse_rejects_non_base64url_chars() -> anyhow::Result<()> {
         for bad in ["a b", "a+b", "a=b", "a.b", "a\nb", "a\0b"] {
             assert!(
                 ChallengeToken::parse(bad).is_err(),
                 "token {bad:?} should be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn challenge_token_serde_wire_validation() {
-        let parsed: ChallengeToken = serde_json::from_str("\"abc-DEF_123\"").unwrap();
+    fn challenge_token_serde_wire_validation() -> anyhow::Result<()> {
+        let parsed: ChallengeToken = serde_json::from_str("\"abc-DEF_123\"")?;
         assert_eq!(parsed.as_str(), "abc-DEF_123");
         assert!(serde_json::from_str::<ChallengeToken>("\"bad/token\"").is_err());
         assert!(serde_json::from_str::<ChallengeToken>("\"\"").is_err());
+        Ok(())
     }
 }
