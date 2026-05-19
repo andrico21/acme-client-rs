@@ -27,7 +27,7 @@
 //! DACL-based and does not map onto these POSIX bits); a single advisory is
 //! printed to stderr on first use.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 /// Outcome of validating a hook path. Callers decide how to act (fail vs warn).
@@ -58,8 +58,8 @@ fn windows_advisory_once() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        eprintln!(
-            "warning: hook ownership/permission checks are not implemented on this platform; \
+        tracing::warn!(
+            "hook ownership/permission checks are not implemented on this platform; \
              ensure hook scripts and their containing directories are only writable by the \
              user running this binary"
         );
@@ -69,7 +69,7 @@ fn windows_advisory_once() {
 #[cfg(unix)]
 fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
     use nix::sys::stat::stat;
-    use nix::unistd::{Uid, geteuid};
+    use nix::unistd::{geteuid, Uid};
     use std::os::unix::ffi::OsStrExt;
 
     let mut violations: Vec<String> = Vec::new();
@@ -171,10 +171,10 @@ pub fn validate_all_hooks(hooks: &[(&str, Option<&Path>)], unsafe_hooks: bool) -
     }
     if unsafe_hooks {
         for v in &all_violations {
-            eprintln!("warning: {v}");
+            tracing::warn!("{v}");
         }
-        eprintln!(
-            "warning: continuing with --unsafe-hooks; the above privilege-escalation risks \
+        tracing::warn!(
+            "continuing with --unsafe-hooks; the above privilege-escalation risks \
              are your responsibility to mitigate"
         );
         return Ok(());
@@ -187,68 +187,73 @@ pub fn validate_all_hooks(hooks: &[(&str, Option<&Path>)], unsafe_hooks: bool) -
 }
 
 #[cfg(all(test, unix))]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
-    use std::fs::{File, Permissions, set_permissions};
+    use std::fs::{set_permissions, File, Permissions};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    fn write_hook(path: &Path, mode: u32) {
-        let mut f = File::create(path).unwrap();
-        writeln!(f, "#!/bin/sh\necho ok").unwrap();
-        set_permissions(path, Permissions::from_mode(mode)).unwrap();
+    fn write_hook(path: &Path, mode: u32) -> anyhow::Result<()> {
+        let mut f = File::create(path)?;
+        writeln!(f, "#!/bin/sh\necho ok")?;
+        set_permissions(path, Permissions::from_mode(mode))?;
+        Ok(())
     }
 
     #[test]
-    fn relative_path_rejected() {
-        let res = check_hook_path(Path::new("relative-hook.sh")).unwrap();
+    fn relative_path_rejected() -> anyhow::Result<()> {
+        let res = check_hook_path(Path::new("relative-hook.sh"))?;
         match res {
             HookCheck::Violations(vs) => {
                 assert!(vs.iter().any(|v| v.contains("relative")));
             }
             HookCheck::Ok => panic!("relative path should be rejected"),
         }
+        Ok(())
     }
 
     #[test]
-    fn world_writable_file_rejected() {
-        let dir = tempdir().unwrap();
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+    fn world_writable_file_rejected() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("hook.sh");
-        write_hook(&hook, 0o777); // World-writable.
-        let res = check_hook_path(&hook).unwrap();
+        write_hook(&hook, 0o777)?; // World-writable.
+        let res = check_hook_path(&hook)?;
         match res {
             HookCheck::Violations(vs) => {
                 assert!(vs.iter().any(|v| v.contains("insecure permissions")));
             }
             HookCheck::Ok => panic!("world-writable file should be rejected"),
         }
+        Ok(())
     }
 
     #[test]
-    fn group_writable_file_rejected() {
-        let dir = tempdir().unwrap();
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+    fn group_writable_file_rejected() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("hook.sh");
-        write_hook(&hook, 0o775); // Group-writable.
-        let res = check_hook_path(&hook).unwrap();
+        write_hook(&hook, 0o775)?; // Group-writable.
+        let res = check_hook_path(&hook)?;
         match res {
             HookCheck::Violations(vs) => {
                 assert!(vs.iter().any(|v| v.contains("insecure permissions")));
             }
             HookCheck::Ok => panic!("group-writable file should be rejected"),
         }
+        Ok(())
     }
 
     #[test]
-    fn world_writable_parent_dir_rejected() {
-        let dir = tempdir().unwrap();
+    fn world_writable_parent_dir_rejected() -> anyhow::Result<()> {
+        let dir = tempdir()?;
         // Parent dir world-writable, file itself locked down.
-        set_permissions(dir.path(), Permissions::from_mode(0o777)).unwrap();
+        set_permissions(dir.path(), Permissions::from_mode(0o777))?;
         let hook = dir.path().join("hook.sh");
-        write_hook(&hook, 0o755);
-        let res = check_hook_path(&hook).unwrap();
+        write_hook(&hook, 0o755)?;
+        let res = check_hook_path(&hook)?;
         match res {
             HookCheck::Violations(vs) => {
                 assert!(
@@ -260,46 +265,53 @@ mod tests {
             HookCheck::Ok => panic!("world-writable parent should be rejected"),
         }
         // Restore mode so tempdir can clean up.
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
+        Ok(())
     }
 
     #[test]
-    fn validate_all_hooks_strict_fails() {
-        let dir = tempdir().unwrap();
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+    fn validate_all_hooks_strict_fails() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("bad.sh");
-        write_hook(&hook, 0o777);
-        let err = validate_all_hooks(&[("dns_hook", Some(&hook))], false).unwrap_err();
+        write_hook(&hook, 0o777)?;
+        let Err(err) = validate_all_hooks(&[("dns_hook", Some(&hook))], false) else {
+            panic!("expected error for world-writable hook");
+        };
         assert!(err.to_string().contains("refusing to run"));
+        Ok(())
     }
 
     #[test]
-    fn sticky_world_writable_parent_accepted() {
-        let dir = tempdir().unwrap();
-        set_permissions(dir.path(), Permissions::from_mode(0o1777)).unwrap();
+    fn sticky_world_writable_parent_accepted() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        set_permissions(dir.path(), Permissions::from_mode(0o1777))?;
         let hook = dir.path().join("hook.sh");
-        write_hook(&hook, 0o755);
-        let res = check_hook_path(&hook).unwrap();
+        write_hook(&hook, 0o755)?;
+        let res = check_hook_path(&hook)?;
         assert!(
             matches!(res, HookCheck::Ok),
             "sticky world-writable parent (1777) must not be flagged",
         );
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
+        Ok(())
     }
 
     #[test]
-    fn validate_all_hooks_unsafe_warns_but_passes() {
-        let dir = tempdir().unwrap();
-        set_permissions(dir.path(), Permissions::from_mode(0o755)).unwrap();
+    fn validate_all_hooks_unsafe_warns_but_passes() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("bad.sh");
-        write_hook(&hook, 0o777);
+        write_hook(&hook, 0o777)?;
         // Should not bail in --unsafe-hooks mode.
-        validate_all_hooks(&[("dns_hook", Some(&hook))], true).unwrap();
+        validate_all_hooks(&[("dns_hook", Some(&hook))], true)?;
+        Ok(())
     }
 
     #[test]
-    fn validate_all_hooks_skips_none() {
+    fn validate_all_hooks_skips_none() -> anyhow::Result<()> {
         // No hooks configured → always Ok regardless of mode.
-        validate_all_hooks(&[("dns_hook", None), ("on_cert_issued", None)], false).unwrap();
+        validate_all_hooks(&[("dns_hook", None), ("on_cert_issued", None)], false)?;
+        Ok(())
     }
 }

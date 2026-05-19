@@ -41,18 +41,31 @@ pub enum DnsCheckMode {
     System,
 }
 
+/// Whether the DNS resolver should perform DNSSEC validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dnssec {
+    On,
+    Off,
+}
+
+impl Dnssec {
+    fn validate(self) -> bool {
+        matches!(self, Self::On)
+    }
+}
+
 /// Configured DNS resolver for ACME propagation checks.
 ///
 /// Build once per command and reuse across all `txt_matches` calls.
 pub struct DnsChecker {
     mode: DnsCheckMode,
-    dnssec: bool,
+    dnssec: Dnssec,
     bootstrap: Arc<TokioResolver>,
 }
 
 impl DnsChecker {
     /// Build a checker for the given mode. DNSSEC validation is opt-in.
-    pub fn new(mode: DnsCheckMode, dnssec: bool) -> Result<Self> {
+    pub fn new(mode: DnsCheckMode, dnssec: Dnssec) -> Result<Self> {
         let bootstrap = match mode {
             DnsCheckMode::System => build_system_resolver(dnssec)?,
             DnsCheckMode::Cached | DnsCheckMode::Authoritative => build_public_resolver(dnssec)?,
@@ -88,7 +101,7 @@ impl DnsChecker {
                 // RFC 1035 §3.3.14: TXT rdata is one or more <character-string>s.
                 // ACME key authorizations are always a single ASCII string, so
                 // compare each chunk individually for exact equality.
-                for chunk in txt.txt_data.iter() {
+                for chunk in &txt.txt_data {
                     if chunk.as_ref() == expected_bytes {
                         return Ok(true);
                     }
@@ -158,7 +171,7 @@ impl DnsChecker {
         opts.cache_size = 0;
         opts.timeout = Duration::from_secs(5);
         opts.attempts = 2;
-        opts.validate = self.dnssec;
+        opts.validate = self.dnssec.validate();
 
         let resolver = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
             .with_options(opts)
@@ -168,10 +181,10 @@ impl DnsChecker {
     }
 }
 
-fn build_public_resolver(dnssec: bool) -> Result<TokioResolver> {
+fn build_public_resolver(dnssec: Dnssec) -> Result<TokioResolver> {
     let mut name_servers: Vec<NameServerConfig> = Vec::new();
     for group in [&CLOUDFLARE, &GOOGLE, &QUAD9] {
-        for ip in group.ips.iter() {
+        for ip in group.ips {
             name_servers.push(NameServerConfig::udp_and_tcp(*ip));
         }
     }
@@ -181,7 +194,7 @@ fn build_public_resolver(dnssec: bool) -> Result<TokioResolver> {
     opts.ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
     opts.timeout = Duration::from_secs(5);
     opts.attempts = 2;
-    opts.validate = dnssec;
+    opts.validate = dnssec.validate();
 
     TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
         .with_options(opts)
@@ -189,7 +202,7 @@ fn build_public_resolver(dnssec: bool) -> Result<TokioResolver> {
         .context("failed to build public DNS resolver")
 }
 
-fn build_system_resolver(dnssec: bool) -> Result<TokioResolver> {
+fn build_system_resolver(dnssec: Dnssec) -> Result<TokioResolver> {
     let mut builder = match TokioResolver::builder_tokio() {
         Ok(b) => b,
         Err(err) => {
@@ -204,7 +217,7 @@ fn build_system_resolver(dnssec: bool) -> Result<TokioResolver> {
         }
     };
     builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
-    builder.options_mut().validate = dnssec;
+    builder.options_mut().validate = dnssec.validate();
     builder
         .build()
         .context("failed to build system DNS resolver")
@@ -215,49 +228,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dns_check_mode_variants_are_distinct() {
+    fn dns_check_mode_variants_are_distinct() -> anyhow::Result<()> {
         assert_ne!(DnsCheckMode::Authoritative, DnsCheckMode::Cached);
         assert_ne!(DnsCheckMode::Cached, DnsCheckMode::System);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn invalid_name_returns_error() {
-        let checker = DnsChecker::new(DnsCheckMode::Cached, false).unwrap();
+    async fn invalid_name_returns_error() -> anyhow::Result<()> {
+        let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         let err = checker.txt_matches("foo..example.com", "anything").await;
         assert!(err.is_err(), "expected error for malformed DNS name");
+        Ok(())
     }
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_cached_mode_finds_real_txt() {
-        let checker = DnsChecker::new(DnsCheckMode::Cached, false).unwrap();
+    async fn smoke_cached_mode_finds_real_txt() -> anyhow::Result<()> {
+        let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
-        let found = checker.txt_matches("google.com", expected).await.unwrap();
+        let found = checker.txt_matches("google.com", expected).await?;
         assert!(found, "expected to find Google's SPF TXT record");
+        Ok(())
     }
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_authoritative_mode_finds_real_txt() {
-        let checker = DnsChecker::new(DnsCheckMode::Authoritative, false).unwrap();
+    async fn smoke_authoritative_mode_finds_real_txt() -> anyhow::Result<()> {
+        let checker = DnsChecker::new(DnsCheckMode::Authoritative, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
-        let found = checker.txt_matches("google.com", expected).await.unwrap();
+        let found = checker.txt_matches("google.com", expected).await?;
         assert!(
             found,
             "expected to find Google's SPF TXT record via authoritative NS"
         );
+        Ok(())
     }
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_exact_match_rejects_substring() {
-        let checker = DnsChecker::new(DnsCheckMode::Cached, false).unwrap();
+    async fn smoke_exact_match_rejects_substring() -> anyhow::Result<()> {
+        let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         // Substring of the real SPF record — old `dig | contains` impl would
         // falsely return true. Exact-match must reject it.
-        let found = checker.txt_matches("google.com", "v=spf1").await.unwrap();
+        let found = checker.txt_matches("google.com", "v=spf1").await?;
         assert!(
             !found,
             "exact match must NOT accept a substring of a real TXT record"
         );
+        Ok(())
     }
 }
