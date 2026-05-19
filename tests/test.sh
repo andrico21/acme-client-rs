@@ -330,7 +330,7 @@ TEST_TOKEN="test-token-standalone"
 HTTP01_PORT=5099
 
 # Start the HTTP-01 server in the background
-acme --account-key "${ACCT_KEY}" serve-http01 --token "${TEST_TOKEN}" --port ${HTTP01_PORT} &
+acme --account-key "${ACCT_KEY}" serve-http-01 --token "${TEST_TOKEN}" --port ${HTTP01_PORT} &
 HTTP01_PID=$!
 sleep 2
 
@@ -362,7 +362,7 @@ CHDIR_TOKEN="test-token-filedir"
 # Use a FIFO: open write-end via fd to unblock the reader, keep it open during the test
 CHDIR_FIFO="${WORK_DIR}/tc10b-fifo"
 mkfifo "${CHDIR_FIFO}"
-acme --account-key "${ACCT_KEY}" serve-http01 --token "${CHDIR_TOKEN}" \
+acme --account-key "${ACCT_KEY}" serve-http-01 --token "${CHDIR_TOKEN}" \
   --challenge-dir "${CHALLENGE_DIR}" < "${CHDIR_FIFO}" &
 CHDIR_PID=$!
 exec 3>"${CHDIR_FIFO}"   # open write-end (unblocks the reader)
@@ -393,7 +393,7 @@ PYTHON_PID=$!
 sleep 1
 
 set +e
-OUTPUT=$(acme_rc --account-key "${ACCT_KEY}" serve-http01 --token dummy --port ${BUSY_PORT} 2>&1)
+OUTPUT=$(acme_rc --account-key "${ACCT_KEY}" serve-http-01 --token dummy --port ${BUSY_PORT} 2>&1)
 RC=$?
 set -e
 kill ${PYTHON_PID} 2>/dev/null || true
@@ -408,7 +408,7 @@ fi
 # ── TC-12: Show DNS-01 Instructions ─────────────────────────────────────────
 
 log_test "12" "Show DNS-01 Instructions"
-OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns01 \
+OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-01 \
   --domain "${SINGLE_DOMAIN}" --token "test-dns-token" 2>&1)
 if echo "${OUTPUT}" | grep -q "_acme-challenge"; then
   pass "DNS-01 instructions displayed with _acme-challenge record name"
@@ -421,7 +421,7 @@ fi
 
 log_test "30" "Custom HTTP-01 Port"
 CUSTOM_PORT=8888
-acme --account-key "${ACCT_KEY}" serve-http01 --token "port-test" --port ${CUSTOM_PORT} &
+acme --account-key "${ACCT_KEY}" serve-http-01 --token "port-test" --port ${CUSTOM_PORT} &
 CUSTOM_PID=$!
 sleep 2
 
@@ -1563,13 +1563,13 @@ else
   skip "No account URL for JSON order test"
 fi
 
-# ── TC-53: show-dns01 --output-format json ──────────────────────────────────
+# ── TC-53: show-dns-01 --output-format json ──────────────────────────────────
 
-log_test "53" "show-dns01 --output-format json"
-OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" show-dns01 \
+log_test "53" "show-dns-01 --output-format json"
+OUTPUT=$(acme --output-format json --account-key "${JSON_KEY}" show-dns-01 \
   --domain "${SINGLE_DOMAIN}" --token "test-json-token" 2>/dev/null)
 if echo "${OUTPUT}" | grep -q '"command"'; then
-  pass "JSON output from show-dns01"
+  pass "JSON output from show-dns-01"
   if ${HAS_PYTHON3}; then
     if json_valid "${OUTPUT}"; then
       RNAME=$(json_field "${OUTPUT}" "record_name")
@@ -1585,7 +1585,7 @@ if echo "${OUTPUT}" | grep -q '"command"'; then
     fi
   fi
 else
-  fail "53" "No JSON output from show-dns01"
+  fail "53" "No JSON output from show-dns-01"
   echo "  Output: ${OUTPUT}"
 fi
 
@@ -2252,28 +2252,28 @@ fi
 
 rm -f "${PROF_STDERR}" 2>/dev/null
 
-# ── TC-86: show-dns-persist01 happy path ────────────────────────────────────
+# ── TC-86: show-dns-persist-01 happy path ────────────────────────────────────
 
-log_test "86" "show-dns-persist01 happy path (SEC-18)"
-if OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-persist01 \
+log_test "86" "show-dns-persist-01 happy path (SEC-18)"
+if OUTPUT=$(acme --account-key "${ACCT_KEY}" show-dns-persist-01 \
     --domain "${SINGLE_DOMAIN}" \
     --issuer-domain-name letsencrypt.org 2>&1); then
   if echo "${OUTPUT}" | grep -q "_validation-persist" \
      && echo "${OUTPUT}" | grep -q "accounturi="; then
-    pass "show-dns-persist01 emitted record name + accounturi"
+    pass "show-dns-persist-01 emitted record name + accounturi"
   else
-    fail "86" "show-dns-persist01 output missing expected fields"
+    fail "86" "show-dns-persist-01 output missing expected fields"
     echo "  Output: ${OUTPUT}"
   fi
 else
-  fail "86" "show-dns-persist01 exited non-zero"
+  fail "86" "show-dns-persist-01 exited non-zero"
   echo "  Output: ${OUTPUT}"
 fi
 
-# ── TC-87: show-dns-persist01 rejects injected issuer-domain-name ──────────
+# ── TC-87: show-dns-persist-01 rejects injected issuer-domain-name ──────────
 
-log_test "87" "show-dns-persist01 rejects ;-injection in --issuer-domain-name (SEC-18)"
-if acme --account-key "${ACCT_KEY}" show-dns-persist01 \
+log_test "87" "show-dns-persist-01 rejects ;-injection in --issuer-domain-name (SEC-18)"
+if acme --account-key "${ACCT_KEY}" show-dns-persist-01 \
      --domain "${SINGLE_DOMAIN}" \
      --issuer-domain-name 'evil; rogue=x' >/dev/null 2>&1; then
   fail "87" "Injected issuer-domain-name was accepted"
