@@ -254,7 +254,7 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
         let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
         client::validate_acme_url(url, tls, net)?;
-        client.set_account_url(url.clone());
+        client.set_account_url(url.as_str());
     }
     Ok(client)
 }

@@ -143,7 +143,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("token");
         std::fs::write(&path, "x").unwrap();
-        reg.register(CleanupAction::HttpChallengeFile(path.clone()));
+        reg.register(CleanupAction::HttpChallengeFile(path));
         reg.run_all_sync();
         // Second drain should be a no-op even though file no longer exists.
         reg.run_all_sync();
