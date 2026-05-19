@@ -1,7 +1,7 @@
 //! Order and authorization subcommands (order, list-profiles, get-authz,
 //! respond-challenge, finalize, poll-order, download-cert).
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -63,11 +63,7 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     crate::client::validate_directory_url(&cli.directory, tls, net)?;
-    let http = crate::client::build_http_client(
-        cli.insecure,
-        cli.connect_timeout,
-        cli.allow_private_network,
-    )?;
+    let http = crate::client::build_http_client(tls, cli.connect_timeout, net)?;
     let resp = http
         .get(&cli.directory)
         .send()
@@ -75,7 +71,8 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
         .context("failed to fetch ACME directory")?;
     if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("ACME directory request failed: {body}");
+        let truncated: String = body.chars().take(512).collect();
+        anyhow::bail!("ACME directory request failed: {truncated}");
     }
     let dir: crate::types::Directory = resp.json().await.context("failed to parse directory")?;
     let profiles = dir.meta.as_ref().and_then(|m| m.profiles.as_ref());
@@ -184,36 +181,52 @@ pub(crate) async fn cmd_finalize(
         .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
         .collect::<Result<Vec<_>>>()?;
     let mut client = build_client(cli).await?;
-    let (csr_der, key_pem) = generate_csr(&domains, cert_key_alg)?;
+    let domains_for_csr = domains.clone();
+    let (csr_der, key_pem) =
+        tokio::task::spawn_blocking(move || generate_csr(&domains_for_csr, cert_key_alg))
+            .await
+            .context("CSR generation task panicked")??;
 
     let password: Option<secrecy::SecretString> = if let Some(pw) = key_password {
         Some(secrecy::SecretString::from(pw.to_string()))
     } else if let Some(path) = key_password_file {
         crate::fs_secure::warn_if_world_readable(path, "password");
         let content = zeroize::Zeroizing::new(
-            std::fs::read_to_string(path)
+            tokio::fs::read_to_string(path)
+                .await
                 .with_context(|| format!("failed to read password file: {}", path.display()))?,
         );
         let pw: Option<String> = content
             .lines()
             .next()
             .map(|line| line.trim().to_string())
-            .filter(|pw: &String| !pw.is_empty());
+            .filter(|pw| !pw.is_empty());
         pw.map(secrecy::SecretString::from)
     } else {
         None
     };
 
     let key_encrypted = password.is_some();
-    if let Some(ref password) = password {
-        use secrecy::ExposeSecret;
-        let encrypted = encrypt_private_key(&key_pem, password.expose_secret())?;
-        crate::fs_secure::write_secret_file(key_output, encrypted.as_bytes(), force)
-            .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
+    let key_bytes: zeroize::Zeroizing<Vec<u8>> = if let Some(password) = password {
+        let key_pem_owned = key_pem;
+        let encrypted = tokio::task::spawn_blocking(move || {
+            use secrecy::ExposeSecret;
+            encrypt_private_key(&key_pem_owned, password.expose_secret())
+        })
+        .await
+        .context("scrypt encryption task panicked")??;
+        zeroize::Zeroizing::new(encrypted.into_bytes())
     } else {
-        crate::fs_secure::write_secret_file(key_output, key_pem.as_bytes(), force)
-            .with_context(|| format!("failed to write private key to {}", key_output.display()))?;
-    }
+        zeroize::Zeroizing::new(key_pem.as_bytes().to_vec())
+    };
+    let key_output_owned = key_output.to_path_buf();
+    let key_display = key_output.display().to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::fs_secure::write_secret_file(&key_output_owned, &key_bytes, if force { crate::fs_secure::Overwrite::Allow } else { crate::fs_secure::Overwrite::Forbid })
+    })
+    .await
+    .context("write_secret_file task panicked")?
+    .with_context(|| format!("failed to write private key to {key_display}"))?;
 
     let order = client.finalize_order(&finalize_url, &csr_der).await?;
     super::emit_result(
@@ -271,7 +284,7 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) -> Result<()> {
+pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &Path) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
@@ -281,7 +294,8 @@ pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &PathBuf) ->
         .with_context(|| format!("not a valid URL: {url}"))?;
     let mut client = build_client(cli).await?;
     let cert = client.download_certificate(&url).await?;
-    std::fs::write(output, &cert)
+    tokio::fs::write(output, &cert)
+        .await
         .with_context(|| format!("failed to write certificate to {}", output.display()))?;
     super::emit_result(
         cli,

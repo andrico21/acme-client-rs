@@ -14,13 +14,13 @@ pub(crate) async fn cmd_serve_http01(
     port: u16,
     challenge_dir: Option<&std::path::Path>,
 ) -> Result<()> {
-    use secrecy::ExposeSecret;
+    
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
     )?;
     let key =
-        load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
+        load_account_key_with_password(&cli.account_key, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
     if let Some(dir) = challenge_dir {
         let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
         if !cli.silent {
@@ -36,7 +36,7 @@ pub(crate) async fn cmd_serve_http01(
                 || outln!("Challenge file written to {}", file.display()),
             );
             outln!("Press Enter after validation to clean up...");
-            let _ = std::io::stdin().read_line(&mut String::new());
+            let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
         }
         crate::challenge::http01::cleanup_challenge_file(&file);
         Ok(())
@@ -50,7 +50,7 @@ pub(crate) fn cmd_show_dns01(
     domain: &str,
     token: &crate::types::ChallengeToken,
 ) -> Result<()> {
-    use secrecy::ExposeSecret;
+    
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-01")?;
     let pw = resolve_account_key_password(
@@ -58,12 +58,12 @@ pub(crate) fn cmd_show_dns01(
         cli.account_key_password_file.as_deref(),
     )?;
     let key =
-        load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
+        load_account_key_with_password(&cli.account_key, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
+    let name = crate::challenge::dns01::record_name(&domain)?;
+    let value = crate::challenge::dns01::txt_record_value(token, &key)?;
     super::emit_result(
         cli,
         || {
-            let name = crate::challenge::dns01::record_name(&domain);
-            let value = crate::challenge::dns01::txt_record_value(token, &key);
             serde_json::json!({
                 "command": "show-dns-01",
                 "domain": domain,
@@ -72,7 +72,15 @@ pub(crate) fn cmd_show_dns01(
                 "record_value": value,
             })
         },
-        || crate::challenge::dns01::print_instructions(&domain, token, &key),
+        || {
+            crate::outln!();
+            crate::outln!("=== DNS-01 Challenge ===");
+            crate::outln!("Create a DNS TXT record:");
+            crate::outln!("  Name:  {name}");
+            crate::outln!("  Type:  TXT");
+            crate::outln!("  Value: {value}");
+            crate::outln!();
+        },
     );
     Ok(())
 }
@@ -84,6 +92,8 @@ pub(crate) async fn cmd_show_dns_persist01(
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
 ) -> Result<()> {
+    use crate::cli::OutputFormat;
+
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-persist-01")?;
     let _issuer_check = crate::client::validate_issuer_domain_name(issuer_domain_name)
@@ -103,7 +113,7 @@ pub(crate) async fn cmd_show_dns_persist01(
         .context("account URL not known")?
         .to_string();
 
-    let name = crate::challenge::dns_persist01::record_name(&domain);
+    let name = crate::challenge::dns_persist01::record_name(&domain)?;
     let value = crate::challenge::dns_persist01::txt_record_value(
         issuer_domain_name,
         &account_uri,
@@ -111,7 +121,6 @@ pub(crate) async fn cmd_show_dns_persist01(
         persist_until,
     )?;
 
-    use crate::cli::OutputFormat;
     if !cli.silent {
         if cli.output_format == OutputFormat::Json {
             outln!(
@@ -156,6 +165,18 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
 
     let (authz, authz_url) = client.new_authorization(identifier).await?;
 
+    // Pre-compute key authorizations for any matching challenge tokens so the
+    // text closure stays infallible.
+    let key_auths: Vec<(String, String)> = authz
+        .challenges
+        .iter()
+        .filter(|ch| ch.challenge_type == challenge_type)
+        .filter_map(|ch| ch.token.as_ref().map(|t| (t.to_string(), t.clone())))
+        .map(|(s, t)| {
+            crate::challenge::key_authorization(&t, client.account_key()).map(|ka| (s, ka))
+        })
+        .collect::<Result<_>>()?;
+
     super::emit_result(
         cli,
         || {
@@ -188,8 +209,11 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
                     outln!("  Status: {}", ch.status);
                     if let Some(ref t) = ch.token {
                         outln!("  Token: {t}");
-                        let key_auth = crate::challenge::key_authorization(t, client.account_key());
-                        outln!("  Key authorization: {key_auth}");
+                        if let Some((_, key_auth)) =
+                            key_auths.iter().find(|(tok, _)| tok == t.as_str())
+                        {
+                            outln!("  Key authorization: {key_auth}");
+                        }
                     }
                 }
             }

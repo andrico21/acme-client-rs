@@ -56,7 +56,7 @@ struct RenderContext<'a> {
     config_path: Option<String>,
 }
 
-impl<'a> RenderContext<'a> {
+impl RenderContext<'_> {
     fn cfg_g(&self) -> Option<&crate::config::GlobalConfig> {
         self.loaded_config.map(|c| &c.global)
     }
@@ -73,7 +73,7 @@ impl<'a> RenderContext<'a> {
     /// Source resolver for a global field (CLI > env/config > default).
     ///
     /// In the new model:
-    ///   config_mode: CLI > config > default (env ignored except secrets)
+    ///   `config_mode`: CLI > config > default (env ignored except secrets)
     ///   no config:   CLI > env > default
     fn global_source(&self, id: &str, has_config_val: bool) -> &'static str {
         match self.matches.value_source(id) {
@@ -89,6 +89,7 @@ impl<'a> RenderContext<'a> {
     }
 
     /// Source resolver for a `[run]` or `[account]` config-only field.
+    #[allow(clippy::unused_self)]
     fn cfg_source(&self, has_val: bool) -> &'static str {
         if has_val { "config" } else { "default" }
     }
@@ -145,6 +146,21 @@ fn opt_bool(v: Option<bool>) -> String {
 
 // ─── JSON renderer ────────────────────────────────────────────────────────────
 
+fn set_source(v: &mut serde_json::Value, key: &str, source: &str) {
+    if let Some(obj) = v.as_object_mut()
+        && let Some(entry) = obj.get_mut(key)
+        && let Some(entry_obj) = entry.as_object_mut()
+    {
+        entry_obj.insert("source".to_string(), serde_json::Value::String(source.to_string()));
+    }
+}
+
+fn get_value<'a>(v: &'a serde_json::Value, key: &str) -> &'a serde_json::Value {
+    v.get(key)
+        .and_then(|entry| entry.get("value"))
+        .unwrap_or(&serde_json::Value::Null)
+}
+
 fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
     let cli = ctx.cli;
     let mut obj = serde_json::json!({
@@ -168,46 +184,81 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
     });
     if ctx.verbose {
         let cfg_g = ctx.cfg_g();
-        g["directory"]["source"] = serde_json::json!(ctx.global_source(
+        set_source(
+            &mut g,
             "directory",
-            cfg_g.and_then(|c| c.directory.as_ref()).is_some()
-        ));
-        g["account_key"]["source"] = serde_json::json!(ctx.global_source(
-            "account_key",
-            cfg_g.and_then(|c| c.account_key.as_ref()).is_some()
-        ));
-        g["account_url"]["source"] = serde_json::json!(ctx.global_source(
-            "account_url",
-            cfg_g.and_then(|c| c.account_url.as_ref()).is_some()
-        ));
-        g["output_format"]["source"] = serde_json::json!(ctx.global_source(
-            "output_format",
-            cfg_g.and_then(|c| c.output_format.as_ref()).is_some()
-        ));
-        g["insecure"]["source"] = serde_json::json!(
-            ctx.global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some())
+            ctx.global_source("directory", cfg_g.and_then(|c| c.directory.as_ref()).is_some()),
         );
-        g["connect_timeout"]["source"] = serde_json::json!(ctx.global_source(
+        set_source(
+            &mut g,
+            "account_key",
+            ctx.global_source(
+                "account_key",
+                cfg_g.and_then(|c| c.account_key.as_ref()).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
+            "account_url",
+            ctx.global_source(
+                "account_url",
+                cfg_g.and_then(|c| c.account_url.as_ref()).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
+            "output_format",
+            ctx.global_source(
+                "output_format",
+                cfg_g.and_then(|c| c.output_format.as_ref()).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
+            "insecure",
+            ctx.global_source("insecure", cfg_g.and_then(|c| c.insecure).is_some()),
+        );
+        set_source(
+            &mut g,
             "connect_timeout",
-            cfg_g.and_then(|c| c.connect_timeout).is_some()
-        ));
-        g["allow_private_network"]["source"] = serde_json::json!(ctx.global_source(
+            ctx.global_source(
+                "connect_timeout",
+                cfg_g.and_then(|c| c.connect_timeout).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
             "allow_private_network",
-            cfg_g.and_then(|c| c.allow_private_network).is_some()
-        ));
-        g["dns_check_mode"]["source"] = serde_json::json!(ctx.global_source(
+            ctx.global_source(
+                "allow_private_network",
+                cfg_g.and_then(|c| c.allow_private_network).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
             "dns_check_mode",
-            cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some()
-        ));
-        g["dns_check_dnssec"]["source"] = serde_json::json!(ctx.global_source(
+            ctx.global_source(
+                "dns_check_mode",
+                cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
             "dns_check_dnssec",
-            cfg_g.and_then(|c| c.dns_check_dnssec).is_some()
-        ));
-        g["unsafe_hooks"]["source"] = serde_json::json!(
-            ctx.global_source("unsafe_hooks", cfg_g.and_then(|c| c.unsafe_hooks).is_some())
+            ctx.global_source(
+                "dns_check_dnssec",
+                cfg_g.and_then(|c| c.dns_check_dnssec).is_some(),
+            ),
+        );
+        set_source(
+            &mut g,
+            "unsafe_hooks",
+            ctx.global_source("unsafe_hooks", cfg_g.and_then(|c| c.unsafe_hooks).is_some()),
         );
     }
-    obj["global"] = g;
+    if let Some(obj_map) = obj.as_object_mut() {
+        obj_map.insert("global".to_string(), g);
+    }
 
     if let Some(r) = ctx.cfg_run() {
         let mut rv = serde_json::json!({
@@ -265,20 +316,22 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
                 "cert_key_algorithm",
                 "profile",
             ] {
-                let has = !rv[key]["value"].is_null()
-                    && rv[key]["value"] != serde_json::json!(false)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::CHALLENGE_TYPE)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::HTTP_PORT)
-                    && rv[key]["value"]
-                        != serde_json::json!(defaults::run::DNS_PROPAGATION_CONCURRENCY)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::CHALLENGE_TIMEOUT_SECS)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::CERT_OUTPUT_FILE)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::KEY_OUTPUT_FILE)
-                    && rv[key]["value"] != serde_json::json!(defaults::run::CERT_KEY_ALGORITHM);
-                rv[key]["source"] = serde_json::json!(ctx.cfg_source(has));
+                let value = get_value(&rv, key);
+                let has = !value.is_null()
+                    && *value != serde_json::json!(false)
+                    && *value != serde_json::json!(defaults::run::CHALLENGE_TYPE)
+                    && *value != serde_json::json!(defaults::run::HTTP_PORT)
+                    && *value != serde_json::json!(defaults::run::DNS_PROPAGATION_CONCURRENCY)
+                    && *value != serde_json::json!(defaults::run::CHALLENGE_TIMEOUT_SECS)
+                    && *value != serde_json::json!(defaults::run::CERT_OUTPUT_FILE)
+                    && *value != serde_json::json!(defaults::run::KEY_OUTPUT_FILE)
+                    && *value != serde_json::json!(defaults::run::CERT_KEY_ALGORITHM);
+                set_source(&mut rv, key, ctx.cfg_source(has));
             }
         }
-        obj["run"] = rv;
+        if let Some(obj_map) = obj.as_object_mut() {
+            obj_map.insert("run".to_string(), rv);
+        }
     }
     if let Some(a) = ctx.cfg_acct() {
         let mut av = serde_json::json!({
@@ -287,12 +340,13 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
             "eab_hmac_key": { "value": ctx.redact_secret(&a.eab_hmac_key) },
         });
         if ctx.verbose {
-            av["contact"]["source"] = serde_json::json!(ctx.cfg_source(a.contact.is_some()));
-            av["eab_kid"]["source"] = serde_json::json!(ctx.cfg_source(a.eab_kid.is_some()));
-            av["eab_hmac_key"]["source"] =
-                serde_json::json!(ctx.cfg_source(a.eab_hmac_key.is_some()));
+            set_source(&mut av, "contact", ctx.cfg_source(a.contact.is_some()));
+            set_source(&mut av, "eab_kid", ctx.cfg_source(a.eab_kid.is_some()));
+            set_source(&mut av, "eab_hmac_key", ctx.cfg_source(a.eab_hmac_key.is_some()));
         }
-        obj["account"] = av;
+        if let Some(obj_map) = obj.as_object_mut() {
+            obj_map.insert("account".to_string(), av);
+        }
     }
     outln!("{}", serde_json::to_string_pretty(&obj)?);
     Ok(())
@@ -310,10 +364,7 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
         outln!("# Source annotations: (cli) (env) (config) (default)");
     }
     outln!();
-    match &ctx.config_path {
-        Some(p) => outln!("Config file: {p}"),
-        None => outln!("Config file: (none)"),
-    }
+    if let Some(p) = &ctx.config_path { outln!("Config file: {p}") } else { outln!("Config file: (none)") }
     outln!();
 
     let cfg_g = ctx.cfg_g();

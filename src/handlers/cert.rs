@@ -1,6 +1,6 @@
 //! Certificate-management subcommands (revoke, renewal-info).
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -9,7 +9,7 @@ use crate::client::compute_cert_id;
 use crate::csr::pem_to_der;
 use crate::{build_client, outln};
 
-pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8>) -> Result<()> {
+pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &Path, reason: Option<u8>) -> Result<()> {
     let mut client = build_client(cli).await?;
 
     // Revocation with an account key requires KID signing (RFC 8555 §7.6).
@@ -18,7 +18,8 @@ pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8
         client.create_account(None, true, None).await?;
     }
 
-    let pem_data = std::fs::read_to_string(cert_path)
+    let pem_data = tokio::fs::read_to_string(cert_path)
+        .await
         .with_context(|| format!("failed to read certificate from {}", cert_path.display()))?;
     let cert_der = pem_to_der(&pem_data)?;
     client.revoke_certificate(&cert_der, reason).await?;
@@ -36,7 +37,7 @@ pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &PathBuf, reason: Option<u8
     Ok(())
 }
 
-pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<()> {
+pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> {
     let mut client = build_client(cli).await?;
 
     // ARI GET uses POST-as-GET, which needs KID signing
@@ -44,7 +45,8 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &PathBuf) -> Result<(
         client.create_account(None, true, None).await?;
     }
 
-    let pem_data = std::fs::read_to_string(cert_path)
+    let pem_data = tokio::fs::read_to_string(cert_path)
+        .await
         .with_context(|| format!("failed to read certificate from {}", cert_path.display()))?;
     let cert_der = pem_to_der(&pem_data)?;
     let cert_id = compute_cert_id(&cert_der)?;
