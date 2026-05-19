@@ -126,24 +126,7 @@ pub(super) async fn provision_dns01(
     }
 
     if let Some(timeout_secs) = ctx.dns_wait {
-        // Poll DNS propagation
-        info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let mut found = false;
-        while std::time::Instant::now() < deadline {
-            if super::super::super::dns_txt_check(&ctx.dns_checker, txt_name.as_str(), &txt_value)
-                .await?
-            {
-                info!("DNS TXT record found");
-                found = true;
-                break;
-            }
-            tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        }
-        if !found {
-            anyhow::bail!("DNS TXT record for {txt_name} not found within {timeout_secs}s");
-        }
+        wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         // Interactive: wait for Enter
         outln!("Press Enter once the record has propagated...");
@@ -213,23 +196,7 @@ pub(super) async fn provision_dns_persist01(
     }
 
     if let Some(timeout_secs) = ctx.dns_wait {
-        info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        let mut found = false;
-        while std::time::Instant::now() < deadline {
-            if super::super::super::dns_txt_check(&ctx.dns_checker, txt_name.as_str(), &txt_value)
-                .await?
-            {
-                info!("DNS TXT record found");
-                found = true;
-                break;
-            }
-            tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        }
-        if !found {
-            anyhow::bail!("DNS TXT record for {txt_name} not found within {timeout_secs}s");
-        }
+        wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         outln!("Press Enter once the record has propagated...");
         let _ = std::io::stdin().read_line(&mut String::new());
@@ -283,4 +250,23 @@ pub(super) async fn provision_tlsalpn01(
 
     client.respond_to_challenge(challenge_url).await?;
     Ok(ProvisionResult::default())
+}
+
+async fn wait_for_dns_propagation(
+    ctx: &RunContext<'_>,
+    txt_name: &str,
+    txt_value: &str,
+    timeout_secs: u64,
+) -> Result<()> {
+    info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        if super::super::super::dns_txt_check(&ctx.dns_checker, txt_name, txt_value).await? {
+            info!("DNS TXT record found");
+            return Ok(());
+        }
+        tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    }
+    anyhow::bail!("DNS TXT record for {txt_name} not found within {timeout_secs}s")
 }
