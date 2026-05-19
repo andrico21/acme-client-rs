@@ -33,3 +33,23 @@ pub mod run {
 
     pub const CERT_KEY_ALGORITHM: &str = "ec-p256";
 }
+
+/// Internal polling intervals. NOT user-configurable — these tune how often
+/// the client wakes up to re-check long-running async operations. Centralized
+/// here so a future "tune the cadence" change touches one place, not eight.
+pub mod polling {
+    use std::time::Duration;
+
+    /// Sleep between ACME resource re-polls (challenge / authorization / order
+    /// status). RFC 8555 §7.5.1 recommends honoring server `Retry-After`; we
+    /// fall back to this when the header is absent. Kept short because Pebble
+    /// + Let's Encrypt typically transition within a few seconds.
+    pub const ACME_RESOURCE_POLL: Duration = Duration::from_secs(2);
+
+    /// Sleep between DNS TXT propagation re-checks during `--dns-wait`. Longer
+    /// than the ACME poll because authoritative-NS query is heavier and TTL
+    /// floors on real DNS providers are typically 30-60s — polling faster than
+    /// 5s would just waste resolver round-trips without finding the record
+    /// sooner.
+    pub const DNS_PROPAGATION_POLL: Duration = Duration::from_secs(5);
+}

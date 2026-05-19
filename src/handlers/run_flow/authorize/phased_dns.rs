@@ -167,7 +167,7 @@ pub(super) async fn run_phased_dns(
                             // cleanup and leak the TXT record (TC-40b/d regression).
                             Err(_) => {}
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        tokio::time::sleep(crate::defaults::polling::DNS_PROPAGATION_POLL).await;
                     }
                     Ok((domain, false))
                 });
@@ -253,7 +253,7 @@ pub(super) async fn run_phased_dns(
                         ctx.challenge_timeout
                     );
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(crate::defaults::polling::ACME_RESOURCE_POLL).await;
                 let a = client.get_authorization(&p.authz_url).await?;
                 if !ctx.json && !ctx.silent {
                     outln!("  Authorization status for {}: {}", p.domain, a.status);

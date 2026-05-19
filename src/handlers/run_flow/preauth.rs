@@ -151,7 +151,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             found = true;
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        tokio::time::sleep(crate::defaults::polling::DNS_PROPAGATION_POLL).await;
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
@@ -235,7 +235,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             found = true;
                             break;
                         }
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        tokio::time::sleep(crate::defaults::polling::DNS_PROPAGATION_POLL).await;
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
@@ -308,7 +308,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     ctx.challenge_timeout
                 );
             }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            tokio::time::sleep(crate::defaults::polling::ACME_RESOURCE_POLL).await;
             let a = client.get_authorization(&authz_url).await?;
             if !ctx.json && !ctx.silent {
                 outln!("  Authorization status: {}", a.status);

@@ -266,7 +266,7 @@ async fn wait_for_dns_propagation(
             return Ok(());
         }
         tracing::debug!("DNS TXT not yet visible, retrying in 5s...");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(crate::defaults::polling::DNS_PROPAGATION_POLL).await;
     }
     anyhow::bail!("DNS TXT record for {txt_name} not found within {timeout_secs}s")
 }

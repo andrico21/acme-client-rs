@@ -42,7 +42,7 @@ pub(super) async fn finalize(
         if order.status == OrderStatus::Invalid {
             anyhow::bail!("order became invalid");
         }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(crate::defaults::polling::ACME_RESOURCE_POLL).await;
         order = client.poll_order(order_url).await?;
         if !ctx.json && !ctx.silent {
             outln!("  Order status: {}", order.status);
