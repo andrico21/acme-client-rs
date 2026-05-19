@@ -46,10 +46,21 @@ pub mod polling {
     /// + Let's Encrypt typically transition within a few seconds.
     pub const ACME_RESOURCE_POLL: Duration = Duration::from_secs(2);
 
+    /// Upper bound applied to server-provided `Retry-After` values. Prevents a
+    /// misconfigured CA (or a malicious header) from stalling a renewal job
+    /// for hours; legitimate CAs send seconds to low minutes.
+    pub const ACME_RESOURCE_POLL_MAX: Duration = Duration::from_mins(5);
+
     /// Sleep between DNS TXT propagation re-checks during `--dns-wait`. Longer
     /// than the ACME poll because authoritative-NS query is heavier and TTL
     /// floors on real DNS providers are typically 30-60s — polling faster than
     /// 5s would just waste resolver round-trips without finding the record
     /// sooner.
     pub const DNS_PROPAGATION_POLL: Duration = Duration::from_secs(5);
+
+    /// Upper bound on order-finalization polling. RFC 8555 §7.4 does not set
+    /// one, but a wedged order should not hang the client forever — Let's
+    /// Encrypt and Pebble both transition within seconds; 10 minutes is a
+    /// generous ceiling that surfaces stuck orders as a clean timeout error.
+    pub const ORDER_POLL_TIMEOUT: Duration = Duration::from_mins(10);
 }
