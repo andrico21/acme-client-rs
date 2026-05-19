@@ -16,7 +16,7 @@
 //! Because the two live in disjoint sub-fields, calls like
 //! `self.transport.signed_request(&self.directory.new_order, …)` borrow
 //! both halves at once without conflict. This is the "Struct Decomposition
-//! for Independent Borrowing" pattern (RUST_GUIDELINES §6) and is what
+//! for Independent Borrowing" pattern (`RUST_GUIDELINES` §6) and is what
 //! lets the URL fields be typed as `url::Url` end-to-end instead of `String`.
 
 use anyhow::{Context, Result, bail};
@@ -28,11 +28,18 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::jws::AccountKey;
-use crate::types::*;
+use crate::types::{Directory, AcmeError, AcmeErrorType, Account, NewAccountRequest, DeactivateAccountRequest, Identifier, Order, NewOrderRequest, FinalizeRequest, Authorization, validate_server_identifier, Challenge, NewAuthorizationRequest, RevokeCertRequest, RenewalInfo};
 
 use super::http_transport::{AcmeResponse, build_http_client, truncate_for_log};
 use super::net_policy::{NetworkPolicy, TlsPolicy, policies_from_cli_flags};
 use super::url_validation::validate_acme_url;
+
+/// Parse RFC 9110 `Retry-After` delta-seconds into a `Duration`.
+/// Returns `None` if absent, unparseable, or in HTTP-date form (uncommon for ACME).
+fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
+    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    raw.trim().parse::<u64>().ok().map(std::time::Duration::from_secs)
+}
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
 
@@ -175,15 +182,11 @@ impl AcmeClient {
     pub async fn new(
         directory_url: &str,
         account_key: AccountKey,
-        danger_accept_invalid_certs: bool,
+        tls: TlsPolicy,
         connect_timeout_secs: u64,
-        allow_private_network: bool,
+        network: NetworkPolicy,
     ) -> Result<Self> {
-        let http = build_http_client(
-            danger_accept_invalid_certs,
-            connect_timeout_secs,
-            allow_private_network,
-        )?;
+        let http = build_http_client(tls, connect_timeout_secs, network)?;
 
         info!("Fetching ACME directory from {}", directory_url);
         let resp = http
@@ -204,8 +207,8 @@ impl AcmeClient {
         let directory: Directory = resp.json().await.context("failed to parse directory")?;
         debug!(?directory, "ACME directory loaded");
 
-        let insecure = danger_accept_invalid_certs;
-        let allow_private = allow_private_network;
+        let insecure = tls.accepts_invalid_certs();
+        let allow_private = network.allows_private();
         for (label, url) in [
             ("newNonce", directory.new_nonce.as_str()),
             ("newAccount", directory.new_account.as_str()),
@@ -213,28 +216,16 @@ impl AcmeClient {
             ("revokeCert", directory.revoke_cert.as_str()),
             ("keyChange", directory.key_change.as_str()),
         ] {
-            validate_acme_url(
-                url,
-                TlsPolicy::from_insecure(insecure),
-                NetworkPolicy::from_allow_private(allow_private),
-            )
-            .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
+            validate_acme_url(url, tls, network)
+                .with_context(|| format!("ACME directory advertises invalid {label} URL"))?;
         }
         if let Some(u) = directory.new_authz.as_ref() {
-            validate_acme_url(
-                u.as_str(),
-                TlsPolicy::from_insecure(insecure),
-                NetworkPolicy::from_allow_private(allow_private),
-            )
-            .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
+            validate_acme_url(u.as_str(), tls, network)
+                .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
         }
         if let Some(u) = directory.renewal_info.as_ref() {
-            validate_acme_url(
-                u.as_str(),
-                TlsPolicy::from_insecure(insecure),
-                NetworkPolicy::from_allow_private(allow_private),
-            )
-            .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
+            validate_acme_url(u.as_str(), tls, network)
+                .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
         }
 
         Ok(Self {
@@ -355,9 +346,10 @@ impl AcmeClient {
     pub async fn new_order(
         &mut self,
         identifiers: Vec<Identifier>,
-        profile: Option<String>,
+        profile: Option<impl Into<String>>,
     ) -> Result<(Order, Url)> {
-        self.new_order_inner(identifiers, None, profile).await
+        self.new_order_inner(identifiers, None, profile.map(Into::into))
+            .await
     }
 
     /// Submit a replacement order (ARI, RFC 9702 §5).
@@ -366,10 +358,10 @@ impl AcmeClient {
     pub async fn new_order_replacing(
         &mut self,
         identifiers: Vec<Identifier>,
-        replaces: String,
-        profile: Option<String>,
+        replaces: impl Into<String>,
+        profile: Option<impl Into<String>>,
     ) -> Result<(Order, Url)> {
-        self.new_order_inner(identifiers, Some(replaces), profile)
+        self.new_order_inner(identifiers, Some(replaces.into()), profile.map(Into::into))
             .await
     }
 
@@ -423,13 +415,24 @@ impl AcmeClient {
 
     /// Poll an order's current status (POST-as-GET).
     pub async fn poll_order(&mut self, order_url: &Url) -> Result<Order> {
+        Ok(self.poll_order_with_retry_after(order_url).await?.0)
+    }
+
+    /// Poll an order's current status, returning the server-suggested
+    /// `Retry-After` delay (RFC 8555 §7.4 / RFC 9110 §10.2.3) if present.
+    pub async fn poll_order_with_retry_after(
+        &mut self,
+        order_url: &Url,
+    ) -> Result<(Order, Option<std::time::Duration>)> {
         debug!("Polling order: {order_url}");
         let resp = self
             .transport
             .signed_request(order_url, &self.directory.new_nonce, "")
             .await?;
         resp.ensure_success()?;
-        resp.json()
+        let retry_after = parse_retry_after(&resp.headers);
+        let order: Order = resp.json()?;
+        Ok((order, retry_after))
     }
 
     // ── Authorization & challenge (RFC 8555 §7.5) ───────────────────────
@@ -490,7 +493,7 @@ impl AcmeClient {
         // Inner payload: { "account": "<account-url>", "oldKey": <old-JWK> }
         let inner_payload = serde_json::to_string(&serde_json::json!({
             "account": account_url,
-            "oldKey": self.transport.account_key.jwk(),
+            "oldKey": self.transport.account_key.jwk()?,
         }))?;
 
         // Inner JWS signed by the NEW key (header has alg + jwk of new key + url)
@@ -605,6 +608,7 @@ impl AcmeClient {
     }
 
     /// Check whether the server supports ARI (has `renewalInfo` in directory).
+    #[must_use]
     pub fn supports_ari(&self) -> bool {
         self.directory.renewal_info.is_some()
     }
@@ -625,6 +629,7 @@ impl AcmeClient {
 ///
 /// - AKI = raw bytes of the keyIdentifier from the Authority Key Identifier extension
 /// - Serial = DER encoding of the certificate's serial number (as a signed INTEGER)
+#[allow(clippy::wildcard_enum_match_arm)]
 pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
     use x509_parser::prelude::*;
 

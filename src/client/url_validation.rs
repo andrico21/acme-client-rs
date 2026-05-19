@@ -52,9 +52,7 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
         .trim_end_matches(']')
         .parse()
         .ok();
-    let is_loopback_host = host_ip
-        .map(|ip| ip.is_loopback())
-        .unwrap_or_else(|| matches!(host, "localhost"));
+    let is_loopback_host = host_ip.map_or_else(|| matches!(host, "localhost"), |ip| ip.is_loopback());
     if scheme == "http" {
         if tls == TlsPolicy::RequireHttps {
             bail!(
@@ -92,8 +90,7 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
 pub fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
     validate_acme_url(url, tls, net).with_context(|| format!("invalid directory URL {url:?}"))?;
     if reqwest::Url::parse(url)
-        .map(|u| u.scheme() == "http")
-        .unwrap_or(false)
+        .is_ok_and(|u| u.scheme() == "http")
     {
         warn!("Using plain http:// for ACME directory (loopback only) — TESTING USE ONLY");
     }
@@ -135,7 +132,9 @@ pub fn validate_issuer_domain_name(s: &str) -> Result<String> {
             bail!("issuer-domain-name label exceeds 63 octets: {label:?}");
         }
         let bytes = label.as_bytes();
-        if !bytes[0].is_ascii_alphanumeric() || !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+        let first = bytes.first().copied().unwrap_or(b'-');
+        let last = bytes.last().copied().unwrap_or(b'-');
+        if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
             bail!("issuer-domain-name label must start/end alphanumeric (LDH): {label:?}");
         }
         for &b in bytes {
@@ -206,7 +205,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_non_http_schemes() {
+    fn rejects_non_http_schemes() -> anyhow::Result<()> {
         for url in [
             "file:///etc/passwd",
             "data:text/plain,x",
@@ -223,10 +222,11 @@ mod tests {
                 "{url} should be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn https_public_host_ok() {
+    fn https_public_host_ok() -> anyhow::Result<()> {
         assert!(
             validate_acme_url(
                 "https://acme-v02.api.letsencrypt.org/directory",
@@ -235,10 +235,11 @@ mod tests {
             )
             .is_ok()
         );
+        Ok(())
     }
 
     #[test]
-    fn http_rejected_without_insecure() {
+    fn http_rejected_without_insecure() -> anyhow::Result<()> {
         assert!(
             validate_acme_url(
                 "http://localhost:14000/dir",
@@ -247,10 +248,11 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn http_loopback_ok_with_insecure() {
+    fn http_loopback_ok_with_insecure() -> anyhow::Result<()> {
         for url in [
             "http://localhost/dir",
             "http://127.0.0.1:14000/dir",
@@ -262,10 +264,11 @@ mod tests {
                 "{url} should pass"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn http_non_loopback_rejected_even_with_insecure() {
+    fn http_non_loopback_rejected_even_with_insecure() -> anyhow::Result<()> {
         assert!(
             validate_acme_url(
                 "http://10.0.0.5/dir",
@@ -274,10 +277,11 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn private_ipv4_literal_rejected_by_default() {
+    fn private_ipv4_literal_rejected_by_default() -> anyhow::Result<()> {
         for url in [
             "https://10.0.0.5/dir",
             "https://192.168.1.1/dir",
@@ -290,10 +294,11 @@ mod tests {
                 "{url} should be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn private_ipv4_literal_allowed_with_opt_in() {
+    fn private_ipv4_literal_allowed_with_opt_in() -> anyhow::Result<()> {
         assert!(
             validate_acme_url(
                 "https://10.0.0.5/dir",
@@ -302,10 +307,11 @@ mod tests {
             )
             .is_ok()
         );
+        Ok(())
     }
 
     #[test]
-    fn private_ipv6_literal_rejected() {
+    fn private_ipv6_literal_rejected() -> anyhow::Result<()> {
         for url in [
             "https://[::1]/dir",
             "https://[fc00::1]/dir",
@@ -316,10 +322,11 @@ mod tests {
                 "{url} should be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn ipv4_mapped_ipv6_blocked_as_ipv4() {
+    fn ipv4_mapped_ipv6_blocked_as_ipv4() -> anyhow::Result<()> {
         assert!(
             validate_acme_url(
                 "https://[::ffff:10.0.0.5]/dir",
@@ -336,10 +343,11 @@ mod tests {
             )
             .is_ok()
         );
+        Ok(())
     }
 
     #[test]
-    fn validate_acme_url_rejects_userinfo() {
+    fn validate_acme_url_rejects_userinfo() -> anyhow::Result<()> {
         for url in [
             "https://attacker@trusted-ca.example/dir",
             "https://user:pass@trusted-ca.example/dir",
@@ -350,10 +358,11 @@ mod tests {
                 "{url} should be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn validate_acme_url_enforces_8000_octet_cap() {
+    fn validate_acme_url_enforces_8000_octet_cap() -> anyhow::Result<()> {
         let host = "https://ca.example/";
         let pad_len = MAX_ACME_URL_LEN - host.len();
         let just_ok = format!("{host}{}", "a".repeat(pad_len));
@@ -370,23 +379,26 @@ mod tests {
             )
             .is_err()
         );
+        Ok(())
     }
 
     #[test]
-    fn validate_issuer_domain_name_accepts_canonical() {
+    fn validate_issuer_domain_name_accepts_canonical() -> anyhow::Result<()> {
         for d in ["example.com", "letsencrypt.org", "sub.example.co.uk"] {
             assert!(validate_issuer_domain_name(d).is_ok(), "{d}");
         }
+        Ok(())
     }
 
     #[test]
-    fn validate_issuer_domain_name_lowercases() {
-        let out = validate_issuer_domain_name("Example.COM").unwrap();
+    fn validate_issuer_domain_name_lowercases() -> anyhow::Result<()> {
+        let out = validate_issuer_domain_name("Example.COM")?;
         assert_eq!(out, "example.com");
+        Ok(())
     }
 
     #[test]
-    fn validate_issuer_domain_name_rejects_injection_attempts() {
+    fn validate_issuer_domain_name_rejects_injection_attempts() -> anyhow::Result<()> {
         for d in [
             "evil.com; rogue=x",
             "evil.com;rogue",
@@ -403,24 +415,27 @@ mod tests {
                 "{d:?} must be rejected"
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn validate_issuer_domain_name_enforces_length() {
+    fn validate_issuer_domain_name_enforces_length() -> anyhow::Result<()> {
         let too_long = format!("{}.example", "a".repeat(250));
         assert!(validate_issuer_domain_name(&too_long).is_err());
         let too_long_label = format!("{}.example", "a".repeat(64));
         assert!(validate_issuer_domain_name(&too_long_label).is_err());
+        Ok(())
     }
 
     #[test]
-    fn validate_account_uri_accepts_https_and_http() {
+    fn validate_account_uri_accepts_https_and_http() -> anyhow::Result<()> {
         assert!(validate_account_uri("https://acme.example/acct/123").is_ok());
         assert!(validate_account_uri("http://acme.example/acct/123").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn validate_account_uri_rejects_injection_attempts() {
+    fn validate_account_uri_rejects_injection_attempts() -> anyhow::Result<()> {
         for u in [
             "https://acme.example/acct;rogue=x",
             "https://acme.example/acct/1\n",
@@ -434,23 +449,26 @@ mod tests {
         ] {
             assert!(validate_account_uri(u).is_err(), "{u:?} must be rejected");
         }
+        Ok(())
     }
 
     #[test]
-    fn validate_account_uri_accepts_percent_encoded_semicolon() {
+    fn validate_account_uri_accepts_percent_encoded_semicolon() -> anyhow::Result<()> {
         // DNS TXT parsers split on literal `;`, not on `%3B`.
         assert!(validate_account_uri("https://acme.example/acct/1%3Bx").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn validate_caa_parameter_value_accepts_canonical() {
+    fn validate_caa_parameter_value_accepts_canonical() -> anyhow::Result<()> {
         for v in ["wildcard", "non-wildcard", "foo-bar", "v=1"] {
             assert!(validate_caa_parameter_value(v).is_ok(), "{v}");
         }
+        Ok(())
     }
 
     #[test]
-    fn validate_caa_parameter_value_rejects_injection_attempts() {
+    fn validate_caa_parameter_value_rejects_injection_attempts() -> anyhow::Result<()> {
         for v in [
             "wildcard; rogue=x",
             "wild card",
@@ -464,5 +482,6 @@ mod tests {
                 "{v:?} must be rejected"
             );
         }
+        Ok(())
     }
 }

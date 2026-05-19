@@ -16,27 +16,25 @@ const USER_AGENT_VALUE: &str = concat!("acme-client-rs/", env!("CARGO_PKG_VERSIO
 /// This is the connect-time half of SSRF defense and closes the
 /// DNS-rebinding race that a synchronous pre-check cannot.
 pub struct SsrfSafeResolver {
-    allow_private: bool,
+    network: super::net_policy::NetworkPolicy,
 }
 
 impl SsrfSafeResolver {
-    pub fn new(allow_private: bool) -> Arc<Self> {
-        Arc::new(Self { allow_private })
+    pub fn new(network: super::net_policy::NetworkPolicy) -> Arc<Self> {
+        Arc::new(Self { network })
     }
 }
 
 impl reqwest::dns::Resolve for SsrfSafeResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let allow_private = self.allow_private;
+        let allow_private = self.network.allows_private();
         Box::pin(async move {
             let host = name.as_str().to_owned();
-            let addrs: Vec<SocketAddr> =
-                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            let resolved = tokio::net::lookup_host((host.as_str(), 0)).await?;
             let filtered: Vec<SocketAddr> = if allow_private {
-                addrs
+                resolved.collect()
             } else {
-                addrs
-                    .into_iter()
+                resolved
                     .filter(|sa| !is_private_or_special_ip(sa.ip()))
                     .collect()
             };
@@ -64,17 +62,17 @@ impl reqwest::dns::Resolve for SsrfSafeResolver {
 /// non-redirect responses (newAccount, newOrder); transparent 30x
 /// following would corrupt nonce handling and hide CA misconfiguration.
 pub fn build_http_client(
-    danger_accept_invalid_certs: bool,
+    tls: super::net_policy::TlsPolicy,
     connect_timeout_secs: u64,
-    allow_private_network: bool,
+    network: super::net_policy::NetworkPolicy,
 ) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent(USER_AGENT_VALUE)
         .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(std::time::Duration::from_mins(2))
         .redirect(reqwest::redirect::Policy::none())
-        .danger_accept_invalid_certs(danger_accept_invalid_certs)
-        .dns_resolver(SsrfSafeResolver::new(allow_private_network))
+        .danger_accept_invalid_certs(tls.accepts_invalid_certs())
+        .dns_resolver(SsrfSafeResolver::new(network))
         .build()
         .context("failed to build HTTP client")
 }
@@ -86,11 +84,7 @@ pub fn build_http_client(
 const MAX_BODY_FOR_ERROR: usize = 1024;
 
 pub(crate) fn truncate_for_log(body: &[u8]) -> String {
-    let slice = if body.len() > MAX_BODY_FOR_ERROR {
-        &body[..MAX_BODY_FOR_ERROR]
-    } else {
-        body
-    };
+    let slice = body.get(..MAX_BODY_FOR_ERROR).unwrap_or(body);
     let lossy = String::from_utf8_lossy(slice);
     let mut out: String = lossy
         .chars()
@@ -101,7 +95,8 @@ pub(crate) fn truncate_for_log(body: &[u8]) -> String {
         })
         .collect();
     if body.len() > MAX_BODY_FOR_ERROR {
-        out.push_str(&format!("… [truncated, {} bytes total]", body.len()));
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "… [truncated, {} bytes total]", body.len());
     }
     out
 }

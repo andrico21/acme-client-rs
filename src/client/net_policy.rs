@@ -103,6 +103,10 @@ impl TlsPolicy {
             Self::RequireHttps
         }
     }
+
+    pub(crate) fn accepts_invalid_certs(self) -> bool {
+        matches!(self, Self::AllowHttpLoopback)
+    }
 }
 
 impl NetworkPolicy {
@@ -113,16 +117,22 @@ impl NetworkPolicy {
             Self::PublicOnly
         }
     }
+
+    pub(crate) fn allows_private(self) -> bool {
+        matches!(self, Self::AllowPrivate)
+    }
 }
 
 /// Build (tls, network) policy pair from the CLI flags as a single call. The
 /// canonical conversion used by every handler — keeps the bool→enum hop in one
 /// place so call sites read `let (tls, net) = policies_from_cli_flags(...)`.
 pub fn policies_from_cli_flags(insecure: bool, allow_private: bool) -> (TlsPolicy, NetworkPolicy) {
-    (
-        TlsPolicy::from_insecure(insecure),
-        NetworkPolicy::from_allow_private(allow_private),
-    )
+    let tls = TlsPolicy::from_insecure(insecure);
+    // --insecure implies private/loopback access: validate_acme_url and the
+    // CLI docs both promise this, but the connect-time SsrfSafeResolver only
+    // sees NetworkPolicy, so we must fold the implication in here.
+    let net = NetworkPolicy::from_allow_private(allow_private || insecure);
+    (tls, net)
 }
 
 #[cfg(test)]
@@ -130,10 +140,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_private_ips() {
-        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
-            127, 0, 0, 1
-        ))));
+    fn classifies_private_ips() -> anyhow::Result<()> {
+        assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
         assert!(is_private_or_special_ip(IpAddr::V4(Ipv4Addr::new(
             169, 254, 169, 254
         ))));
@@ -147,7 +155,8 @@ mod tests {
             104, 16, 0, 1
         ))));
         assert!(is_private_or_special_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-        assert!(is_private_or_special_ip("fc00::1".parse().unwrap()));
-        assert!(is_private_or_special_ip("fe80::1".parse().unwrap()));
+        assert!(is_private_or_special_ip("fc00::1".parse()?));
+        assert!(is_private_or_special_ip("fe80::1".parse()?));
+        Ok(())
     }
 }
