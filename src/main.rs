@@ -157,20 +157,8 @@ async fn run(
             token,
             port,
             challenge_dir,
-        } => {
-            cmd_serve_http01(
-                &cli,
-                token,
-                *port,
-                challenge_dir.as_deref(),
-                fmt,
-                cli.silent,
-            )
-            .await
-        }
-        Commands::ShowDns01 { domain, token } => {
-            cmd_show_dns01(&cli, domain, token, fmt, cli.silent)
-        }
+        } => cmd_serve_http01(&cli, token, *port, challenge_dir.as_deref()).await,
+        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli, domain, token),
         Commands::ShowDnsPersist01 {
             domain,
             issuer_domain_name,
@@ -183,7 +171,6 @@ async fn run(
                 issuer_domain_name,
                 persist_policy.as_deref(),
                 *persist_until,
-                fmt,
             )
             .await
         }

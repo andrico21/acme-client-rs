@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 
 use crate::account_key::{load_account_key_with_password, resolve_account_key_password};
-use crate::cli::{Cli, OutputFormat};
+use crate::cli::Cli;
 use crate::types::Identifier;
 use crate::{build_client, outln};
 
@@ -13,8 +13,6 @@ pub(crate) async fn cmd_serve_http01(
     token: &crate::types::ChallengeToken,
     port: u16,
     challenge_dir: Option<&std::path::Path>,
-    fmt: OutputFormat,
-    silent: bool,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
     let pw = resolve_account_key_password(
@@ -25,19 +23,18 @@ pub(crate) async fn cmd_serve_http01(
         load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
     if let Some(dir) = challenge_dir {
         let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
-        if !silent {
-            if fmt == OutputFormat::Json {
-                outln!(
-                    "{}",
+        if !cli.silent {
+            super::emit_result(
+                cli,
+                || {
                     serde_json::json!({
                         "command": "serve-http01",
                         "mode": "challenge-dir",
                         "path": file.display().to_string(),
                     })
-                );
-            } else {
-                outln!("Challenge file written to {}", file.display());
-            }
+                },
+                || outln!("Challenge file written to {}", file.display()),
+            );
             outln!("Press Enter after validation to clean up...");
             let _ = std::io::stdin().read_line(&mut String::new());
         }
@@ -52,8 +49,6 @@ pub(crate) fn cmd_show_dns01(
     cli: &Cli,
     domain: &str,
     token: &crate::types::ChallengeToken,
-    fmt: OutputFormat,
-    silent: bool,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
     let domain = crate::types::DnsName::parse(domain).context("invalid --domain for show-dns01")?;
@@ -63,24 +58,21 @@ pub(crate) fn cmd_show_dns01(
     )?;
     let key =
         load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
-    if !silent {
-        if fmt == OutputFormat::Json {
+    super::emit_result(
+        cli,
+        || {
             let name = crate::challenge::dns01::record_name(&domain);
             let value = crate::challenge::dns01::txt_record_value(token, &key);
-            outln!(
-                "{}",
-                serde_json::json!({
-                    "command": "show-dns01",
-                    "domain": domain,
-                    "record_name": name,
-                    "record_type": "TXT",
-                    "record_value": value,
-                })
-            );
-        } else {
-            crate::challenge::dns01::print_instructions(&domain, token, &key);
-        }
-    }
+            serde_json::json!({
+                "command": "show-dns01",
+                "domain": domain,
+                "record_name": name,
+                "record_type": "TXT",
+                "record_value": value,
+            })
+        },
+        || crate::challenge::dns01::print_instructions(&domain, token, &key),
+    );
     Ok(())
 }
 
@@ -90,7 +82,6 @@ pub(crate) async fn cmd_show_dns_persist01(
     issuer_domain_name: &str,
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
-    fmt: OutputFormat,
 ) -> Result<()> {
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-persist01")?;
@@ -119,8 +110,9 @@ pub(crate) async fn cmd_show_dns_persist01(
         persist_until,
     )?;
 
+    use crate::cli::OutputFormat;
     if !cli.silent {
-        if fmt == OutputFormat::Json {
+        if cli.output_format == OutputFormat::Json {
             outln!(
                 "{}",
                 serde_json::json!({
