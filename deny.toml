@@ -10,14 +10,6 @@ ignore = [
     # version of `rsa` exists yet (tracked upstream); revisit on every
     # `rsa` upgrade and remove this ignore once a patched release ships.
     "RUSTSEC-2023-0071",
-    # RUSTSEC-2026-0097 (rand unsoundness): `rand 0.8.5` is unsound when a
-    # *custom global logger* calls `rand::rng()` during initialization. We
-    # pull `rand 0.8.5` transitively via `rsa` → `num-bigint-dig` → `rand`,
-    # and we do not install any custom global logger that invokes `rand`.
-    # The unsoundness is therefore not reachable in our binary. No fixed
-    # version is available; `rand 0.8.5` is the latest 0.8.x. Revisit when
-    # the `rsa` ecosystem migrates to `rand 0.9`.
-    "RUSTSEC-2026-0097",
 ]
 
 [licenses]
