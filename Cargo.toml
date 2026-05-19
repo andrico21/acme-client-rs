@@ -35,8 +35,60 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = { version = "2", features = ["serde"] }
 x509-parser = "0.18"
+[lints.rust]
+unsafe_code = "forbid"
+
 [lints.clippy]
+# ── Correctness / safety (deny) ──────────────────────────────────────────────
+await_holding_lock = "deny"
+indexing_slicing = "deny"
+wildcard_enum_match_arm = "deny"
+fn_params_excessive_bools = "deny"
+match_wild_err_arm = "deny"
+mem_forget = "deny"
+lossy_float_literal = "deny"
+float_cmp = "deny"
+float_cmp_const = "deny"
+# ── Panic prevention (deny) ──────────────────────────────────────────────────
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+# ── Debug artifacts (deny) ───────────────────────────────────────────────────
 print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+# ── Performance / API hygiene (warn) ─────────────────────────────────────────
+redundant_clone = "warn"
+implicit_clone = "warn"
+needless_pass_by_value = "warn"
+ptr_arg = "warn"
+inefficient_to_string = "warn"
+large_stack_arrays = "warn"
+mutex_atomic = "warn"
+# ── Broad opt-in groups (warn) ───────────────────────────────────────────────
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Pedantic noise opt-outs
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+similar_names = "allow"
+too_many_lines = "allow"
+struct_excessive_bools = "allow"
+multiple_crate_versions = "allow"
+# Nursery noise opt-outs (high false-positive rate for a binary crate)
+redundant_pub_crate = "allow"        # Codebase uses pub(crate) consistently; style choice.
+missing_const_for_fn = "allow"       # Churns signatures, no perf gain in a binary.
+unnecessary_wraps = "allow"          # Tests uniformly return Result<()> for future-proofing.
+option_if_let_else = "allow"         # Often less readable than the explicit form.
+or_fun_call = "allow"                # False positives on cheap closures.
+ref_option = "allow"                 # `&Option<T>` is sometimes the right API.
+needless_pass_by_ref_mut = "allow"   # RunContext threaded as &mut for API uniformity across the run flow.
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
