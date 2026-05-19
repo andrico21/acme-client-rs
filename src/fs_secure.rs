@@ -11,13 +11,20 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
+/// Whether `write_secret_file` may overwrite an existing file at `path`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Overwrite {
+    Forbid,
+    Allow,
+}
+
 /// Write `contents` to `path` with the secret-file guarantees above.
 ///
 /// On non-Unix platforms permissions are not enforced (Windows ACLs are
 /// out of scope for this client; the atomic-rename + no-overwrite checks
 /// still apply).
-pub fn write_secret_file(path: &Path, contents: &[u8], force: bool) -> Result<()> {
-    if !force {
+pub fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> Result<()> {
+    if overwrite == Overwrite::Forbid {
         match std::fs::symlink_metadata(path) {
             Ok(_) => bail!(
                 "refusing to overwrite existing file {} (pass --force to override)",
@@ -137,68 +144,77 @@ fn fsync_dir(dir: &Path) {
 fn fsync_dir(_dir: &Path) {}
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
     use std::io::Read;
 
-    fn tmpdir(tag: &str) -> std::path::PathBuf {
+    fn tmpdir(tag: &str) -> anyhow::Result<std::path::PathBuf> {
         let p = std::env::temp_dir().join(format!("acme-fs-secure-{}-{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&p);
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        std::fs::create_dir_all(&p)?;
+        Ok(p)
     }
 
     #[test]
-    fn writes_file_with_0600_on_unix() {
-        let dir = tmpdir("writes_0600");
+    fn writes_file_with_0600_on_unix() -> anyhow::Result<()> {
+        let dir = tmpdir("writes_0600")?;
         let path = dir.join("k.pem");
-        write_secret_file(&path, b"hello", false).unwrap();
+        write_secret_file(&path, b"hello", Overwrite::Forbid)?;
         let mut s = String::new();
         std::fs::File::open(&path)
-            .unwrap()
+            ?
             .read_to_string(&mut s)
-            .unwrap();
+            ?;
         assert_eq!(s, "hello");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            let mode = std::fs::metadata(&path)?.permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+        Ok(())
     }
 
     #[test]
-    fn refuses_overwrite_without_force() {
-        let dir = tmpdir("refuses_overwrite");
+    fn refuses_overwrite_without_force() -> anyhow::Result<()> {
+        let dir = tmpdir("refuses_overwrite")?;
         let path = dir.join("k.pem");
-        write_secret_file(&path, b"first", false).unwrap();
-        let err = write_secret_file(&path, b"second", false).unwrap_err();
+        write_secret_file(&path, b"first", Overwrite::Forbid)?;
+        let Err(err) = write_secret_file(&path, b"second", Overwrite::Forbid) else {
+            panic!("expected refusal to overwrite");
+        };
         assert!(err.to_string().contains("refusing to overwrite"));
+        Ok(())
     }
 
     #[test]
-    fn force_overwrites_regular_file() {
-        let dir = tmpdir("force_overwrites");
+    fn force_overwrites_regular_file() -> anyhow::Result<()> {
+        let dir = tmpdir("force_overwrites")?;
         let path = dir.join("k.pem");
-        write_secret_file(&path, b"first", false).unwrap();
-        write_secret_file(&path, b"second", true).unwrap();
+        write_secret_file(&path, b"first", Overwrite::Forbid)?;
+        write_secret_file(&path, b"second", Overwrite::Allow)?;
         let mut s = String::new();
         std::fs::File::open(&path)
-            .unwrap()
+            ?
             .read_to_string(&mut s)
-            .unwrap();
+            ?;
         assert_eq!(s, "second");
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn force_refuses_symlink() {
-        let dir = tmpdir("force_refuses_symlink");
+    fn force_refuses_symlink() -> anyhow::Result<()> {
+        let dir = tmpdir("force_refuses_symlink")?;
         let target = dir.join("real");
-        std::fs::write(&target, b"x").unwrap();
+        std::fs::write(&target, b"x")?;
         let link = dir.join("k.pem");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
-        let err = write_secret_file(&link, b"second", true).unwrap_err();
+        std::os::unix::fs::symlink(&target, &link)?;
+        let Err(err) = write_secret_file(&link, b"second", Overwrite::Allow) else {
+            panic!("expected refusal on symlink");
+        };
         assert!(err.to_string().contains("symlink"));
+        Ok(())
     }
 }

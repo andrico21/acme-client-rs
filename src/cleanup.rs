@@ -22,14 +22,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::challenge;
+use crate::types::DnsName;
 
 /// One unit of work the SIGINT handler will run before exit.
 pub enum CleanupAction {
     HttpChallengeFile(PathBuf),
     DnsRecord {
         hook: PathBuf,
-        domain: String,
-        txt_name: String,
+        domain: DnsName,
+        txt_name: DnsName,
         txt_value: String,
     },
     ServerTask(tokio::task::AbortHandle),
@@ -41,6 +42,13 @@ pub struct CleanupRegistry {
 }
 
 impl CleanupRegistry {
+    /// Create an empty registry. Equivalent to [`Default::default`]; provided
+    /// for API-guideline conformance (C-COMMON-TRAITS).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     pub fn register(&self, action: CleanupAction) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.push(action);
@@ -73,8 +81,8 @@ fn run_one(action: &CleanupAction) {
             txt_value,
         } => {
             let _ = std::process::Command::new(hook)
-                .env("ACME_DOMAIN", domain)
-                .env("ACME_TXT_NAME", txt_name)
+                .env("ACME_DOMAIN", domain.as_str())
+                .env("ACME_TXT_NAME", txt_name.as_str())
                 .env("ACME_TXT_VALUE", txt_value)
                 .env("ACME_ACTION", "cleanup")
                 .status();
@@ -91,23 +99,26 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn run_all_sync_removes_http_challenge_file() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn run_all_sync_removes_http_challenge_file() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("token");
-        let mut f = std::fs::File::create(&path).unwrap();
-        f.write_all(b"x").unwrap();
+        let mut f = std::fs::File::create(&path)?;
+        f.write_all(b"x")?;
         assert!(path.exists());
 
-        let reg = CleanupRegistry::default();
+        let reg = CleanupRegistry::new();
         reg.register(CleanupAction::HttpChallengeFile(path.clone()));
         reg.run_all_sync();
         assert!(!path.exists(), "challenge file should be cleaned");
+        Ok(())
     }
 
     #[cfg(unix)]
     #[test]
-    fn run_all_sync_invokes_dns_hook_with_cleanup_action() {
-        let tmp = tempfile::tempdir().unwrap();
+    fn run_all_sync_invokes_dns_hook_with_cleanup_action() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir()?;
         let log = tmp.path().join("hook.log");
         let hook = tmp.path().join("hook.sh");
         std::fs::write(
@@ -116,36 +127,36 @@ mod tests {
                 "#!/bin/sh\necho \"$ACME_ACTION:$ACME_DOMAIN:$ACME_TXT_NAME\" >> {}\n",
                 log.display()
             ),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        )?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
 
-        let reg = CleanupRegistry::default();
+        let reg = CleanupRegistry::new();
         reg.register(CleanupAction::DnsRecord {
             hook,
-            domain: "example.com".into(),
-            txt_name: "_acme-challenge.example.com".into(),
+            domain: DnsName::parse("example.com")?,
+            txt_name: DnsName::parse("_acme-challenge.example.com")?,
             txt_value: "abc123".into(),
         });
         reg.run_all_sync();
 
-        let contents = std::fs::read_to_string(&log).unwrap();
+        let contents = std::fs::read_to_string(&log)?;
         assert_eq!(
             contents.trim(),
             "cleanup:example.com:_acme-challenge.example.com"
         );
+        Ok(())
     }
 
     #[test]
-    fn run_all_sync_drains_registry() {
-        let reg = CleanupRegistry::default();
-        let tmp = tempfile::tempdir().unwrap();
+    fn run_all_sync_drains_registry() -> anyhow::Result<()> {
+        let reg = CleanupRegistry::new();
+        let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("token");
-        std::fs::write(&path, "x").unwrap();
+        std::fs::write(&path, "x")?;
         reg.register(CleanupAction::HttpChallengeFile(path));
         reg.run_all_sync();
         // Second drain should be a no-op even though file no longer exists.
         reg.run_all_sync();
+        Ok(())
     }
 }
