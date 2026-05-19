@@ -375,9 +375,9 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
     }
     outln!();
     if let Some(p) = &ctx.config_path {
-        outln!("Config file: {p}")
+        outln!("Config file: {p}");
     } else {
-        outln!("Config file: (none)")
+        outln!("Config file: (none)");
     }
     outln!();
 
