@@ -38,6 +38,16 @@ Thumbs.db
 
 # Session/orchestration state (local-only)
 /.sisyphus/
+/.omo/
+
+# Node.js artifacts (some agent tooling installs these in the worktree;
+# this project is pure Rust and should NEVER track JS dependencies)
+/node_modules/
+/package.json
+/package-lock.json
+/bun.lock
+/bun.lockb
+/yarn.lock
 
 # Certificate and key material
 *.pem
