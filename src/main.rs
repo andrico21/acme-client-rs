@@ -21,13 +21,13 @@ mod types;
 
 use anyhow::Result;
 use clap::{CommandFactory, FromArgMatches};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::account_key::{load_account_key_with_password, resolve_account_key_password};
 use crate::cli::{Cli, Commands};
 use crate::cli_config::{apply_config, load_config};
 use crate::client::AcmeClient;
-use crate::handlers::*;
+use crate::handlers::{cmd_generate_config, cmd_show_config, cmd_generate_key, cmd_account, cmd_order, cmd_get_authz, cmd_respond_challenge, cmd_serve_http01, cmd_show_dns01, cmd_show_dns_persist01, cmd_finalize, cmd_poll_order, cmd_download_cert, cmd_deactivate, cmd_key_rollover, cmd_revoke, cmd_renewal_info, cmd_list_profiles, cmd_pre_authorize, cmd_run};
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
@@ -44,16 +44,16 @@ async fn main() {
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
     // Load config (skip for generate-config)
-    let (loaded_config, config_mode) = if !matches!(cli.command, Commands::GenerateConfig) {
+    let (loaded_config, config_mode) = if matches!(cli.command, Commands::GenerateConfig) {
+        (None, false)
+    } else {
         match load_config(&cli) {
             Ok(pair) => pair,
             Err(err) => {
-                eprintln!("Error: {err:#}");
+                error!("{err:#}");
                 std::process::exit(1);
             }
         }
-    } else {
-        (None, false)
     };
 
     if let Some(ref config) = loaded_config {
@@ -74,11 +74,11 @@ async fn main() {
         }
     }
 
-    let cleanup_registry = cleanup::CleanupRegistry::default();
+    let cleanup_registry = cleanup::CleanupRegistry::new();
     let sigint_registry = cleanup_registry.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            eprintln!("Interrupted — running challenge cleanup before exit...");
+            error!("Interrupted — running challenge cleanup before exit...");
             sigint_registry.run_all_sync();
             std::process::exit(130);
         }
@@ -93,7 +93,7 @@ async fn main() {
     )
     .await
     {
-        eprintln!("Error: {err:#}");
+        error!("{err:#}");
         std::process::exit(1);
     }
 }
@@ -229,7 +229,7 @@ async fn run(
 }
 
 pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
-    use secrecy::ExposeSecret;
+    
     let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     client::validate_directory_url(&cli.directory, tls, net)?;
@@ -238,16 +238,18 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
         cli.account_key_password_file.as_deref(),
     )?;
     let key =
-        load_account_key_with_password(&cli.account_key, pw.as_ref().map(|s| s.expose_secret()))?;
+        load_account_key_with_password(&cli.account_key, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
     if cli.insecure {
         tracing::warn!("TLS certificate verification is disabled (--insecure)");
     }
+    let (tls, network) =
+        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
     let mut client = AcmeClient::new(
         &cli.directory,
         key,
-        cli.insecure,
+        tls,
         cli.connect_timeout,
-        cli.allow_private_network,
+        network,
     )
     .await?;
     if let Some(ref url) = cli.account_url {
