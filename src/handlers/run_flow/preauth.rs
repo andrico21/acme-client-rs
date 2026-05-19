@@ -82,7 +82,8 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             ctx.http_port
                         );
                     }
-                    let auth = crate::challenge::http01::response_body(token, client.account_key())?;
+                    let auth =
+                        crate::challenge::http01::response_body(token, client.account_key())?;
                     let path = crate::challenge::http01::challenge_path(token);
                     let listener = crate::challenge::http01::bind_or_suggest(ctx.http_port).await?;
                     info!("HTTP-01 server listening on 0.0.0.0:{}", ctx.http_port);
@@ -143,19 +144,26 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                 } else if ctx.dns_hook.is_none() && !ctx.silent {
                     outln!("Press Enter once the record has propagated...");
-                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+                    let _ = tokio::task::spawn_blocking(|| {
+                        std::io::stdin().read_line(&mut String::new())
+                    })
+                    .await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
-                    run_hook(script,
-                    &[
-                        ("ACME_DOMAIN", dns.as_str()),
-                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                        ("ACME_TOKEN", token.as_str()),
-                        ("ACME_KEY_AUTH", &key_auth),
-                        ("ACME_TXT_NAME", txt_name.as_str()),
-                        ("ACME_TXT_VALUE", &txt_value),
-                    ],).await?;
+                    let key_auth =
+                        crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(
+                        script,
+                        &[
+                            ("ACME_DOMAIN", dns.as_str()),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                            ("ACME_TOKEN", token.as_str()),
+                            ("ACME_KEY_AUTH", &key_auth),
+                            ("ACME_TXT_NAME", txt_name.as_str()),
+                            ("ACME_TXT_VALUE", &txt_value),
+                        ],
+                    )
+                    .await?;
                 }
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
@@ -228,16 +236,22 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                 } else if ctx.dns_hook.is_none() && !ctx.silent {
                     outln!("Press Enter once the record has propagated...");
-                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+                    let _ = tokio::task::spawn_blocking(|| {
+                        std::io::stdin().read_line(&mut String::new())
+                    })
+                    .await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    run_hook(script,
-                    &[
-                        ("ACME_DOMAIN", dns.as_str()),
-                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                        ("ACME_TXT_NAME", txt_name.as_str()),
-                        ("ACME_TXT_VALUE", &txt_value),
-                    ],).await?;
+                    run_hook(
+                        script,
+                        &[
+                            ("ACME_DOMAIN", dns.as_str()),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                            ("ACME_TXT_NAME", txt_name.as_str()),
+                            ("ACME_TXT_VALUE", &txt_value),
+                        ],
+                    )
+                    .await?;
                 }
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
@@ -251,21 +265,30 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         client.account_key(),
                     )?;
                     outln!("Press Enter once the TLS server is configured...");
-                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+                    let _ = tokio::task::spawn_blocking(|| {
+                        std::io::stdin().read_line(&mut String::new())
+                    })
+                    .await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
-                    run_hook(script,
-                    &[
-                        ("ACME_DOMAIN", &authz.identifier.value_str()),
-                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                        ("ACME_TOKEN", token.as_str()),
-                        ("ACME_KEY_AUTH", &key_auth),
-                    ],).await?;
+                    let key_auth =
+                        crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(
+                        script,
+                        &[
+                            ("ACME_DOMAIN", &authz.identifier.value_str()),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                            ("ACME_TOKEN", token.as_str()),
+                            ("ACME_KEY_AUTH", &key_auth),
+                        ],
+                    )
+                    .await?;
                 }
                 client.respond_to_challenge(&challenge_url).await?;
             }
-            other @ ChallengeType::Unknown(_) => anyhow::bail!("unsupported challenge type: {other}"),
+            other @ ChallengeType::Unknown(_) => {
+                anyhow::bail!("unsupported challenge type: {other}")
+            }
         }
 
         // Poll authorization until valid (max ctx.challenge_timeout)

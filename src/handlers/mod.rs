@@ -154,7 +154,10 @@ mod tests {
         AcmeError, AcmeErrorType, Challenge, ChallengeStatus, ChallengeToken, ChallengeType,
     };
 
-    fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> anyhow::Result<Challenge> {
+    fn make_challenge(
+        status: ChallengeStatus,
+        error: Option<AcmeError>,
+    ) -> anyhow::Result<Challenge> {
         Ok(Challenge {
             challenge_type: ChallengeType::Http01,
             url: "https://example.com/chall/1".parse()?,

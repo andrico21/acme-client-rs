@@ -216,24 +216,31 @@ pub(super) async fn run_phased_dns(
                         .token
                         .as_ref()
                         .context("dns-01 DnsPending must carry a token")?;
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
-                    run_hook(script,
-                    &[
-                        ("ACME_DOMAIN", p.domain.as_str()),
-                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                        ("ACME_TOKEN", token.as_str()),
-                        ("ACME_KEY_AUTH", &key_auth),
-                        ("ACME_TXT_NAME", p.txt_name.as_str()),
-                        ("ACME_TXT_VALUE", &p.txt_value),
-                    ],).await?;
+                    let key_auth =
+                        crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(
+                        script,
+                        &[
+                            ("ACME_DOMAIN", p.domain.as_str()),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                            ("ACME_TOKEN", token.as_str()),
+                            ("ACME_KEY_AUTH", &key_auth),
+                            ("ACME_TXT_NAME", p.txt_name.as_str()),
+                            ("ACME_TXT_VALUE", &p.txt_value),
+                        ],
+                    )
+                    .await?;
                 } else {
-                    run_hook(script,
-                    &[
-                        ("ACME_DOMAIN", p.domain.as_str()),
-                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                        ("ACME_TXT_NAME", p.txt_name.as_str()),
-                        ("ACME_TXT_VALUE", &p.txt_value),
-                    ],).await?;
+                    run_hook(
+                        script,
+                        &[
+                            ("ACME_DOMAIN", p.domain.as_str()),
+                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                            ("ACME_TXT_NAME", p.txt_name.as_str()),
+                            ("ACME_TXT_VALUE", &p.txt_value),
+                        ],
+                    )
+                    .await?;
                 }
             }
             client.respond_to_challenge(&p.challenge_url).await?;
@@ -250,7 +257,8 @@ pub(super) async fn run_phased_dns(
                 if std::time::Instant::now() > poll_deadline {
                     // Clean up remaining records
                     for q in &pending {
-                        run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
+                        run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
+                            .await;
                     }
                     anyhow::bail!(
                         "authorization for {} did not complete within {}s",
@@ -271,7 +279,8 @@ pub(super) async fn run_phased_dns(
                 {
                     if is_challenge_failed(ch) {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
+                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
+                                .await;
                         }
                         let detail = ch
                             .error
@@ -295,7 +304,8 @@ pub(super) async fn run_phased_dns(
                     | AuthorizationStatus::Expired
                     | AuthorizationStatus::Revoked => {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
+                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
+                                .await;
                         }
                         let detail = a
                             .challenges

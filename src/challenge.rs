@@ -21,7 +21,7 @@ pub fn key_authorization(
 // ── HTTP-01 (RFC 8555 §8.3) ────────────────────────────────────────────────
 
 pub mod http01 {
-    use super::{ChallengeToken, AccountKey, key_authorization};
+    use super::{AccountKey, ChallengeToken, key_authorization};
     use anyhow::{Context, Result, bail};
     use std::path::{Path, PathBuf};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -154,7 +154,7 @@ pub mod http01 {
         auth: &str,
         path: &str,
     ) {
-        use tokio::time::{timeout, Duration};
+        use tokio::time::{Duration, timeout};
         let mut buf = vec![0u8; 4096];
         // Slowloris guard: cap how long a single peer can hold the
         // pre-request read open. CA validation probes complete in well under
@@ -243,7 +243,9 @@ pub mod http01 {
 // ── DNS-01 (RFC 8555 §8.4) ─────────────────────────────────────────────────
 
 pub mod dns01 {
-    use super::{ChallengeToken, AccountKey, key_authorization, Sha256, Digest, Engine, URL_SAFE_NO_PAD};
+    use super::{
+        AccountKey, ChallengeToken, Digest, Engine, Sha256, URL_SAFE_NO_PAD, key_authorization,
+    };
     use crate::outln;
 
     /// The value for the `_acme-challenge.<domain>` TXT record:
@@ -365,7 +367,7 @@ pub mod dns_persist01 {
 // ── TLS-ALPN-01 (RFC 8737) ─────────────────────────────────────────────────
 
 pub mod tlsalpn01 {
-    use super::{ChallengeToken, AccountKey, key_authorization, Sha256, Digest};
+    use super::{AccountKey, ChallengeToken, Digest, Sha256, key_authorization};
     use crate::outln;
 
     /// ALPN protocol identifier.
@@ -400,11 +402,14 @@ pub mod tlsalpn01 {
         account_key: &AccountKey,
     ) -> anyhow::Result<()> {
         let value = acme_identifier_value(token, account_key)?;
-        let hex: String = value.iter().fold(String::with_capacity(value.len() * 2), |mut acc, b| {
-            use std::fmt::Write as _;
-            let _ = write!(&mut acc, "{b:02x}");
-            acc
-        });
+        let hex: String =
+            value
+                .iter()
+                .fold(String::with_capacity(value.len() * 2), |mut acc, b| {
+                    use std::fmt::Write as _;
+                    let _ = write!(&mut acc, "{b:02x}");
+                    acc
+                });
         outln!();
         outln!("=== TLS-ALPN-01 Challenge ===");
         outln!("Domain: {domain}");
@@ -456,8 +461,7 @@ mod tests {
             "https://acme.example/acct/123",
             Some("wildcard"),
             Some(1_700_000_000),
-        )
-        ?;
+        )?;
         assert_eq!(
             v,
             "letsencrypt.org; accounturi=https://acme.example/acct/123; \
@@ -509,8 +513,7 @@ mod tests {
             "https://acme.example/acct/1",
             None,
             None,
-        )
-        ?;
+        )?;
         assert!(v.starts_with("letsencrypt.org; "));
         Ok(())
     }

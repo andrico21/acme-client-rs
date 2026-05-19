@@ -28,7 +28,11 @@ use tracing::{debug, info, warn};
 use url::Url;
 
 use crate::jws::AccountKey;
-use crate::types::{Directory, AcmeError, AcmeErrorType, Account, NewAccountRequest, DeactivateAccountRequest, Identifier, Order, NewOrderRequest, FinalizeRequest, Authorization, validate_server_identifier, Challenge, NewAuthorizationRequest, RevokeCertRequest, RenewalInfo};
+use crate::types::{
+    Account, AcmeError, AcmeErrorType, Authorization, Challenge, DeactivateAccountRequest,
+    Directory, FinalizeRequest, Identifier, NewAccountRequest, NewAuthorizationRequest,
+    NewOrderRequest, Order, RenewalInfo, RevokeCertRequest, validate_server_identifier,
+};
 
 use super::http_transport::{AcmeResponse, build_http_client, truncate_for_log};
 use super::net_policy::{NetworkPolicy, TlsPolicy, policies_from_cli_flags};
@@ -38,7 +42,10 @@ use super::url_validation::validate_acme_url;
 /// Returns `None` if absent, unparseable, or in HTTP-date form (uncommon for ACME).
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
-    raw.trim().parse::<u64>().ok().map(std::time::Duration::from_secs)
+    raw.trim()
+        .parse::<u64>()
+        .ok()
+        .map(std::time::Duration::from_secs)
 }
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";

@@ -14,13 +14,14 @@ pub(crate) async fn cmd_serve_http01(
     port: u16,
     challenge_dir: Option<&std::path::Path>,
 ) -> Result<()> {
-    
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
     )?;
-    let key =
-        load_account_key_with_password(&cli.account_key, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )?;
     if let Some(dir) = challenge_dir {
         let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
         if !cli.silent {
@@ -36,7 +37,8 @@ pub(crate) async fn cmd_serve_http01(
                 || outln!("Challenge file written to {}", file.display()),
             );
             outln!("Press Enter after validation to clean up...");
-            let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+            let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new()))
+                .await;
         }
         crate::challenge::http01::cleanup_challenge_file(&file);
         Ok(())
@@ -50,15 +52,16 @@ pub(crate) fn cmd_show_dns01(
     domain: &str,
     token: &crate::types::ChallengeToken,
 ) -> Result<()> {
-    
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-01")?;
     let pw = resolve_account_key_password(
         cli.account_key_password.as_deref(),
         cli.account_key_password_file.as_deref(),
     )?;
-    let key =
-        load_account_key_with_password(&cli.account_key, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )?;
     let name = crate::challenge::dns01::record_name(&domain)?;
     let value = crate::challenge::dns01::txt_record_value(token, &key)?;
     super::emit_result(

@@ -130,20 +130,24 @@ pub(super) async fn provision_dns01(
     } else if !ctx.silent {
         // Interactive: wait for Enter
         outln!("Press Enter once the record has propagated...");
-        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        let _ =
+            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
         let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
-        run_hook(script,
-        &[
-            ("ACME_DOMAIN", dns.as_str()),
-            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-            ("ACME_TOKEN", token.as_str()),
-            ("ACME_KEY_AUTH", &key_auth),
-            ("ACME_TXT_NAME", txt_name.as_str()),
-            ("ACME_TXT_VALUE", &txt_value),
-        ],).await?;
+        run_hook(
+            script,
+            &[
+                ("ACME_DOMAIN", dns.as_str()),
+                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                ("ACME_TOKEN", token.as_str()),
+                ("ACME_KEY_AUTH", &key_auth),
+                ("ACME_TXT_NAME", txt_name.as_str()),
+                ("ACME_TXT_VALUE", &txt_value),
+            ],
+        )
+        .await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;
@@ -200,17 +204,21 @@ pub(super) async fn provision_dns_persist01(
         wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         outln!("Press Enter once the record has propagated...");
-        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        let _ =
+            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
-        run_hook(script,
-        &[
-            ("ACME_DOMAIN", dns.as_str()),
-            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-            ("ACME_TXT_NAME", txt_name.as_str()),
-            ("ACME_TXT_VALUE", &txt_value),
-        ],).await?;
+        run_hook(
+            script,
+            &[
+                ("ACME_DOMAIN", dns.as_str()),
+                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                ("ACME_TXT_NAME", txt_name.as_str()),
+                ("ACME_TXT_VALUE", &txt_value),
+            ],
+        )
+        .await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;
@@ -231,18 +239,22 @@ pub(super) async fn provision_tlsalpn01(
             client.account_key(),
         )?;
         outln!("Press Enter once the TLS server is configured...");
-        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        let _ =
+            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
         let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
-        run_hook(script,
-        &[
-            ("ACME_DOMAIN", &authz.identifier.value_str()),
-            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-            ("ACME_TOKEN", token.as_str()),
-            ("ACME_KEY_AUTH", &key_auth),
-        ],).await?;
+        run_hook(
+            script,
+            &[
+                ("ACME_DOMAIN", &authz.identifier.value_str()),
+                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                ("ACME_TOKEN", token.as_str()),
+                ("ACME_KEY_AUTH", &key_auth),
+            ],
+        )
+        .await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;

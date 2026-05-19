@@ -28,8 +28,16 @@ pub(crate) fn cmd_generate_key(
     } else {
         zeroize::Zeroizing::new(pem.to_string())
     };
-    crate::fs_secure::write_secret_file(path, bytes_to_write.as_bytes(), if force { crate::fs_secure::Overwrite::Allow } else { crate::fs_secure::Overwrite::Forbid })
-        .with_context(|| format!("failed to write key to {}", path.display()))?;
+    crate::fs_secure::write_secret_file(
+        path,
+        bytes_to_write.as_bytes(),
+        if force {
+            crate::fs_secure::Overwrite::Allow
+        } else {
+            crate::fs_secure::Overwrite::Forbid
+        },
+    )
+    .with_context(|| format!("failed to write key to {}", path.display()))?;
     if !silent {
         if fmt == OutputFormat::Json {
             outln!(
@@ -113,10 +121,11 @@ pub(crate) async fn cmd_key_rollover(
     new_key_password: Option<&str>,
     new_key_password_file: Option<&std::path::Path>,
 ) -> Result<()> {
-    
     let pw = resolve_account_key_password(new_key_password, new_key_password_file)?;
-    let new_key =
-        load_account_key_with_password(new_key_path, pw.as_ref().map(secrecy::ExposeSecret::expose_secret))?;
+    let new_key = load_account_key_with_password(
+        new_key_path,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )?;
     let mut client = build_client(cli).await?;
 
     // key-change requires KID signing; look up account if URL not provided

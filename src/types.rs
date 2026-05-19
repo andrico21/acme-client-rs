@@ -860,10 +860,7 @@ mod tests {
 
     #[test]
     fn dns_normalize_lowercases_and_strips_trailing_dot() -> anyhow::Result<()> {
-        assert_eq!(
-            validate_and_normalize_dns("EXAMPLE.com.")?,
-            "example.com"
-        );
+        assert_eq!(validate_and_normalize_dns("EXAMPLE.com.")?, "example.com");
         Ok(())
     }
 

@@ -52,7 +52,8 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
         .trim_end_matches(']')
         .parse()
         .ok();
-    let is_loopback_host = host_ip.map_or_else(|| matches!(host, "localhost"), |ip| ip.is_loopback());
+    let is_loopback_host =
+        host_ip.map_or_else(|| matches!(host, "localhost"), |ip| ip.is_loopback());
     if scheme == "http" {
         if tls == TlsPolicy::RequireHttps {
             bail!(
@@ -89,9 +90,7 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
 /// loopback-testing warning when `http://` is permitted via `--insecure`.
 pub fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
     validate_acme_url(url, tls, net).with_context(|| format!("invalid directory URL {url:?}"))?;
-    if reqwest::Url::parse(url)
-        .is_ok_and(|u| u.scheme() == "http")
-    {
+    if reqwest::Url::parse(url).is_ok_and(|u| u.scheme() == "http") {
         warn!("Using plain http:// for ACME directory (loopback only) — TESTING USE ONLY");
     }
     Ok(())

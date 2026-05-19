@@ -11,9 +11,9 @@
 //! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256) - used for both RSA-2048 and RSA-4096 keys
 //! - `EdDSA` (Ed25519)
 
-use anyhow::{bail, Context, Result};
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use anyhow::{Context, Result, bail};
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 

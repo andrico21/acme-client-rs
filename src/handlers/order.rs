@@ -222,7 +222,15 @@ pub(crate) async fn cmd_finalize(
     let key_output_owned = key_output.to_path_buf();
     let key_display = key_output.display().to_string();
     tokio::task::spawn_blocking(move || {
-        crate::fs_secure::write_secret_file(&key_output_owned, &key_bytes, if force { crate::fs_secure::Overwrite::Allow } else { crate::fs_secure::Overwrite::Forbid })
+        crate::fs_secure::write_secret_file(
+            &key_output_owned,
+            &key_bytes,
+            if force {
+                crate::fs_secure::Overwrite::Allow
+            } else {
+                crate::fs_secure::Overwrite::Forbid
+            },
+        )
     })
     .await
     .context("write_secret_file task panicked")?

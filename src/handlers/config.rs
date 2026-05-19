@@ -151,7 +151,10 @@ fn set_source(v: &mut serde_json::Value, key: &str, source: &str) {
         && let Some(entry) = obj.get_mut(key)
         && let Some(entry_obj) = entry.as_object_mut()
     {
-        entry_obj.insert("source".to_string(), serde_json::Value::String(source.to_string()));
+        entry_obj.insert(
+            "source".to_string(),
+            serde_json::Value::String(source.to_string()),
+        );
     }
 }
 
@@ -187,7 +190,10 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
         set_source(
             &mut g,
             "directory",
-            ctx.global_source("directory", cfg_g.and_then(|c| c.directory.as_ref()).is_some()),
+            ctx.global_source(
+                "directory",
+                cfg_g.and_then(|c| c.directory.as_ref()).is_some(),
+            ),
         );
         set_source(
             &mut g,
@@ -342,7 +348,11 @@ fn render_json(ctx: &RenderContext<'_>) -> Result<()> {
         if ctx.verbose {
             set_source(&mut av, "contact", ctx.cfg_source(a.contact.is_some()));
             set_source(&mut av, "eab_kid", ctx.cfg_source(a.eab_kid.is_some()));
-            set_source(&mut av, "eab_hmac_key", ctx.cfg_source(a.eab_hmac_key.is_some()));
+            set_source(
+                &mut av,
+                "eab_hmac_key",
+                ctx.cfg_source(a.eab_hmac_key.is_some()),
+            );
         }
         if let Some(obj_map) = obj.as_object_mut() {
             obj_map.insert("account".to_string(), av);
@@ -364,7 +374,11 @@ fn render_text(ctx: &RenderContext<'_>) -> Result<()> {
         outln!("# Source annotations: (cli) (env) (config) (default)");
     }
     outln!();
-    if let Some(p) = &ctx.config_path { outln!("Config file: {p}") } else { outln!("Config file: (none)") }
+    if let Some(p) = &ctx.config_path {
+        outln!("Config file: {p}")
+    } else {
+        outln!("Config file: (none)")
+    }
     outln!();
 
     let cfg_g = ctx.cfg_g();

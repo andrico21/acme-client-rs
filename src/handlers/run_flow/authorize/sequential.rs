@@ -69,7 +69,9 @@ pub(super) async fn run_sequential(
             ChallengeType::TlsAlpn01 => {
                 provision_tlsalpn01(ctx, client, &authz, require_token()?, &ch.url).await?
             }
-            other @ ChallengeType::Unknown(_) => anyhow::bail!("unsupported challenge type: {other}"),
+            other @ ChallengeType::Unknown(_) => {
+                anyhow::bail!("unsupported challenge type: {other}")
+            }
         };
 
         // Poll authorization until terminal (max ctx.challenge_timeout)

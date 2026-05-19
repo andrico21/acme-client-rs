@@ -61,8 +61,9 @@ pub(super) async fn finalize(
             if order.status == OrderStatus::Valid {
                 break;
             }
-            let sleep_for = retry_after
-                .map_or(default_sleep, |d| d.min(crate::defaults::polling::ACME_RESOURCE_POLL_MAX));
+            let sleep_for = retry_after.map_or(default_sleep, |d| {
+                d.min(crate::defaults::polling::ACME_RESOURCE_POLL_MAX)
+            });
             tokio::time::sleep(sleep_for).await;
         }
         Ok::<_, anyhow::Error>(order)
@@ -121,14 +122,25 @@ pub(super) async fn finalize(
     let force = ctx.force;
     let key_display = ctx.key_output.display().to_string();
     tokio::task::spawn_blocking(move || {
-        crate::fs_secure::write_secret_file(&key_output_owned, &key_bytes, if force { crate::fs_secure::Overwrite::Allow } else { crate::fs_secure::Overwrite::Forbid })
+        crate::fs_secure::write_secret_file(
+            &key_output_owned,
+            &key_bytes,
+            if force {
+                crate::fs_secure::Overwrite::Allow
+            } else {
+                crate::fs_secure::Overwrite::Forbid
+            },
+        )
     })
     .await
     .context("write_secret_file task panicked")?
     .with_context(|| format!("failed to write private key to {key_display}"))?;
     if !ctx.json && !ctx.silent {
         if key_encrypted {
-            outln!("Private key saved to {} (encrypted)", ctx.key_output.display());
+            outln!(
+                "Private key saved to {} (encrypted)",
+                ctx.key_output.display()
+            );
         } else {
             outln!("Private key saved to {}", ctx.key_output.display());
         }
@@ -163,16 +175,19 @@ pub(super) async fn finalize(
 
     if let Some(script) = ctx.on_cert_issued {
         let domains_joined = ctx.domains.join(",");
-        run_hook(script,
-        &[
-            ("ACME_DOMAINS", &domains_joined),
-            ("ACME_CERT_PATH", &ctx.cert_output.display().to_string()),
-            ("ACME_KEY_PATH", &ctx.key_output.display().to_string()),
-            (
-                "ACME_KEY_ENCRYPTED",
-                if key_encrypted { "true" } else { "false" },
-            ),
-        ],).await?;
+        run_hook(
+            script,
+            &[
+                ("ACME_DOMAINS", &domains_joined),
+                ("ACME_CERT_PATH", &ctx.cert_output.display().to_string()),
+                ("ACME_KEY_PATH", &ctx.key_output.display().to_string()),
+                (
+                    "ACME_KEY_ENCRYPTED",
+                    if key_encrypted { "true" } else { "false" },
+                ),
+            ],
+        )
+        .await?;
     }
 
     Ok(())

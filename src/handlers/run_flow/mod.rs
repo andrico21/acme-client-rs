@@ -102,7 +102,7 @@ pub(crate) async fn cmd_run(
                 crate::dns_check::Dnssec::Off
             },
         )
-            .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
+        .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
     );
 
     let json = cli.output_format == OutputFormat::Json;

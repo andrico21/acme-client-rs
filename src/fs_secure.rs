@@ -162,10 +162,7 @@ mod tests {
         let path = dir.join("k.pem");
         write_secret_file(&path, b"hello", Overwrite::Forbid)?;
         let mut s = String::new();
-        std::fs::File::open(&path)
-            ?
-            .read_to_string(&mut s)
-            ?;
+        std::fs::File::open(&path)?.read_to_string(&mut s)?;
         assert_eq!(s, "hello");
         #[cfg(unix)]
         {
@@ -195,10 +192,7 @@ mod tests {
         write_secret_file(&path, b"first", Overwrite::Forbid)?;
         write_secret_file(&path, b"second", Overwrite::Allow)?;
         let mut s = String::new();
-        std::fs::File::open(&path)
-            ?
-            .read_to_string(&mut s)
-            ?;
+        std::fs::File::open(&path)?.read_to_string(&mut s)?;
         assert_eq!(s, "second");
         Ok(())
     }
