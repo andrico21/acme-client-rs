@@ -5,39 +5,48 @@
 //! this module — making it impossible to accidentally bypass a future
 //! `--quiet` flag, JSON-output mode, or test capture.
 //!
-//! Behavior is intentionally identical to `print!` / `println!`: writes
-//! go to `std::io::stdout()`, panicking on failure (matching the standard
-//! macros' behavior — a broken pipe is the only realistic failure mode
-//! and the standard macros also panic on it under `-Z print-on-broken-pipe`
-//! or when the SIGPIPE default is suppressed).
+//! On a broken pipe (e.g. `acme-client-rs ... | head`) the process exits
+//! cleanly with code 0. This is a deliberate policy choice — closing the
+//! reader is normal in shell pipelines, not an error — and differs from the
+//! POSIX SIGPIPE default (exit 128+13=141), which Rust suppresses on stdout
+//! anyway. Other write failures are also silently swallowed (writing to
+//! stdout that cannot be written to has no useful recovery path for a CLI).
 //!
-//! Use `eprintln!` directly for stderr (logging goes through `tracing`
-//! anyway; this module is stdout-only).
+//! Use `tracing::{warn, error}` for stderr — this module is stdout-only.
 
 #![allow(clippy::print_stdout)]
+
+/// Internal helper: write to stdout, exit(0) on broken pipe, ignore other errors.
+#[doc(hidden)]
+pub fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
+    use std::io::Write as _;
+    let stdout = std::io::stdout();
+    let mut h = stdout.lock();
+    let res = if newline {
+        writeln!(h, "{args}")
+    } else {
+        write!(h, "{args}")
+    };
+    if let Err(e) = res
+        && e.kind() == std::io::ErrorKind::BrokenPipe
+    {
+        std::process::exit(0);
+    }
+}
 
 #[macro_export]
 macro_rules! outln {
     () => {{
-        use std::io::Write as _;
-        let stdout = std::io::stdout();
-        let mut h = stdout.lock();
-        writeln!(h).expect("stdout write failed");
+        $crate::output::__write_or_exit(::std::format_args!(""), true);
     }};
     ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let stdout = std::io::stdout();
-        let mut h = stdout.lock();
-        writeln!(h, $($arg)*).expect("stdout write failed");
+        $crate::output::__write_or_exit(::std::format_args!($($arg)*), true);
     }};
 }
 
 #[macro_export]
 macro_rules! out {
     ($($arg:tt)*) => {{
-        use std::io::Write as _;
-        let stdout = std::io::stdout();
-        let mut h = stdout.lock();
-        write!(h, $($arg)*).expect("stdout write failed");
+        $crate::output::__write_or_exit(::std::format_args!($($arg)*), false);
     }};
 }
