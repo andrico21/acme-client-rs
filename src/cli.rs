@@ -134,7 +134,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) connect_timeout: u64,
 
-    /// Allow contacting private/loopback/link-local IP addresses (RFC1918, 127/8, 169.254/16, ::1, fc00::/7, fe80::/10, etc.). Default: BLOCK to prevent SSRF. Implied by --insecure. Set this for internal/on-prem ACME deployments.
+    /// Allow contacting private/loopback/link-local IP addresses (RFC1918, 127/8, 169.254/16, `::1`, `fc00::/7`, `fe80::/10`, etc.). Default: BLOCK to prevent SSRF. Implied by --insecure. Set this for internal/on-prem ACME deployments.
     #[arg(long, global = true, env = "ACME_ALLOW_PRIVATE_NETWORK")]
     pub(crate) allow_private_network: bool,
 
@@ -589,7 +589,7 @@ pub(crate) struct RunArgs {
     /// Write HTTP-01 challenge files to this directory instead of starting a server
     #[arg(long)]
     pub(crate) challenge_dir: Option<PathBuf>,
-    /// Path to a DNS-01 hook script (called with ACME_ACTION=create|cleanup)
+    /// Path to a DNS-01 hook script (called with `ACME_ACTION=create|cleanup`)
     #[arg(long)]
     pub(crate) dns_hook: Option<PathBuf>,
     /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
@@ -658,15 +658,17 @@ pub(crate) struct RunArgs {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use anyhow::Context;
     use clap::CommandFactory;
 
     /// Drift detector. If a clap `default_value*` literal is ever inlined again
     /// instead of pointing at `crate::defaults`, the const and the CLI will
     /// disagree and this test will fail. See [`crate::defaults`].
     #[test]
-    fn clap_defaults_match_defaults_module() {
+    fn clap_defaults_match_defaults_module() -> anyhow::Result<()> {
         let cmd = Cli::command();
 
         let global_expected: &[(&str, &str)] = &[
@@ -714,7 +716,7 @@ mod tests {
         ];
         let run = cmd
             .find_subcommand("run")
-            .expect("`run` subcommand missing");
+            .context("`run` subcommand not found")?;
         for (arg_id, expected) in run_expected {
             let arg = run
                 .get_arguments()
@@ -731,5 +733,6 @@ mod tests {
                 "run arg `{arg_id}` default drifted from crate::defaults",
             );
         }
+        Ok(())
     }
 }

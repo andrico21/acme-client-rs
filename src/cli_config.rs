@@ -90,7 +90,7 @@ fn apply_global(
 
     if should_apply_config(matches.value_source("directory")) {
         if let Some(ref v) = cfg.directory {
-            cli.directory = v.clone();
+            cli.directory.clone_from(v);
         } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable)
         {
             cli.directory = "https://localhost:14000/dir".to_string();
@@ -99,7 +99,7 @@ fn apply_global(
 
     if should_apply_config(matches.value_source("account_key")) {
         if let Some(ref v) = cfg.account_key {
-            cli.account_key = v.clone();
+            cli.account_key.clone_from(v);
         } else if config_mode
             && matches.value_source("account_key") == Some(ValueSource::EnvVariable)
         {
@@ -178,8 +178,8 @@ fn apply_global(
         if let Ok(m) = <DnsCheckMode as clap::ValueEnum>::from_str(s, true) {
             cli.dns_check_mode = m;
         } else {
-            eprintln!(
-                "warning: config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
+            tracing::warn!(
+                "config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
             );
         }
     }
@@ -215,7 +215,7 @@ fn apply_run(
         if should_apply_config(sub_matches.value_source("challenge_type"))
             && let Some(ref v) = cfg_run.challenge_type
         {
-            args.challenge_type = v.clone();
+            args.challenge_type.clone_from(v);
         }
         if should_apply_config(sub_matches.value_source("http_port"))
             && let Some(v) = cfg_run.http_port
@@ -225,12 +225,12 @@ fn apply_run(
         if should_apply_config(sub_matches.value_source("cert_output"))
             && let Some(ref v) = cfg_run.cert_output
         {
-            args.cert_output = v.clone();
+            args.cert_output.clone_from(v);
         }
         if should_apply_config(sub_matches.value_source("key_output"))
             && let Some(ref v) = cfg_run.key_output
         {
-            args.key_output = v.clone();
+            args.key_output.clone_from(v);
         }
         if should_apply_config(sub_matches.value_source("cert_key_algorithm"))
             && let Some(ref v) = cfg_run.cert_key_algorithm
@@ -242,9 +242,9 @@ fn apply_run(
 
     if args.domains.is_empty() {
         if let Some(ref v) = cfg_run.domains {
-            args.domains = v.clone();
+            args.domains.clone_from(v);
         }
-    } else if config_mode && cfg_run.domains.as_ref().is_none_or(|d| d.is_empty()) {
+    } else if config_mode && cfg_run.domains.as_ref().is_none_or(std::vec::Vec::is_empty) {
         info!(
             "Using domains from CLI: {:?} (not set in config file)",
             args.domains
@@ -337,7 +337,7 @@ fn apply_account(cli: &mut Cli, cfg_acct: &config::AccountConfig) {
     if contact.is_empty()
         && let Some(ref v) = cfg_acct.contact
     {
-        *contact = v.clone();
+        contact.clone_from(v);
     }
     if eab_kid.is_none() {
         eab_kid.clone_from(&cfg_acct.eab_kid);

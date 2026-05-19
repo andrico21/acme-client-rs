@@ -124,7 +124,7 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
-        let config: Config = toml::from_str(&content)
+        let config: Self = toml::from_str(&content)
             .with_context(|| format!("failed to parse config file: {}", path.display()))?;
         Ok(config)
     }
@@ -147,7 +147,7 @@ mod tests {
     use super::*;
 
     /// SEC-07 regression: Debug-formatting a populated config must NOT leak
-    /// the EAB HMAC secret. SecretString redacts itself in Debug output.
+    /// the EAB HMAC secret. `SecretString` redacts itself in Debug output.
     #[test]
     fn debug_format_redacts_eab_hmac_key() {
         let secret_value = "super-secret-hmac-key-value-do-not-leak";
