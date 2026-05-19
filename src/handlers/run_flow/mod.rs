@@ -5,7 +5,7 @@
 //! DNS-01, DNS-PERSIST-01, TLS-ALPN-01), CSR generation, finalization,
 //! and post-issuance hook invocation.
 //!
-//! The flow is split across four phase modules — see CODE_REVIEW.md item 5.
+//! The flow is split across four phase modules — see `CODE_REVIEW.md` item 5.
 //! Phase extraction is in progress; today `cmd_run` is still monolithic.
 
 mod authorize;
@@ -94,7 +94,14 @@ pub(crate) async fn cmd_run(
         .collect::<Result<Vec<_>>>()?;
 
     let dns_checker = std::sync::Arc::new(
-        DnsChecker::new(cli.dns_check_mode, cli.dns_check_dnssec)
+        DnsChecker::new(
+            cli.dns_check_mode,
+            if cli.dns_check_dnssec {
+                crate::dns_check::Dnssec::On
+            } else {
+                crate::dns_check::Dnssec::Off
+            },
+        )
             .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
     );
 

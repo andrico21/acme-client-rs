@@ -24,7 +24,9 @@ pub(super) async fn run_phased_dns(
     client: &mut AcmeClient,
     order: &Order,
 ) -> Result<()> {
-    let hook = ctx.dns_hook.unwrap(); // safe: dispatcher only routes here when set
+    let hook = ctx
+        .dns_hook
+        .context("phased DNS pipeline invoked without --dns-hook (dispatcher bug)")?;
 
     // Phase 1: Fetch all authorizations and create DNS records
     let mut pending: Vec<DnsPending> = Vec::new();
@@ -65,8 +67,8 @@ pub(super) async fn run_phased_dns(
                     )
                 })?;
                 let t = ch.token.clone().context("challenge has no token")?;
-                let name = crate::challenge::dns01::record_name(dns);
-                let value = crate::challenge::dns01::txt_record_value(&t, client.account_key());
+                let name = crate::challenge::dns01::record_name(dns)?;
+                let value = crate::challenge::dns01::txt_record_value(&t, client.account_key())?;
                 (Some(t), dns.clone(), name, value)
             } else {
                 // dns-persist-01
@@ -85,13 +87,16 @@ pub(super) async fn run_phased_dns(
                         "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
                     );
                 }
+                let primary_issuer = issuer_names
+                    .first()
+                    .context("dns-persist-01 issuer-domain-names is empty")?;
                 let account_uri = client
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
-                let name = crate::challenge::dns_persist01::record_name(dns);
+                let name = crate::challenge::dns_persist01::record_name(dns)?;
                 let value = crate::challenge::dns_persist01::txt_record_value(
-                    &issuer_names[0],
+                    primary_issuer,
                     &account_uri,
                     ctx.persist_policy,
                     ctx.persist_until,
@@ -105,18 +110,18 @@ pub(super) async fn run_phased_dns(
             hook.display(),
             dns_for_pending.as_str()
         );
-        if let Err(e) = run_dns_hook_create(hook, &dns_for_pending, &txt_name, &txt_value) {
+        if let Err(e) = run_dns_hook_create(hook, &dns_for_pending, &txt_name, &txt_value).await {
             // Clean up any records we already created
             for p in &pending {
-                run_dns_hook_cleanup_silent(hook, &p.domain, &p.txt_name, &p.txt_value);
+                run_dns_hook_cleanup_silent(hook, &p.domain, &p.txt_name, &p.txt_value).await;
             }
             return Err(e);
         }
         ctx.cleanup_registry
             .register(crate::cleanup::CleanupAction::DnsRecord {
                 hook: hook.to_path_buf(),
-                domain: dns_for_pending.as_str().to_string(),
-                txt_name: txt_name.as_str().to_string(),
+                domain: dns_for_pending.clone(),
+                txt_name: txt_name.clone(),
                 txt_value: txt_value.clone(),
             });
 
@@ -154,12 +159,16 @@ pub(super) async fn run_phased_dns(
                 let sem = semaphore.clone();
                 let checker = std::sync::Arc::clone(&ctx.dns_checker);
                 set.spawn(async move {
-                    let _permit = sem.acquire().await.expect("semaphore closed unexpectedly");
+                    let _permit = sem
+                        .acquire()
+                        .await
+                        .map_err(|_| anyhow::anyhow!("DNS propagation semaphore closed"))?;
                     let deadline =
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     while std::time::Instant::now() < deadline {
                         match dns_txt_check(&checker, name.as_str(), &value).await {
                             Ok(true) => return Ok((domain, true)),
+                            #[allow(clippy::match_same_arms)]
                             Ok(false) => {}
                             // Transient resolver errors (NXDOMAIN, SERVFAIL, timeout)
                             // are treated as "not yet propagated" so the deadline path
@@ -186,13 +195,13 @@ pub(super) async fn run_phased_dns(
             if !failed.is_empty() {
                 // Clean up ALL created records before bailing
                 for p in &pending {
-                    run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value);
+                    run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value).await;
                 }
                 anyhow::bail!(
                     "DNS TXT records not found within {timeout_secs}s for: {}",
                     failed
                         .iter()
-                        .map(|d| d.as_str())
+                        .map(crate::types::DnsName::as_str)
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
@@ -206,29 +215,25 @@ pub(super) async fn run_phased_dns(
                     let token = p
                         .token
                         .as_ref()
-                        .expect("dns-01 DnsPending always carries a token");
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key());
-                    run_hook(
-                        script,
-                        &[
-                            ("ACME_DOMAIN", p.domain.as_str()),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", token.as_str()),
-                            ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", p.txt_name.as_str()),
-                            ("ACME_TXT_VALUE", &p.txt_value),
-                        ],
-                    )?;
+                        .context("dns-01 DnsPending must carry a token")?;
+                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(script,
+                    &[
+                        ("ACME_DOMAIN", p.domain.as_str()),
+                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                        ("ACME_TOKEN", token.as_str()),
+                        ("ACME_KEY_AUTH", &key_auth),
+                        ("ACME_TXT_NAME", p.txt_name.as_str()),
+                        ("ACME_TXT_VALUE", &p.txt_value),
+                    ],).await?;
                 } else {
-                    run_hook(
-                        script,
-                        &[
-                            ("ACME_DOMAIN", p.domain.as_str()),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TXT_NAME", p.txt_name.as_str()),
-                            ("ACME_TXT_VALUE", &p.txt_value),
-                        ],
-                    )?;
+                    run_hook(script,
+                    &[
+                        ("ACME_DOMAIN", p.domain.as_str()),
+                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                        ("ACME_TXT_NAME", p.txt_name.as_str()),
+                        ("ACME_TXT_VALUE", &p.txt_value),
+                    ],).await?;
                 }
             }
             client.respond_to_challenge(&p.challenge_url).await?;
@@ -245,7 +250,7 @@ pub(super) async fn run_phased_dns(
                 if std::time::Instant::now() > poll_deadline {
                     // Clean up remaining records
                     for q in &pending {
-                        run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value);
+                        run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
                     }
                     anyhow::bail!(
                         "authorization for {} did not complete within {}s",
@@ -266,7 +271,7 @@ pub(super) async fn run_phased_dns(
                 {
                     if is_challenge_failed(ch) {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value);
+                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
                         }
                         let detail = ch
                             .error
@@ -284,9 +289,13 @@ pub(super) async fn run_phased_dns(
 
                 match a.status {
                     AuthorizationStatus::Valid => break,
-                    AuthorizationStatus::Invalid => {
+                    AuthorizationStatus::Pending => {}
+                    AuthorizationStatus::Invalid
+                    | AuthorizationStatus::Deactivated
+                    | AuthorizationStatus::Expired
+                    | AuthorizationStatus::Revoked => {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value);
+                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value).await;
                         }
                         let detail = a
                             .challenges
@@ -295,9 +304,12 @@ pub(super) async fn run_phased_dns(
                             .and_then(|c| c.error.as_ref())
                             .map(|e| format!(": {e}"))
                             .unwrap_or_default();
-                        anyhow::bail!("authorization failed for {}{detail}", p.domain);
+                        anyhow::bail!(
+                            "authorization failed for {} (status: {}){detail}",
+                            p.domain,
+                            a.status
+                        );
                     }
-                    _ => continue,
                 }
             }
         }
@@ -309,7 +321,7 @@ pub(super) async fn run_phased_dns(
                 hook.display(),
                 p.domain
             );
-            run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value);
+            run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value).await;
         }
     }
     Ok(())

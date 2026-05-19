@@ -82,33 +82,13 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             ctx.http_port
                         );
                     }
-                    let auth = crate::challenge::http01::response_body(token, client.account_key());
+                    let auth = crate::challenge::http01::response_body(token, client.account_key())?;
                     let path = crate::challenge::http01::challenge_path(token);
                     let listener = crate::challenge::http01::bind_or_suggest(ctx.http_port).await?;
                     info!("HTTP-01 server listening on 0.0.0.0:{}", ctx.http_port);
-                    let task = tokio::spawn(async move {
-                        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                        loop {
-                            let (mut stream, _addr) = listener.accept().await?;
-                            let mut buf = vec![0u8; 4096];
-                            let n = stream.read(&mut buf).await?;
-                            let req = String::from_utf8_lossy(&buf[..n]);
-                            if req.contains(&path) {
-                                let resp = format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n{}",
-                                    auth.len(),
-                                    auth
-                                );
-                                stream.write_all(resp.as_bytes()).await?;
-                                return Ok(());
-                            }
-                            stream
-                                .write_all(
-                                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\nServer: acme-client-rs\r\n\r\n",
-                                )
-                                .await?;
-                        }
-                    });
+                    let task = tokio::spawn(crate::challenge::http01::run_accept_loop(
+                        listener, auth, path,
+                    ));
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::ServerTask(
                             task.abort_handle(),
@@ -127,20 +107,20 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         "dns-01 challenges are not supported for IP identifiers ({domain_display})"
                     )
                 })?;
-                let txt_name = crate::challenge::dns01::record_name(dns);
+                let txt_name = crate::challenge::dns01::record_name(dns)?;
                 let txt_value =
-                    crate::challenge::dns01::txt_record_value(token, client.account_key());
+                    crate::challenge::dns01::txt_record_value(token, client.account_key())?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, dns, &txt_name, &txt_value)?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: dns.as_str().to_string(),
-                            txt_name: txt_name.as_str().to_string(),
+                            domain: dns.clone(),
+                            txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
-                    crate::challenge::dns01::print_instructions(dns, token, client.account_key());
+                    crate::challenge::dns01::print_instructions(dns, token, client.account_key())?;
                 }
                 if let Some(timeout_secs) = ctx.dns_wait {
                     let deadline =
@@ -155,7 +135,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value);
+                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value).await;
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -163,21 +143,19 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                 } else if ctx.dns_hook.is_none() && !ctx.silent {
                     outln!("Press Enter once the record has propagated...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
+                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key());
-                    run_hook(
-                        script,
-                        &[
-                            ("ACME_DOMAIN", dns.as_str()),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", token.as_str()),
-                            ("ACME_KEY_AUTH", &key_auth),
-                            ("ACME_TXT_NAME", txt_name.as_str()),
-                            ("ACME_TXT_VALUE", &txt_value),
-                        ],
-                    )?;
+                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(script,
+                    &[
+                        ("ACME_DOMAIN", dns.as_str()),
+                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                        ("ACME_TOKEN", token.as_str()),
+                        ("ACME_KEY_AUTH", &key_auth),
+                        ("ACME_TXT_NAME", txt_name.as_str()),
+                        ("ACME_TXT_VALUE", &txt_value),
+                    ],).await?;
                 }
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
@@ -197,24 +175,27 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         "malformed dns-persist-01: issuer-domain-names must have 1-10 entries"
                     );
                 }
+                let primary_issuer = issuer_names
+                    .first()
+                    .context("dns-persist-01 issuer-domain-names is empty")?;
                 let account_uri = client
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
                     .to_string();
-                let txt_name = crate::challenge::dns_persist01::record_name(dns);
+                let txt_name = crate::challenge::dns_persist01::record_name(dns)?;
                 let txt_value = crate::challenge::dns_persist01::txt_record_value(
-                    &issuer_names[0],
+                    primary_issuer,
                     &account_uri,
                     ctx.persist_policy,
                     ctx.persist_until,
                 )?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, dns, &txt_name, &txt_value)?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
                     ctx.cleanup_registry
                         .register(crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
-                            domain: dns.as_str().to_string(),
-                            txt_name: txt_name.as_str().to_string(),
+                            domain: dns.clone(),
+                            txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
                         });
                 } else if !ctx.silent {
@@ -239,7 +220,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value);
+                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value).await;
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -247,18 +228,16 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                 } else if ctx.dns_hook.is_none() && !ctx.silent {
                     outln!("Press Enter once the record has propagated...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
+                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    run_hook(
-                        script,
-                        &[
-                            ("ACME_DOMAIN", dns.as_str()),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TXT_NAME", txt_name.as_str()),
-                            ("ACME_TXT_VALUE", &txt_value),
-                        ],
-                    )?;
+                    run_hook(script,
+                    &[
+                        ("ACME_DOMAIN", dns.as_str()),
+                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                        ("ACME_TXT_NAME", txt_name.as_str()),
+                        ("ACME_TXT_VALUE", &txt_value),
+                    ],).await?;
                 }
                 dns_cleanup_info = Some((txt_name, txt_value));
                 client.respond_to_challenge(&challenge_url).await?;
@@ -270,25 +249,23 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         &authz.identifier.value_str(),
                         token,
                         client.account_key(),
-                    );
+                    )?;
                     outln!("Press Enter once the TLS server is configured...");
-                    let _ = std::io::stdin().read_line(&mut String::new());
+                    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
                 }
                 if let Some(script) = ctx.on_challenge_ready {
-                    let key_auth = crate::challenge::key_authorization(token, client.account_key());
-                    run_hook(
-                        script,
-                        &[
-                            ("ACME_DOMAIN", &authz.identifier.value_str()),
-                            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                            ("ACME_TOKEN", token.as_str()),
-                            ("ACME_KEY_AUTH", &key_auth),
-                        ],
-                    )?;
+                    let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
+                    run_hook(script,
+                    &[
+                        ("ACME_DOMAIN", &authz.identifier.value_str()),
+                        ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+                        ("ACME_TOKEN", token.as_str()),
+                        ("ACME_KEY_AUTH", &key_auth),
+                    ],).await?;
                 }
                 client.respond_to_challenge(&challenge_url).await?;
             }
-            other => anyhow::bail!("unsupported challenge type: {other}"),
+            other @ ChallengeType::Unknown(_) => anyhow::bail!("unsupported challenge type: {other}"),
         }
 
         // Poll authorization until valid (max ctx.challenge_timeout)
@@ -330,7 +307,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         .as_ref()
                         .map(|e| format!(": {e}"))
                         .unwrap_or_default();
-                    anyhow::bail!("challenge validation failed for {}{detail}", domain_display);
+                    anyhow::bail!("challenge validation failed for {domain_display}{detail}");
                 } else if let Some(ref err) = ch.error {
                     tracing::debug!(
                         "Challenge has error but status is {} (will keep polling): {err}",
@@ -340,7 +317,11 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             }
             match a.status {
                 AuthorizationStatus::Valid => break,
-                AuthorizationStatus::Invalid => {
+                AuthorizationStatus::Pending => {}
+                AuthorizationStatus::Invalid
+                | AuthorizationStatus::Deactivated
+                | AuthorizationStatus::Expired
+                | AuthorizationStatus::Revoked => {
                     if let Some(handle) = serve_task.take() {
                         handle.abort();
                     }
@@ -354,9 +335,12 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         .and_then(|c| c.error.as_ref())
                         .map(|e| format!(": {e}"))
                         .unwrap_or_default();
-                    anyhow::bail!("pre-authorization failed for {}{detail}", domain_display);
+                    anyhow::bail!(
+                        "pre-authorization failed for {} (status: {}){detail}",
+                        domain_display,
+                        a.status
+                    );
                 }
-                _ => continue,
             }
         }
 
@@ -365,7 +349,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             && let Some(hook) = ctx.dns_hook
             && let Some(ref dns) = dns_for_hook
         {
-            run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value);
+            run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value).await;
         }
         if let Some(handle) = serve_task.take() {
             handle.abort();

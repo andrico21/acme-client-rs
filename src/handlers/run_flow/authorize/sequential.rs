@@ -69,7 +69,7 @@ pub(super) async fn run_sequential(
             ChallengeType::TlsAlpn01 => {
                 provision_tlsalpn01(ctx, client, &authz, require_token()?, &ch.url).await?
             }
-            other => anyhow::bail!("unsupported challenge type: {other}"),
+            other @ ChallengeType::Unknown(_) => anyhow::bail!("unsupported challenge type: {other}"),
         };
 
         // Poll authorization until terminal (max ctx.challenge_timeout)
@@ -127,7 +127,11 @@ pub(super) async fn run_sequential(
 
             match a.status {
                 AuthorizationStatus::Valid => break,
-                AuthorizationStatus::Invalid => {
+                AuthorizationStatus::Pending => {}
+                AuthorizationStatus::Invalid
+                | AuthorizationStatus::Deactivated
+                | AuthorizationStatus::Expired
+                | AuthorizationStatus::Revoked => {
                     if let Some(handle) = serve_task.take() {
                         handle.abort();
                     }
@@ -142,11 +146,11 @@ pub(super) async fn run_sequential(
                         .map(|e| format!(": {e}"))
                         .unwrap_or_default();
                     anyhow::bail!(
-                        "authorization failed for {}{detail}",
-                        authz.identifier.value_str()
+                        "authorization failed for {} (status: {}){detail}",
+                        authz.identifier.value_str(),
+                        a.status
                     );
                 }
-                _ => continue,
             }
         }
 

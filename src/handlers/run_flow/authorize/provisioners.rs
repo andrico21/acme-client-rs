@@ -68,7 +68,7 @@ pub(super) async fn provision_http01(
                 ctx.http_port
             );
         }
-        let auth = crate::challenge::http01::response_body(token, client.account_key());
+        let auth = crate::challenge::http01::response_body(token, client.account_key())?;
         let path = crate::challenge::http01::challenge_path(token);
 
         let listener = crate::challenge::http01::bind_or_suggest(ctx.http_port).await?;
@@ -117,12 +117,12 @@ pub(super) async fn provision_dns01(
             authz.identifier.value_str()
         )
     })?;
-    let txt_name = crate::challenge::dns01::record_name(dns);
-    let txt_value = crate::challenge::dns01::txt_record_value(token, client.account_key());
+    let txt_name = crate::challenge::dns01::record_name(dns)?;
+    let txt_value = crate::challenge::dns01::txt_record_value(token, client.account_key())?;
 
     // No hook: print instructions for manual setup
     if !ctx.silent {
-        crate::challenge::dns01::print_instructions(dns, token, client.account_key());
+        crate::challenge::dns01::print_instructions(dns, token, client.account_key())?;
     }
 
     if let Some(timeout_secs) = ctx.dns_wait {
@@ -130,22 +130,20 @@ pub(super) async fn provision_dns01(
     } else if !ctx.silent {
         // Interactive: wait for Enter
         outln!("Press Enter once the record has propagated...");
-        let _ = std::io::stdin().read_line(&mut String::new());
+        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
-        let key_auth = crate::challenge::key_authorization(token, client.account_key());
-        run_hook(
-            script,
-            &[
-                ("ACME_DOMAIN", dns.as_str()),
-                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                ("ACME_TOKEN", token.as_str()),
-                ("ACME_KEY_AUTH", &key_auth),
-                ("ACME_TXT_NAME", txt_name.as_str()),
-                ("ACME_TXT_VALUE", &txt_value),
-            ],
-        )?;
+        let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
+        run_hook(script,
+        &[
+            ("ACME_DOMAIN", dns.as_str()),
+            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+            ("ACME_TOKEN", token.as_str()),
+            ("ACME_KEY_AUTH", &key_auth),
+            ("ACME_TXT_NAME", txt_name.as_str()),
+            ("ACME_TXT_VALUE", &txt_value),
+        ],).await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;
@@ -172,13 +170,16 @@ pub(super) async fn provision_dns_persist01(
     if issuer_names.is_empty() || issuer_names.len() > 10 {
         anyhow::bail!("malformed dns-persist-01: issuer-domain-names must have 1-10 entries");
     }
+    let primary_issuer = issuer_names
+        .first()
+        .context("dns-persist-01 issuer-domain-names is empty")?;
     let account_uri = client
         .account_url()
         .context("account URL not known - cannot construct dns-persist-01 record")?
         .to_string();
-    let txt_name = crate::challenge::dns_persist01::record_name(dns);
+    let txt_name = crate::challenge::dns_persist01::record_name(dns)?;
     let txt_value = crate::challenge::dns_persist01::txt_record_value(
-        &issuer_names[0],
+        primary_issuer,
         &account_uri,
         ctx.persist_policy,
         ctx.persist_until,
@@ -199,19 +200,17 @@ pub(super) async fn provision_dns_persist01(
         wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         outln!("Press Enter once the record has propagated...");
-        let _ = std::io::stdin().read_line(&mut String::new());
+        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
-        run_hook(
-            script,
-            &[
-                ("ACME_DOMAIN", dns.as_str()),
-                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                ("ACME_TXT_NAME", txt_name.as_str()),
-                ("ACME_TXT_VALUE", &txt_value),
-            ],
-        )?;
+        run_hook(script,
+        &[
+            ("ACME_DOMAIN", dns.as_str()),
+            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+            ("ACME_TXT_NAME", txt_name.as_str()),
+            ("ACME_TXT_VALUE", &txt_value),
+        ],).await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;
@@ -230,22 +229,20 @@ pub(super) async fn provision_tlsalpn01(
             &authz.identifier.value_str(),
             token,
             client.account_key(),
-        );
+        )?;
         outln!("Press Enter once the TLS server is configured...");
-        let _ = std::io::stdin().read_line(&mut String::new());
+        let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
-        let key_auth = crate::challenge::key_authorization(token, client.account_key());
-        run_hook(
-            script,
-            &[
-                ("ACME_DOMAIN", &authz.identifier.value_str()),
-                ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
-                ("ACME_TOKEN", token.as_str()),
-                ("ACME_KEY_AUTH", &key_auth),
-            ],
-        )?;
+        let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
+        run_hook(script,
+        &[
+            ("ACME_DOMAIN", &authz.identifier.value_str()),
+            ("ACME_CHALLENGE_TYPE", ctx.challenge_type.as_str()),
+            ("ACME_TOKEN", token.as_str()),
+            ("ACME_KEY_AUTH", &key_auth),
+        ],).await?;
     }
 
     client.respond_to_challenge(challenge_url).await?;

@@ -42,11 +42,11 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
             if requested != cert_sans {
                 let added: Vec<&str> = requested
                     .difference(&cert_sans)
-                    .map(|s| s.as_str())
+                    .map(std::string::String::as_str)
                     .collect();
                 let removed: Vec<&str> = cert_sans
                     .difference(&requested)
-                    .map(|s| s.as_str())
+                    .map(std::string::String::as_str)
                     .collect();
 
                 if ctx.reissue_on_mismatch {
@@ -97,12 +97,12 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
                                  Use --reissue-on-mismatch to override.",
                                 cert_sans
                                     .iter()
-                                    .map(|s| s.as_str())
+                                    .map(std::string::String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 requested
                                     .iter()
-                                    .map(|s| s.as_str())
+                                    .map(std::string::String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 added.join(", "),
@@ -128,7 +128,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
 
     // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
     if ctx.ari {
-        match std::fs::read_to_string(ctx.cert_output) {
+        match tokio::fs::read_to_string(ctx.cert_output).await {
             Ok(pem_data) => match pem_to_der(&pem_data) {
                 Ok(cert_der) => {
                     // Build client early so we reuse directory + account for step 1
@@ -215,7 +215,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
         && let Some(threshold) = ctx.days
     {
         match cert_days_remaining(ctx.cert_output) {
-            Ok(remaining) if remaining > threshold as i64 => {
+            Ok(remaining) if remaining > i64::from(threshold) => {
                 if ctx.json {
                     if !ctx.silent {
                         outln!(
