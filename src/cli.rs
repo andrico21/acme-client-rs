@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::dns_check::DnsCheckMode;
 use crate::jws::KeyAlgorithm;
@@ -560,88 +560,98 @@ Examples:
     --on-challenge-ready ./reload-nginx.sh \\
     --on-cert-issued ./deploy-cert.sh \\
     example.com")]
-    Run {
-        /// Domain names (can also be set in config file under [run].domains)
-        domains: Vec<String>,
-        /// Contact email
-        #[arg(long)]
-        contact: Option<String>,
-        /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
-        #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
-        challenge_type: String,
-        /// HTTP-01 server port (standalone mode)
-        #[arg(long, default_value_t = crate::defaults::run::HTTP_PORT)]
-        http_port: u16,
-        /// Write HTTP-01 challenge files to this directory instead of starting a server
-        #[arg(long)]
-        challenge_dir: Option<PathBuf>,
-        /// Path to a DNS-01 hook script (called with ACME_ACTION=create|cleanup)
-        #[arg(long)]
-        dns_hook: Option<PathBuf>,
-        /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
-        #[arg(long)]
-        dns_wait: Option<u64>,
-        /// Max concurrent DNS propagation checks (default: 5)
-        #[arg(long, default_value_t = crate::defaults::run::DNS_PROPAGATION_CONCURRENCY)]
-        dns_propagation_concurrency: usize,
-        /// Max seconds to wait for challenge validation (default: 300)
-        #[arg(long, default_value_t = crate::defaults::run::CHALLENGE_TIMEOUT_SECS)]
-        challenge_timeout: u64,
-        /// Save the certificate to this file
-        #[arg(long, default_value = crate::defaults::run::CERT_OUTPUT_FILE)]
-        cert_output: PathBuf,
-        /// Save the private key to this file
-        #[arg(long, default_value = crate::defaults::run::KEY_OUTPUT_FILE)]
-        key_output: PathBuf,
-        /// Skip renewal if existing certificate has more than N days remaining
-        #[arg(long)]
-        days: Option<u32>,
-        /// Password to encrypt the private key (visible in process list - prefer --key-password-file)
-        #[arg(long, conflicts_with = "key_password_file")]
-        key_password: Option<String>,
-        /// Read the private key encryption password from a file (first line, trailing newline stripped)
-        #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
-        key_password_file: Option<PathBuf>,
-        /// Run a script after each challenge is ready for validation
-        #[arg(long)]
-        on_challenge_ready: Option<PathBuf>,
-        /// Run a script after the certificate is issued and saved
-        #[arg(long)]
-        on_cert_issued: Option<PathBuf>,
-        /// EAB Key ID from the CA (for CAs that require External Account Binding)
-        #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
-        eab_kid: Option<String>,
-        /// EAB HMAC key (base64url-encoded, from the CA)
-        #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
-        eab_hmac_key: Option<String>,
-        /// Pre-authorize identifiers via newAuthz before creating the order
-        #[arg(long)]
-        pre_authorize: bool,
-        /// Use ACME Renewal Information (RFC 9702) to decide when to renew
-        #[arg(long)]
-        ari: bool,
-        /// Reissue the certificate if requested domains differ from existing cert's SANs
-        #[arg(long)]
-        reissue_on_mismatch: bool,
-        /// Print the certificate PEM to stdout after issuance
-        #[arg(long)]
-        print_cert: bool,
-        /// Policy for dns-persist-01 records (e.g., "wildcard" for wildcard + subdomain scope)
-        #[arg(long)]
-        persist_policy: Option<String>,
-        /// Unix timestamp for dns-persist-01 persistUntil parameter
-        #[arg(long)]
-        persist_until: Option<u64>,
-        /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
-        #[arg(long, default_value = crate::defaults::run::CERT_KEY_ALGORITHM)]
-        cert_key_algorithm: CertKeyAlgorithm,
-        /// Certificate profile (draft-ietf-acme-profiles-01)
-        #[arg(long, env = "ACME_PROFILE")]
-        profile: Option<String>,
-        /// Overwrite the private key file if it already exists.
-        #[arg(long)]
-        force: bool,
-    },
+    Run(RunArgs),
+}
+
+/// Flattened argument struct for the `run` subcommand.
+///
+/// Extracted from `Commands::Run { ... }` into a `#[derive(Args)]` struct so
+/// the run dispatcher does not need a 30-parameter signature mirrored across
+/// three layers. Field-level clap attributes (`#[arg(...)]`, defaults, env
+/// vars, conflicts, requires) are preserved verbatim from the original
+/// inline-variant form — clap derive behaviour is unchanged.
+#[derive(Args, Debug)]
+pub(crate) struct RunArgs {
+    /// Domain names (can also be set in config file under [run].domains)
+    pub(crate) domains: Vec<String>,
+    /// Contact email
+    #[arg(long)]
+    pub(crate) contact: Option<String>,
+    /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
+    #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
+    pub(crate) challenge_type: String,
+    /// HTTP-01 server port (standalone mode)
+    #[arg(long, default_value_t = crate::defaults::run::HTTP_PORT)]
+    pub(crate) http_port: u16,
+    /// Write HTTP-01 challenge files to this directory instead of starting a server
+    #[arg(long)]
+    pub(crate) challenge_dir: Option<PathBuf>,
+    /// Path to a DNS-01 hook script (called with ACME_ACTION=create|cleanup)
+    #[arg(long)]
+    pub(crate) dns_hook: Option<PathBuf>,
+    /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
+    #[arg(long)]
+    pub(crate) dns_wait: Option<u64>,
+    /// Max concurrent DNS propagation checks (default: 5)
+    #[arg(long, default_value_t = crate::defaults::run::DNS_PROPAGATION_CONCURRENCY)]
+    pub(crate) dns_propagation_concurrency: usize,
+    /// Max seconds to wait for challenge validation (default: 300)
+    #[arg(long, default_value_t = crate::defaults::run::CHALLENGE_TIMEOUT_SECS)]
+    pub(crate) challenge_timeout: u64,
+    /// Save the certificate to this file
+    #[arg(long, default_value = crate::defaults::run::CERT_OUTPUT_FILE)]
+    pub(crate) cert_output: PathBuf,
+    /// Save the private key to this file
+    #[arg(long, default_value = crate::defaults::run::KEY_OUTPUT_FILE)]
+    pub(crate) key_output: PathBuf,
+    /// Skip renewal if existing certificate has more than N days remaining
+    #[arg(long)]
+    pub(crate) days: Option<u32>,
+    /// Password to encrypt the private key (visible in process list - prefer --key-password-file)
+    #[arg(long, conflicts_with = "key_password_file")]
+    pub(crate) key_password: Option<String>,
+    /// Read the private key encryption password from a file (first line, trailing newline stripped)
+    #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
+    pub(crate) key_password_file: Option<PathBuf>,
+    /// Run a script after each challenge is ready for validation
+    #[arg(long)]
+    pub(crate) on_challenge_ready: Option<PathBuf>,
+    /// Run a script after the certificate is issued and saved
+    #[arg(long)]
+    pub(crate) on_cert_issued: Option<PathBuf>,
+    /// EAB Key ID from the CA (for CAs that require External Account Binding)
+    #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
+    pub(crate) eab_kid: Option<String>,
+    /// EAB HMAC key (base64url-encoded, from the CA)
+    #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
+    pub(crate) eab_hmac_key: Option<String>,
+    /// Pre-authorize identifiers via newAuthz before creating the order
+    #[arg(long)]
+    pub(crate) pre_authorize: bool,
+    /// Use ACME Renewal Information (RFC 9702) to decide when to renew
+    #[arg(long)]
+    pub(crate) ari: bool,
+    /// Reissue the certificate if requested domains differ from existing cert's SANs
+    #[arg(long)]
+    pub(crate) reissue_on_mismatch: bool,
+    /// Print the certificate PEM to stdout after issuance
+    #[arg(long)]
+    pub(crate) print_cert: bool,
+    /// Policy for dns-persist-01 records (e.g., "wildcard" for wildcard + subdomain scope)
+    #[arg(long)]
+    pub(crate) persist_policy: Option<String>,
+    /// Unix timestamp for dns-persist-01 persistUntil parameter
+    #[arg(long)]
+    pub(crate) persist_until: Option<u64>,
+    /// Certificate key algorithm (ec-p256 | ec-p384 | ed25519)
+    #[arg(long, default_value = crate::defaults::run::CERT_KEY_ALGORITHM)]
+    pub(crate) cert_key_algorithm: CertKeyAlgorithm,
+    /// Certificate profile (draft-ietf-acme-profiles-01)
+    #[arg(long, env = "ACME_PROFILE")]
+    pub(crate) profile: Option<String>,
+    /// Overwrite the private key file if it already exists.
+    #[arg(long)]
+    pub(crate) force: bool,
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ mod renewal;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat};
+use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat, RunArgs};
 use crate::client::AcmeClient;
 use crate::dns_check::DnsChecker;
 use crate::types::{ChallengeType, Identifier};
@@ -70,51 +70,25 @@ pub(super) struct RunContext<'a> {
 
 // ── Full automated flow ─────────────────────────────────────────────────────
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn cmd_run(
     cli: &Cli,
-    domains: Vec<String>,
-    contact: Option<String>,
-    challenge_type: &str,
-    http_port: u16,
-    challenge_dir: Option<&std::path::Path>,
-    dns_hook: Option<&std::path::Path>,
-    dns_wait: Option<u64>,
-    dns_propagation_concurrency: usize,
-    challenge_timeout: u64,
-    cert_output: &std::path::Path,
-    key_output: &std::path::Path,
-    days: Option<u32>,
-    key_password: Option<&str>,
-    key_password_file: Option<&std::path::Path>,
-    on_challenge_ready: Option<&std::path::Path>,
-    on_cert_issued: Option<&std::path::Path>,
-    eab_kid: Option<&str>,
-    eab_hmac_key: Option<&str>,
-    pre_authorize: bool,
-    ari: bool,
-    reissue_on_mismatch: bool,
-    print_cert: bool,
-    persist_policy: Option<&str>,
-    persist_until: Option<u64>,
-    cert_key_alg: CertKeyAlgorithm,
-    profile: Option<&str>,
-    force: bool,
+    args: &RunArgs,
     cleanup_registry: &crate::cleanup::CleanupRegistry,
 ) -> Result<()> {
-    let challenge_type = ChallengeType::parse_strict(challenge_type)?;
-    check_wildcard_compatible(&domains, &challenge_type)?;
+    let challenge_type = ChallengeType::parse_strict(&args.challenge_type)?;
+    check_wildcard_compatible(&args.domains, &challenge_type)?;
 
     crate::hook_check::validate_all_hooks(
         &[
-            ("dns_hook", dns_hook),
-            ("on_challenge_ready", on_challenge_ready),
-            ("on_cert_issued", on_cert_issued),
+            ("dns_hook", args.dns_hook.as_deref()),
+            ("on_challenge_ready", args.on_challenge_ready.as_deref()),
+            ("on_cert_issued", args.on_cert_issued.as_deref()),
         ],
         cli.unsafe_hooks,
     )?;
 
-    let domains: Vec<String> = domains
+    let domains: Vec<String> = args
+        .domains
         .iter()
         .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
         .collect::<Result<Vec<_>>>()?;
@@ -130,31 +104,31 @@ pub(crate) async fn cmd_run(
     let mut ctx = RunContext {
         cli,
         challenge_type,
-        http_port,
-        challenge_dir,
-        dns_hook,
-        dns_wait,
-        dns_propagation_concurrency,
-        challenge_timeout,
-        cert_output,
-        key_output,
-        days,
-        key_password,
-        key_password_file,
-        on_challenge_ready,
-        on_cert_issued,
-        eab_kid,
-        eab_hmac_key,
-        pre_authorize,
-        ari,
-        reissue_on_mismatch,
-        print_cert,
-        persist_policy,
-        persist_until,
-        cert_key_alg,
-        profile,
-        force,
-        contact,
+        http_port: args.http_port,
+        challenge_dir: args.challenge_dir.as_deref(),
+        dns_hook: args.dns_hook.as_deref(),
+        dns_wait: args.dns_wait,
+        dns_propagation_concurrency: args.dns_propagation_concurrency,
+        challenge_timeout: args.challenge_timeout,
+        cert_output: &args.cert_output,
+        key_output: &args.key_output,
+        days: args.days,
+        key_password: args.key_password.as_deref(),
+        key_password_file: args.key_password_file.as_deref(),
+        on_challenge_ready: args.on_challenge_ready.as_deref(),
+        on_cert_issued: args.on_cert_issued.as_deref(),
+        eab_kid: args.eab_kid.as_deref(),
+        eab_hmac_key: args.eab_hmac_key.as_deref(),
+        pre_authorize: args.pre_authorize,
+        ari: args.ari,
+        reissue_on_mismatch: args.reissue_on_mismatch,
+        print_cert: args.print_cert,
+        persist_policy: args.persist_policy.as_deref(),
+        persist_until: args.persist_until,
+        cert_key_alg: args.cert_key_algorithm,
+        profile: args.profile.as_deref(),
+        force: args.force,
+        contact: args.contact.clone(),
         cleanup_registry,
         domains,
         dns_checker,

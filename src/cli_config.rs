@@ -207,35 +207,7 @@ fn apply_run(
     cfg_run: &config::RunConfig,
     config_mode: bool,
 ) {
-    let Commands::Run {
-        ref mut domains,
-        ref mut contact,
-        ref mut challenge_type,
-        ref mut http_port,
-        ref mut challenge_dir,
-        ref mut dns_hook,
-        ref mut dns_wait,
-        ref mut dns_propagation_concurrency,
-        ref mut challenge_timeout,
-        ref mut cert_output,
-        ref mut key_output,
-        ref mut days,
-        ref mut key_password_file,
-        ref mut on_challenge_ready,
-        ref mut on_cert_issued,
-        ref mut eab_kid,
-        ref mut eab_hmac_key,
-        ref mut pre_authorize,
-        ref mut ari,
-        ref mut reissue_on_mismatch,
-        ref mut print_cert,
-        ref mut persist_policy,
-        ref mut persist_until,
-        ref mut cert_key_algorithm,
-        ref mut profile,
-        ..
-    } = cli.command
-    else {
+    let Commands::Run(args) = &mut cli.command else {
         return;
     };
 
@@ -243,106 +215,108 @@ fn apply_run(
         if should_apply_config(sub_matches.value_source("challenge_type"))
             && let Some(ref v) = cfg_run.challenge_type
         {
-            *challenge_type = v.clone();
+            args.challenge_type = v.clone();
         }
         if should_apply_config(sub_matches.value_source("http_port"))
             && let Some(v) = cfg_run.http_port
         {
-            *http_port = v;
+            args.http_port = v;
         }
         if should_apply_config(sub_matches.value_source("cert_output"))
             && let Some(ref v) = cfg_run.cert_output
         {
-            *cert_output = v.clone();
+            args.cert_output = v.clone();
         }
         if should_apply_config(sub_matches.value_source("key_output"))
             && let Some(ref v) = cfg_run.key_output
         {
-            *key_output = v.clone();
+            args.key_output = v.clone();
         }
         if should_apply_config(sub_matches.value_source("cert_key_algorithm"))
             && let Some(ref v) = cfg_run.cert_key_algorithm
             && let Ok(a) = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true)
         {
-            *cert_key_algorithm = a;
+            args.cert_key_algorithm = a;
         }
     }
 
-    if domains.is_empty() {
+    if args.domains.is_empty() {
         if let Some(ref v) = cfg_run.domains {
-            *domains = v.clone();
+            args.domains = v.clone();
         }
     } else if config_mode && cfg_run.domains.as_ref().is_none_or(|d| d.is_empty()) {
         info!(
             "Using domains from CLI: {:?} (not set in config file)",
-            domains
+            args.domains
         );
     }
 
-    if contact.is_none() {
-        contact.clone_from(&cfg_run.contact);
+    if args.contact.is_none() {
+        args.contact.clone_from(&cfg_run.contact);
     }
-    if challenge_dir.is_none() {
-        challenge_dir.clone_from(&cfg_run.challenge_dir);
+    if args.challenge_dir.is_none() {
+        args.challenge_dir.clone_from(&cfg_run.challenge_dir);
     }
-    if dns_hook.is_none() {
-        dns_hook.clone_from(&cfg_run.dns_hook);
+    if args.dns_hook.is_none() {
+        args.dns_hook.clone_from(&cfg_run.dns_hook);
     }
-    if dns_wait.is_none() {
-        *dns_wait = cfg_run.dns_wait;
+    if args.dns_wait.is_none() {
+        args.dns_wait = cfg_run.dns_wait;
     }
-    if *dns_propagation_concurrency == 5
+    if args.dns_propagation_concurrency == 5
         && let Some(v) = cfg_run.dns_propagation_concurrency
     {
-        *dns_propagation_concurrency = v;
+        args.dns_propagation_concurrency = v;
     }
-    if *challenge_timeout == 300
+    if args.challenge_timeout == 300
         && let Some(v) = cfg_run.challenge_timeout
     {
-        *challenge_timeout = v;
+        args.challenge_timeout = v;
     }
-    if days.is_none() {
-        *days = cfg_run.days;
+    if args.days.is_none() {
+        args.days = cfg_run.days;
     }
-    if on_challenge_ready.is_none() {
-        on_challenge_ready.clone_from(&cfg_run.on_challenge_ready);
+    if args.on_challenge_ready.is_none() {
+        args.on_challenge_ready
+            .clone_from(&cfg_run.on_challenge_ready);
     }
-    if on_cert_issued.is_none() {
-        on_cert_issued.clone_from(&cfg_run.on_cert_issued);
+    if args.on_cert_issued.is_none() {
+        args.on_cert_issued.clone_from(&cfg_run.on_cert_issued);
     }
-    if !*pre_authorize && cfg_run.pre_authorize == Some(true) {
-        *pre_authorize = true;
+    if !args.pre_authorize && cfg_run.pre_authorize == Some(true) {
+        args.pre_authorize = true;
     }
-    if !*ari && cfg_run.ari == Some(true) {
-        *ari = true;
+    if !args.ari && cfg_run.ari == Some(true) {
+        args.ari = true;
     }
-    if !*reissue_on_mismatch && cfg_run.reissue_on_mismatch == Some(true) {
-        *reissue_on_mismatch = true;
+    if !args.reissue_on_mismatch && cfg_run.reissue_on_mismatch == Some(true) {
+        args.reissue_on_mismatch = true;
     }
-    if !*print_cert && cfg_run.print_cert == Some(true) {
-        *print_cert = true;
+    if !args.print_cert && cfg_run.print_cert == Some(true) {
+        args.print_cert = true;
     }
-    if persist_policy.is_none() {
-        persist_policy.clone_from(&cfg_run.persist_policy);
+    if args.persist_policy.is_none() {
+        args.persist_policy.clone_from(&cfg_run.persist_policy);
     }
-    if persist_until.is_none() {
-        *persist_until = cfg_run.persist_until;
+    if args.persist_until.is_none() {
+        args.persist_until = cfg_run.persist_until;
     }
-    if profile.is_none() {
-        profile.clone_from(&cfg_run.profile);
+    if args.profile.is_none() {
+        args.profile.clone_from(&cfg_run.profile);
     }
 
     // Secrets remain allowed from env even in config mode:
     //   key_password_file, eab_kid, eab_hmac_key
-    if key_password_file.is_none() {
-        key_password_file.clone_from(&cfg_run.key_password_file);
+    if args.key_password_file.is_none() {
+        args.key_password_file
+            .clone_from(&cfg_run.key_password_file);
     }
-    if eab_kid.is_none() {
-        eab_kid.clone_from(&cfg_run.eab_kid);
+    if args.eab_kid.is_none() {
+        args.eab_kid.clone_from(&cfg_run.eab_kid);
     }
-    if eab_hmac_key.is_none() {
+    if args.eab_hmac_key.is_none() {
         use secrecy::ExposeSecret;
-        *eab_hmac_key = cfg_run
+        args.eab_hmac_key = cfg_run
             .eab_hmac_key
             .as_ref()
             .map(|s| s.expose_secret().to_string());
