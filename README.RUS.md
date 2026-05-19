@@ -284,8 +284,8 @@ IP-адреса определяются автоматически - прост
 # IPv4
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 192.0.2.1
 
-# IPv6 (в скобках или без)
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 [2001:db8::1]
+# IPv6 (в скобках или без; в zsh/строгих оболочках брекеты нужно закавычивать, чтобы избежать glob-расширения)
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 '[2001:db8::1]'
 ```
 
 > **Примечание:** Вызовы DNS-01 и DNS-PERSIST-01 не поддерживаются для IP-идентификаторов. Используйте HTTP-01 или TLS-ALPN-01.
@@ -600,7 +600,10 @@ acme-client-rs show-config --verbose
 # Generate an account key
 acme-client-rs generate-key --account-key /etc/acme/account.key
 
-# Issue a certificate (the client binds port 80 for validation)
+# Выпуск сертификата (клиент привязывается к порту 80 для валидации).
+# Для привязки к порту 80 нужны права root или CAP_NET_BIND_SERVICE
+# (`sudo setcap cap_net_bind_service=+ep $(which acme-client-rs)`).
+# Альтернатива — запуск за reverse-proxy и использование --challenge-dir / --http-port.
 acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
 ```
 

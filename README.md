@@ -284,8 +284,8 @@ IP addresses are auto-detected - just pass them as positional arguments:
 # IPv4
 acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 192.0.2.1
 
-# IPv6 (bracketed or bare)
-acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 [2001:db8::1]
+# IPv6 (bracketed or bare; quote brackets in zsh / strict shells to avoid glob expansion)
+acme-client-rs --directory https://your-acme-server/directory run --contact you@example.com --challenge-type http-01 '[2001:db8::1]'
 ```
 
 > **Note:** DNS-01 and DNS-PERSIST-01 challenges are not supported for IP identifiers. Use HTTP-01 or TLS-ALPN-01.
@@ -600,7 +600,10 @@ The `run` subcommand executes steps 1-9 automatically (and optionally step 11 wi
 # Generate an account key
 acme-client-rs generate-key --account-key /etc/acme/account.key
 
-# Issue a certificate (the client binds port 80 for validation)
+# Issue a certificate (the client binds port 80 for validation).
+# Binding port 80 requires root or CAP_NET_BIND_SERVICE
+# (`sudo setcap cap_net_bind_service=+ep $(which acme-client-rs)`).
+# Or run behind a reverse proxy and use --challenge-dir / --http-port.
 acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key example.com www.example.com
 ```
 

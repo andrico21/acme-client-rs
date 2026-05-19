@@ -95,8 +95,9 @@ pub mod http01 {
 
     /// Try to bind a TCP listener on the given port.
     ///
-    /// If the port is already in use, returns a user-friendly error
-    /// suggesting `--challenge-dir`.
+    /// On `AddrInUse`, suggests `--challenge-dir`. On `PermissionDenied`
+    /// for a privileged port (<1024), suggests root/`CAP_NET_BIND_SERVICE`/
+    /// reverse-proxy alternatives. Other errors propagate with context.
     pub async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => Ok(listener),
@@ -108,6 +109,20 @@ pub mod http01 {
                      to a directory your existing web server already serves, e.g.:\n\
                      \n\
                      acme-client-rs run example.com --challenge-dir /var/www/html"
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && port < 1024 => {
+                bail!(
+                    "permission denied binding port {port} (privileged port, requires root or CAP_NET_BIND_SERVICE)\n\
+                     \n\
+                     Pick one:\n\
+                       1. Run as root:           sudo acme-client-rs ...\n\
+                       2. Grant the capability:  sudo setcap cap_net_bind_service=+ep $(which acme-client-rs)\n\
+                       3. Use a high port behind your reverse proxy:\n\
+                          acme-client-rs run example.com --http-port 8080\n\
+                          (and proxy /.well-known/acme-challenge/ from :80 to :8080)\n\
+                       4. Skip binding entirely and let your existing web server serve the file:\n\
+                          acme-client-rs run example.com --challenge-dir /var/www/html"
                 );
             }
             Err(e) => {
