@@ -8,10 +8,14 @@ pub(crate) fn generate_csr(
 ) -> Result<(Vec<u8>, zeroize::Zeroizing<String>)> {
     use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 
+    let common_name = domains
+        .first()
+        .context("CSR requires at least one domain")?
+        .clone();
     let mut params =
         CertificateParams::new(domains.to_vec()).context("failed to create CSR parameters")?;
     let mut dn = DistinguishedName::new();
-    dn.push(DnType::CommonName, domains[0].clone());
+    dn.push(DnType::CommonName, common_name);
     params.distinguished_name = dn;
     let key_pair = match alg {
         CertKeyAlgorithm::EcP256 => KeyPair::generate(),

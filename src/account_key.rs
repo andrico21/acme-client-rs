@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::{Context, Result};
 
@@ -6,7 +6,7 @@ use crate::fs_secure;
 use crate::jws::AccountKey;
 
 pub(crate) fn load_account_key_with_password(
-    path: &PathBuf,
+    path: &Path,
     password: Option<&str>,
 ) -> Result<AccountKey> {
     fs_secure::warn_if_world_readable(path, "account key");
@@ -42,7 +42,7 @@ pub(crate) fn resolve_account_key_password(
             .lines()
             .next()
             .map(|line| line.trim().to_string())
-            .filter(|s: &String| !s.is_empty());
+            .filter(|s| !s.is_empty());
         return Ok(pw.map(secrecy::SecretString::from));
     }
     Ok(None)

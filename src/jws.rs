@@ -9,12 +9,11 @@
 //! - ES384 (ECDSA P-384 + SHA-384)
 //! - ES512 (ECDSA P-521 + SHA-512)
 //! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256) - used for both RSA-2048 and RSA-4096 keys
-//! - EdDSA (Ed25519)
+//! - `EdDSA` (Ed25519)
 
-use anyhow::{Context, Result, bail};
-use base64::Engine;
+use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use ecdsa::signature::Signer;
+use base64::Engine;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -35,7 +34,7 @@ pub enum KeyAlgorithm {
     Rsa2048,
     /// RSA 4096-bit + PKCS#1 v1.5 + SHA-256
     Rsa4096,
-    /// Ed25519 (EdDSA)
+    /// Ed25519 (`EdDSA`)
     Ed25519,
 }
 
@@ -58,7 +57,7 @@ enum KeyInner {
     Es256(P256SigningKey),
     Es384(P384SigningKey),
     Es512(P521SigningKey),
-    Rs256(Box<rsa::RsaPrivateKey>),
+    Rs256(Box<rsa::pkcs1v15::SigningKey<Sha256>>),
     Ed25519(ed25519_dalek::SigningKey),
 }
 
@@ -102,12 +101,12 @@ impl AccountKey {
             KeyAlgorithm::Rsa2048 => {
                 let key = rsa::RsaPrivateKey::new(&mut OsRng, 2048)
                     .context("failed to generate RSA-2048 key")?;
-                KeyInner::Rs256(Box::new(key))
+                KeyInner::Rs256(Box::new(rsa::pkcs1v15::SigningKey::<Sha256>::new(key)))
             }
             KeyAlgorithm::Rsa4096 => {
                 let key = rsa::RsaPrivateKey::new(&mut OsRng, 4096)
                     .context("failed to generate RSA-4096 key")?;
-                KeyInner::Rs256(Box::new(key))
+                KeyInner::Rs256(Box::new(rsa::pkcs1v15::SigningKey::<Sha256>::new(key)))
             }
             KeyAlgorithm::Ed25519 => {
                 KeyInner::Ed25519(ed25519_dalek::SigningKey::generate(&mut OsRng))
@@ -169,7 +168,7 @@ impl AccountKey {
         }
         if let Ok(sk) = rsa::RsaPrivateKey::from_pkcs8_pem(pem_data) {
             return Ok(Self {
-                inner: KeyInner::Rs256(Box::new(sk)),
+                inner: KeyInner::Rs256(Box::new(rsa::pkcs1v15::SigningKey::<Sha256>::new(sk))),
             });
         }
         if let Ok(sk) = ed25519_dalek::SigningKey::from_pkcs8_pem(pem_data) {
@@ -240,45 +239,52 @@ impl AccountKey {
     }
 
     /// Build the JWK (public-key only) as a JSON value (RFC 7517).
-    pub fn jwk(&self) -> serde_json::Value {
-        match &self.inner {
+    pub fn jwk(&self) -> Result<serde_json::Value> {
+        Ok(match &self.inner {
             KeyInner::Es256(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
+                let x = pt.x().context("ES256 verifying key has no x coordinate")?;
+                let y = pt.y().context("ES256 verifying key has no y coordinate")?;
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-256",
-                    "x": URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point")),
-                    "y": URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point")),
+                    "x": URL_SAFE_NO_PAD.encode(x),
+                    "y": URL_SAFE_NO_PAD.encode(y),
                 })
             }
             KeyInner::Es384(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
+                let x = pt.x().context("ES384 verifying key has no x coordinate")?;
+                let y = pt.y().context("ES384 verifying key has no y coordinate")?;
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-384",
-                    "x": URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point")),
-                    "y": URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point")),
+                    "x": URL_SAFE_NO_PAD.encode(x),
+                    "y": URL_SAFE_NO_PAD.encode(y),
                 })
             }
             KeyInner::Es512(sk) => {
                 // p521 0.13's wrapper doesn't expose verifying_key(), so
                 // reconstruct via the inner ecdsa::SigningKey type.
                 let inner = ecdsa::SigningKey::<p521::NistP521>::from_bytes(&sk.to_bytes())
-                    .expect("valid P-521 key");
+                    .context("failed to reconstruct ES512 SigningKey from bytes")?;
                 let pt = inner.verifying_key().to_encoded_point(false);
+                let x = pt.x().context("ES512 verifying key has no x coordinate")?;
+                let y = pt.y().context("ES512 verifying key has no y coordinate")?;
                 serde_json::json!({
                     "kty": "EC",
                     "crv": "P-521",
-                    "x": URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point")),
-                    "y": URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point")),
+                    "x": URL_SAFE_NO_PAD.encode(x),
+                    "y": URL_SAFE_NO_PAD.encode(y),
                 })
             }
             KeyInner::Rs256(sk) => {
                 use rsa::traits::PublicKeyParts;
+                let inner: &rsa::RsaPrivateKey = AsRef::<rsa::RsaPrivateKey>::as_ref(&**sk);
                 serde_json::json!({
                     "kty": "RSA",
-                    "n": URL_SAFE_NO_PAD.encode(sk.n().to_bytes_be()),
-                    "e": URL_SAFE_NO_PAD.encode(sk.e().to_bytes_be()),
+                    "n": URL_SAFE_NO_PAD.encode(inner.n().to_bytes_be()),
+                    "e": URL_SAFE_NO_PAD.encode(inner.e().to_bytes_be()),
                 })
             }
             KeyInner::Ed25519(sk) => {
@@ -288,39 +294,46 @@ impl AccountKey {
                     "x": URL_SAFE_NO_PAD.encode(sk.verifying_key().to_bytes()),
                 })
             }
-        }
+        })
     }
 
     /// JWK Thumbprint per RFC 7638.
     ///
     /// Used in key authorizations: `token || '.' || thumbprint`.
     /// Required members in lexicographic order per key type.
-    pub fn thumbprint(&self) -> String {
+    pub fn thumbprint(&self) -> Result<String> {
         let input = match &self.inner {
             KeyInner::Es256(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
-                let x = URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point"));
-                let y = URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point"));
+                let x = URL_SAFE_NO_PAD
+                    .encode(pt.x().context("ES256 verifying key has no x coordinate")?);
+                let y = URL_SAFE_NO_PAD
+                    .encode(pt.y().context("ES256 verifying key has no y coordinate")?);
                 format!(r#"{{"crv":"P-256","kty":"EC","x":"{x}","y":"{y}"}}"#)
             }
             KeyInner::Es384(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
-                let x = URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point"));
-                let y = URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point"));
+                let x = URL_SAFE_NO_PAD
+                    .encode(pt.x().context("ES384 verifying key has no x coordinate")?);
+                let y = URL_SAFE_NO_PAD
+                    .encode(pt.y().context("ES384 verifying key has no y coordinate")?);
                 format!(r#"{{"crv":"P-384","kty":"EC","x":"{x}","y":"{y}"}}"#)
             }
             KeyInner::Es512(sk) => {
                 let inner = ecdsa::SigningKey::<p521::NistP521>::from_bytes(&sk.to_bytes())
-                    .expect("valid P-521 key");
+                    .context("failed to reconstruct ES512 SigningKey from bytes")?;
                 let pt = inner.verifying_key().to_encoded_point(false);
-                let x = URL_SAFE_NO_PAD.encode(pt.x().expect("valid EC point"));
-                let y = URL_SAFE_NO_PAD.encode(pt.y().expect("valid EC point"));
+                let x = URL_SAFE_NO_PAD
+                    .encode(pt.x().context("ES512 verifying key has no x coordinate")?);
+                let y = URL_SAFE_NO_PAD
+                    .encode(pt.y().context("ES512 verifying key has no y coordinate")?);
                 format!(r#"{{"crv":"P-521","kty":"EC","x":"{x}","y":"{y}"}}"#)
             }
             KeyInner::Rs256(sk) => {
                 use rsa::traits::PublicKeyParts;
-                let e = URL_SAFE_NO_PAD.encode(sk.e().to_bytes_be());
-                let n = URL_SAFE_NO_PAD.encode(sk.n().to_bytes_be());
+                let inner: &rsa::RsaPrivateKey = AsRef::<rsa::RsaPrivateKey>::as_ref(&**sk);
+                let e = URL_SAFE_NO_PAD.encode(inner.e().to_bytes_be());
+                let n = URL_SAFE_NO_PAD.encode(inner.n().to_bytes_be());
                 format!(r#"{{"e":"{e}","kty":"RSA","n":"{n}"}}"#)
             }
             KeyInner::Ed25519(sk) => {
@@ -329,7 +342,7 @@ impl AccountKey {
             }
         };
         let digest = Sha256::digest(input.as_bytes());
-        URL_SAFE_NO_PAD.encode(digest)
+        Ok(URL_SAFE_NO_PAD.encode(digest))
     }
 
     /// Sign a request with JWK in the protected header.
@@ -339,7 +352,7 @@ impl AccountKey {
     pub fn sign_with_jwk(&self, payload: &str, nonce: &str, url: &str) -> Result<String> {
         let header = ProtectedHeader {
             alg: self.alg(),
-            jwk: Some(self.jwk()),
+            jwk: Some(self.jwk()?),
             kid: None,
             nonce,
             url,
@@ -369,29 +382,37 @@ impl AccountKey {
     }
 
     /// Raw signature bytes over the given data.
-    fn sign_raw(&self, data: &[u8]) -> Vec<u8> {
+    fn sign_raw(&self, data: &[u8]) -> Result<Vec<u8>> {
         match &self.inner {
             KeyInner::Es256(sk) => {
-                let sig: p256::ecdsa::Signature = sk.sign(data);
-                sig.to_bytes().to_vec()
+                use p256::ecdsa::signature::Signer as _;
+                let sig: p256::ecdsa::Signature =
+                    sk.try_sign(data).context("ES256 signing failed")?;
+                Ok(sig.to_bytes().to_vec())
             }
             KeyInner::Es384(sk) => {
-                let sig: p384::ecdsa::Signature = sk.sign(data);
-                sig.to_bytes().to_vec()
+                use p384::ecdsa::signature::Signer as _;
+                let sig: p384::ecdsa::Signature =
+                    sk.try_sign(data).context("ES384 signing failed")?;
+                Ok(sig.to_bytes().to_vec())
             }
             KeyInner::Es512(sk) => {
-                let sig: p521::ecdsa::Signature = sk.sign(data);
-                sig.to_bytes().to_vec()
+                use p521::ecdsa::signature::Signer as _;
+                let sig: p521::ecdsa::Signature =
+                    sk.try_sign(data).context("ES512 signing failed")?;
+                Ok(sig.to_bytes().to_vec())
             }
             KeyInner::Rs256(sk) => {
-                let signing_key = rsa::pkcs1v15::SigningKey::<Sha256>::new(sk.as_ref().clone());
-                let sig: rsa::pkcs1v15::Signature = signing_key.sign(data);
+                use rsa::signature::Signer as _;
+                let sig: rsa::pkcs1v15::Signature =
+                    sk.try_sign(data).context("RS256 signing failed")?;
                 let bytes: Box<[u8]> = sig.into();
-                bytes.to_vec()
+                Ok(bytes.to_vec())
             }
             KeyInner::Ed25519(sk) => {
-                let sig = ed25519_dalek::Signer::sign(sk, data);
-                sig.to_bytes().to_vec()
+                use ed25519_dalek::Signer as _;
+                let sig = sk.try_sign(data).context("Ed25519 signing failed")?;
+                Ok(sig.to_bytes().to_vec())
             }
         }
     }
@@ -403,13 +424,13 @@ impl AccountKey {
     pub fn sign_key_change_inner(&self, payload: &str, url: &str) -> Result<String> {
         let header = serde_json::json!({
             "alg": self.alg(),
-            "jwk": self.jwk(),
+            "jwk": self.jwk()?,
             "url": url,
         });
         let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
         let payload_b64 = URL_SAFE_NO_PAD.encode(payload.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
-        let sig_bytes = self.sign_raw(signing_input.as_bytes());
+        let sig_bytes = self.sign_raw(signing_input.as_bytes())?;
         let sig_b64 = URL_SAFE_NO_PAD.encode(&sig_bytes);
 
         let jws = FlattenedJws {
@@ -434,7 +455,7 @@ impl AccountKey {
             "url": url,
         });
         let protected = URL_SAFE_NO_PAD.encode(serde_json::to_string(&header)?.as_bytes());
-        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk())?.as_bytes());
+        let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk()?)?.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
 
         let mut mac = HmacSha256::new_from_slice(hmac_key).context("invalid HMAC key length")?;
@@ -460,7 +481,7 @@ impl AccountKey {
         };
 
         let signing_input = format!("{protected}.{payload_b64}");
-        let sig_bytes = self.sign_raw(signing_input.as_bytes());
+        let sig_bytes = self.sign_raw(signing_input.as_bytes())?;
         let sig_b64 = URL_SAFE_NO_PAD.encode(&sig_bytes);
 
         let jws = FlattenedJws {
