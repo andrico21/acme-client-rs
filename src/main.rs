@@ -125,8 +125,11 @@ async fn run(
             config_mode,
         ),
         Commands::GenerateKey { algorithm, force } => {
-            let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
-            cli.account_key_password_file.as_deref(),).await?;
+            let pw = resolve_account_key_password(
+                cli.account_key_password.as_deref(),
+                cli.account_key_password_file.as_deref(),
+            )
+            .await?;
             cmd_generate_key(
                 &cli.account_key,
                 *algorithm,
@@ -235,10 +238,16 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     client::validate_directory_url(&cli.directory, tls, net)?;
-    let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
-    cli.account_key_password_file.as_deref(),).await?;
-    let key = load_account_key_with_password(&cli.account_key,
-    pw.as_ref().map(secrecy::ExposeSecret::expose_secret),).await?;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )
+    .await?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )
+    .await?;
     if cli.insecure {
         tracing::warn!("TLS certificate verification is disabled (--insecure)");
     }

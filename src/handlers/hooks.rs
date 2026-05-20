@@ -203,11 +203,7 @@ mod tests {
         scrub_async(&mut cmd);
 
         let mut child = cmd.spawn()?;
-        let res = tokio::time::timeout(
-            std::time::Duration::from_millis(150),
-            child.wait(),
-        )
-        .await;
+        let res = tokio::time::timeout(std::time::Duration::from_millis(150), child.wait()).await;
         assert!(res.is_err(), "hung script should not finish within 150ms");
 
         child.kill().await?;

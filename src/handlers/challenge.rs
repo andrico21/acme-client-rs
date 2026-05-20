@@ -14,10 +14,16 @@ pub(crate) async fn cmd_serve_http01(
     port: u16,
     challenge_dir: Option<&std::path::Path>,
 ) -> Result<()> {
-    let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
-    cli.account_key_password_file.as_deref(),).await?;
-    let key = load_account_key_with_password(&cli.account_key,
-    pw.as_ref().map(secrecy::ExposeSecret::expose_secret),).await?;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )
+    .await?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )
+    .await?;
     if let Some(dir) = challenge_dir {
         let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
         if !cli.silent {
@@ -50,10 +56,16 @@ pub(crate) async fn cmd_show_dns01(
 ) -> Result<()> {
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-01")?;
-    let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
-    cli.account_key_password_file.as_deref(),).await?;
-    let key = load_account_key_with_password(&cli.account_key,
-    pw.as_ref().map(secrecy::ExposeSecret::expose_secret),).await?;
+    let pw = resolve_account_key_password(
+        cli.account_key_password.as_deref(),
+        cli.account_key_password_file.as_deref(),
+    )
+    .await?;
+    let key = load_account_key_with_password(
+        &cli.account_key,
+        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    )
+    .await?;
     let name = crate::challenge::dns01::record_name(&domain)?;
     let value = crate::challenge::dns01::txt_record_value(token, &key)?;
     super::emit_result(
