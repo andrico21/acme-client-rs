@@ -631,20 +631,28 @@ acme --account-key test-account.key serve-http-01 --token test-token --port 8080
 
 ---
 
-## TC-31: Account URL Required After Creation
+## TC-31: Account URL Required for Individual Subcommands
 
-**Goal:** Operations that need an account URL fail clearly without one.
+**Goal:** Subcommands that operate on an existing account (`order`, `get-authz`, `finalize`, `poll-order`, `download-cert`, `revoke-cert`, `deactivate-account`, `key-rollover`, `pre-authorize`, `renewal-info`) require `--account-url` (or `ACME_ACCOUNT_URL`). Without it, the request is signed in JWK mode and the CA rejects it with `unauthorized` / `malformed`.
 
 ```sh
-# Skip --account-url
-acme --account-key test-account.key order test.example.com
+# Skip --account-url - request signed JWK-only
+acme --insecure --account-key test-account.key order test.example.com
 ```
 
 **Expected:**
-- The client creates a new account automatically (via `build_client` → `AcmeClient::new`), or
-- If using the individual `order` command without prior `account`, the signed request uses JWK mode and the CA may reject it
+- Exit code: non-zero
+- Error message indicates the order endpoint rejected the JWK-signed request (Pebble returns `urn:ietf:params:acme:error:malformed`)
 
-> **Note:** The `run` command handles this automatically by calling `create_account` first.
+To make the call succeed, first register the account and pass its URL:
+
+```sh
+acme --insecure --account-key test-account.key account --contact test@example.com
+# -> copy "Account URL: https://localhost:14000/my-account/<id>"
+acme --insecure --account-key test-account.key --account-url <account-url> order test.example.com
+```
+
+> **Note:** The `run` subcommand sidesteps this by calling `create_account` internally before issuing the order, so `--account-url` is optional there.
 
 ---
 
