@@ -37,7 +37,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
         .map(|d| normalize_identifier(d))
         .collect();
 
-    match cert_san_identifiers(ctx.cert_output) {
+    match cert_san_identifiers(ctx.cert_output).await {
         Ok(cert_sans) => {
             if requested != cert_sans {
                 let added: Vec<&str> = requested
@@ -214,7 +214,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
     if ctx.ari_cert_id.is_none()
         && let Some(threshold) = ctx.days
     {
-        match cert_days_remaining(ctx.cert_output) {
+        match cert_days_remaining(ctx.cert_output).await {
             Ok(remaining) if remaining > i64::from(threshold) => {
                 if ctx.json {
                     if !ctx.silent {

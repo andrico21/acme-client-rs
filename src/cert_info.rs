@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 
 /// Parse a PEM certificate and return the number of days until expiry.
-pub(crate) fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
-    let pem_data = std::fs::read_to_string(path)
+pub(crate) async fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
+    let pem_data = tokio::fs::read_to_string(path)
+        .await
         .with_context(|| format!("failed to read {}", path.display()))?;
     // Parse the first PEM block (the end-entity cert) to extract notAfter
     let parsed = pem::parse(&pem_data).context("failed to parse certificate PEM")?;
@@ -17,12 +18,13 @@ pub(crate) fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
 /// Parse a PEM certificate and return the set of SAN identifiers (DNS names + IPs).
 ///
 /// DNS names are lowercased; IP addresses are canonicalized via `std::net::IpAddr`.
-pub(crate) fn cert_san_identifiers(
+pub(crate) async fn cert_san_identifiers(
     path: &std::path::Path,
 ) -> Result<std::collections::BTreeSet<String>> {
     use x509_parser::prelude::*;
 
-    let pem_data = std::fs::read_to_string(path)
+    let pem_data = tokio::fs::read_to_string(path)
+        .await
         .with_context(|| format!("failed to read {}", path.display()))?;
     let parsed = ::pem::parse(&pem_data).context("failed to parse certificate PEM")?;
     let (_, cert) = X509Certificate::from_der(parsed.contents())

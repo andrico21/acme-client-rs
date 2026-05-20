@@ -125,10 +125,8 @@ async fn run(
             config_mode,
         ),
         Commands::GenerateKey { algorithm, force } => {
-            let pw = resolve_account_key_password(
-                cli.account_key_password.as_deref(),
-                cli.account_key_password_file.as_deref(),
-            )?;
+            let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
+            cli.account_key_password_file.as_deref(),).await?;
             cmd_generate_key(
                 &cli.account_key,
                 *algorithm,
@@ -163,7 +161,7 @@ async fn run(
             port,
             challenge_dir,
         } => cmd_serve_http01(&cli, token, *port, challenge_dir.as_deref()).await,
-        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli, domain, token),
+        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli, domain, token).await,
         Commands::ShowDnsPersist01 {
             domain,
             issuer_domain_name,
@@ -237,14 +235,10 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 
     client::validate_directory_url(&cli.directory, tls, net)?;
-    let pw = resolve_account_key_password(
-        cli.account_key_password.as_deref(),
-        cli.account_key_password_file.as_deref(),
-    )?;
-    let key = load_account_key_with_password(
-        &cli.account_key,
-        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
-    )?;
+    let pw = resolve_account_key_password(cli.account_key_password.as_deref(),
+    cli.account_key_password_file.as_deref(),).await?;
+    let key = load_account_key_with_password(&cli.account_key,
+    pw.as_ref().map(secrecy::ExposeSecret::expose_secret),).await?;
     if cli.insecure {
         tracing::warn!("TLS certificate verification is disabled (--insecure)");
     }
