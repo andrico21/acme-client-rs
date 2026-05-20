@@ -191,14 +191,6 @@ fn apply_global(
     {
         cli.dns_check_dnssec = v;
     }
-
-    if matches!(
-        matches.value_source("dns_check_dnssec"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(v) = cfg.dns_check_dnssec
-    {
-        cli.dns_check_dnssec = v;
-    }
 }
 
 fn apply_run(

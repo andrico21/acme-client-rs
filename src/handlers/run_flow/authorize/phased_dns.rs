@@ -142,7 +142,7 @@ pub(super) async fn run_phased_dns(
         if let Some(timeout_secs) = ctx.dns_wait {
             if domain_count > 1 {
                 info!(
-                    "Waiting up to {timeout_secs}s for DNS TXT propagation across {domain_count} ctx.domains (parallel)..."
+                    "Waiting up to {timeout_secs}s for DNS TXT propagation across {domain_count} domains (parallel)..."
                 );
             } else {
                 info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
