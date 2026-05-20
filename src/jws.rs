@@ -11,9 +11,9 @@
 //! - RS256 (RSASSA-PKCS1-v1.5 + SHA-256) - used for both RSA-2048 and RSA-4096 keys
 //! - `EdDSA` (Ed25519)
 
-use anyhow::{Context, Result, bail};
-use base64::Engine;
+use anyhow::{bail, Context, Result};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -138,12 +138,47 @@ impl AccountKey {
             let decrypted = enc
                 .decrypt(password.as_bytes())
                 .map_err(|_| anyhow::anyhow!("failed to decrypt account key (wrong password?)"))?;
-            let unencrypted_pem =
-                pem::encode(&pem::Pem::new("PRIVATE KEY", decrypted.as_bytes().to_vec()));
-            return Self::from_pkcs8_pem_unencrypted(&unencrypted_pem);
+            return Self::from_pkcs8_der_unencrypted(decrypted.as_bytes());
         }
 
         Self::from_pkcs8_pem_unencrypted(pem_data)
+    }
+
+    fn from_pkcs8_der_unencrypted(der: &[u8]) -> Result<Self> {
+        use p256::pkcs8::DecodePrivateKey;
+
+        if let Ok(sk) = p256::SecretKey::from_pkcs8_der(der) {
+            return Ok(Self {
+                inner: KeyInner::Es256(P256SigningKey::from(sk)),
+            });
+        }
+        if let Ok(sk) = p384::SecretKey::from_pkcs8_der(der) {
+            return Ok(Self {
+                inner: KeyInner::Es384(P384SigningKey::from(sk)),
+            });
+        }
+        if let Ok(sk) = p521::SecretKey::from_pkcs8_der(der) {
+            let signing_key = P521SigningKey::from_bytes(&sk.to_bytes())
+                .context("failed to create P-521 signing key from loaded secret")?;
+            return Ok(Self {
+                inner: KeyInner::Es512(signing_key),
+            });
+        }
+        if let Ok(sk) = rsa::RsaPrivateKey::from_pkcs8_der(der) {
+            return Ok(Self {
+                inner: KeyInner::Rs256(Box::new(rsa::pkcs1v15::SigningKey::<Sha256>::new(sk))),
+            });
+        }
+        if let Ok(sk) = ed25519_dalek::SigningKey::from_pkcs8_der(der) {
+            return Ok(Self {
+                inner: KeyInner::Ed25519(sk),
+            });
+        }
+
+        bail!(
+            "unsupported or invalid PKCS#8 DER key \
+             (supported: ES256, ES384, ES512, RS256, Ed25519)"
+        )
     }
 
     fn from_pkcs8_pem_unencrypted(pem_data: &str) -> Result<Self> {
