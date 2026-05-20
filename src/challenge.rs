@@ -105,6 +105,7 @@ pub mod http01 {
     /// On `AddrInUse`, suggests `--challenge-dir`. On `PermissionDenied`
     /// for a privileged port (<1024), suggests root/`CAP_NET_BIND_SERVICE`/
     /// reverse-proxy alternatives. Other errors propagate with context.
+    // cancel-safe: TCP bind only. Drop releases the listener cleanly.
     pub async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => Ok(listener),
@@ -148,6 +149,9 @@ pub mod http01 {
     /// NOT terminate the listener while other parallel CA validation
     /// probes (e.g. Let's Encrypt multi-perspective: 3+ concurrent
     /// requests) are still in flight.
+    // NOT cancel-safe: reads HTTP request and writes response. Drop mid-write
+    // leaves CA with a partial response; validation will fail. Intended to run
+    // inside a spawned task with abort_handle managed by CleanupRegistry.
     pub async fn serve_one_connection(
         mut stream: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
@@ -200,6 +204,8 @@ pub mod http01 {
     /// per accepted TCP connection so parallel CA validation probes are
     /// served concurrently. Only returns if `accept` itself fails (a fatal
     /// listener error); per-connection errors are logged and swallowed.
+    // NOT cancel-safe: infinite accept loop. Drop closes listener and aborts
+    // any in-flight serve_one_connection. Designed for spawn + abort_handle.
     pub async fn run_accept_loop(
         listener: tokio::net::TcpListener,
         auth: String,
@@ -231,6 +237,7 @@ pub mod http01 {
     /// Spin up a minimal TCP server that answers ACME HTTP-01 validation
     /// requests until aborted. Multiple concurrent probes from a CA's
     /// multi-perspective validation are served in parallel.
+    // NOT cancel-safe: top-level serve helper; binds + accepts indefinitely.
     pub async fn serve(token: &ChallengeToken, account_key: &AccountKey, port: u16) -> Result<()> {
         let auth = response_body(token, account_key)?;
         let path = challenge_path(token);

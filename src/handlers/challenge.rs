@@ -8,6 +8,8 @@ use crate::types::Identifier;
 use crate::{build_client, outln};
 
 use super::check_wildcard_compatible;
+// NOT cancel-safe: binds TCP listener and serves a single challenge
+// response. Drop releases the listener; CA poll will then fail.
 pub(crate) async fn cmd_serve_http01(
     cli: &Cli,
     token: &crate::types::ChallengeToken,
@@ -49,6 +51,7 @@ pub(crate) async fn cmd_serve_http01(
     }
 }
 
+// cancel-safe: prints DNS-01 setup instructions; pure compute + stdout.
 pub(crate) async fn cmd_show_dns01(
     cli: &Cli,
     domain: &str,
@@ -92,6 +95,7 @@ pub(crate) async fn cmd_show_dns01(
     Ok(())
 }
 
+// cancel-safe: prints DNS-PERSIST-01 setup instructions; pure compute + stdout.
 pub(crate) async fn cmd_show_dns_persist01(
     cli: &Cli,
     domain: &str,
@@ -158,6 +162,7 @@ pub(crate) async fn cmd_show_dns_persist01(
     Ok(())
 }
 
+// NOT cancel-safe: creates newAuthz on CA. Drop after POST cannot undo.
 pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Result<()> {
     let challenge_type = crate::types::ChallengeType::parse_strict(challenge_type)?;
     check_wildcard_compatible(&[domain], &challenge_type)?;

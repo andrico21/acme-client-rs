@@ -16,6 +16,10 @@ use crate::types::{Order, OrderStatus};
 use super::super::run_hook;
 use super::RunContext;
 
+// NOT cancel-safe: generates CSR (off-runtime), submits to CA, polls until
+// ready, downloads cert, writes cert + private key to disk, and invokes
+// on_cert_issued hook. Drop between finalize POST and disk write would
+// orphan the issued certificate (not retrievable without polling order).
 pub(super) async fn finalize(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,

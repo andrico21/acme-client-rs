@@ -34,6 +34,8 @@ pub(super) struct DnsPending {
     pub txt_value: String,
 }
 
+// NOT cancel-safe: thin dispatcher to run_phased_dns / run_sequential.
+// Inherits NOT-cancel-safe contract from both pipelines.
 pub(super) async fn authorize(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,

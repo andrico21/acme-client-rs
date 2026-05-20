@@ -11,7 +11,11 @@ use crate::jws::{AccountKey, KeyAlgorithm};
 use crate::{build_client, outln};
 
 use super::parse_eab;
-pub(crate) fn cmd_generate_key(
+// cancel-safe: pure compute + single `spawn_blocking` await + single sync file
+// write. Drop at any await point leaves no external side effects (no DNS,
+// network, or registry mutation). The destination file is only created on the
+// final `write_secret_file` call, which is not awaited.
+pub(crate) async fn cmd_generate_key(
     path: &Path,
     algorithm: KeyAlgorithm,
     force: bool,
@@ -24,7 +28,15 @@ pub(crate) fn cmd_generate_key(
     let pem = zeroize::Zeroizing::new(key.to_pkcs8_pem()?);
     let encrypted = password.is_some();
     let bytes_to_write = if let Some(pw) = password {
-        zeroize::Zeroizing::new(encrypt_private_key(&pem, pw.expose_secret())?)
+        // scrypt N=16384 ≈ 16 MiB / hundreds of ms — must not block reactor.
+        let pem_for_task = pem.clone();
+        let pw_for_task = zeroize::Zeroizing::new(pw.expose_secret().to_string());
+        let encrypted_pem = tokio::task::spawn_blocking(move || {
+            encrypt_private_key(&pem_for_task, pw_for_task.as_str())
+        })
+        .await
+        .context("scrypt encryption task panicked")??;
+        zeroize::Zeroizing::new(encrypted_pem)
     } else {
         zeroize::Zeroizing::new(pem.to_string())
     };
@@ -61,6 +73,8 @@ pub(crate) fn cmd_generate_key(
     Ok(())
 }
 
+// NOT cancel-safe: creates ACME account on CA + EAB binding. Drop after
+// POST leaves account registered remotely; caller loses the account URL.
 pub(crate) async fn cmd_account(
     cli: &Cli,
     contact: Vec<String>,
@@ -99,6 +113,7 @@ pub(crate) async fn cmd_account(
     Ok(())
 }
 
+// NOT cancel-safe: deactivates account on CA — irreversible side effect.
 pub(crate) async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     let mut client = build_client(cli).await?;
     let account = client.deactivate_account().await?;
@@ -115,6 +130,9 @@ pub(crate) async fn cmd_deactivate(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+// NOT cancel-safe: rotates account key on CA. Drop after key-change POST
+// but before caller saves the new key reference leaves account using new
+// key with no local record.
 pub(crate) async fn cmd_key_rollover(
     cli: &Cli,
     new_key_path: &Path,

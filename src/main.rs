@@ -36,6 +36,8 @@ use crate::handlers::{
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
+// NOT cancel-safe: tokio entry point. Spawns the full dispatcher; abort
+// during run() inherits the per-command NOT-cancel-safe contracts.
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt()
@@ -103,6 +105,7 @@ async fn main() {
     }
 }
 
+// NOT cancel-safe: dispatcher to every cmd_*; inherits per-command contract.
 async fn run(
     cli: Cli,
     loaded_config: Option<&config::Config>,
@@ -138,6 +141,7 @@ async fn run(
                 cli.silent,
                 pw.as_ref(),
             )
+            .await
         }
         Commands::Account {
             contact,
@@ -234,6 +238,8 @@ async fn run(
     }
 }
 
+// cancel-safe: reads account key from disk + constructs AcmeClient. Drop
+// leaves no external state — the directory has not yet been fetched.
 pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
 

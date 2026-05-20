@@ -76,6 +76,8 @@ impl Transport {
 
     // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
 
+    // NOT cancel-safe: HEAD newNonce consumes a server nonce; drop mid-flight
+    // leaks a nonce slot until the CA's TTL expires.
     async fn fetch_nonce(&self, new_nonce: &Url) -> Result<String> {
         {
             let (tls, net) = self.url_policies();
@@ -100,6 +102,8 @@ impl Transport {
         Ok(nonce)
     }
 
+    // NOT cancel-safe: pops cached nonce or calls fetch_nonce; cancellation
+    // mid-fetch leaks a nonce.
     async fn get_nonce(&mut self, new_nonce: &Url) -> Result<String> {
         match self.nonce.take() {
             Some(n) => Ok(n),
@@ -119,6 +123,9 @@ impl Transport {
 
     /// Send a signed POST to `url`. `new_nonce` is the directory's newNonce
     /// endpoint, used only if the nonce cache is empty.
+    // NOT cancel-safe: consumes a nonce and may mutate server state (account,
+    // order, authz, challenge). Drop mid-POST leaves CA-side state partially
+    // updated; retry with fresh nonce is the only recovery.
     async fn signed_request(
         &mut self,
         url: &Url,
@@ -190,6 +197,7 @@ impl AcmeClient {
     /// When `danger_accept_invalid_certs` is `true`, TLS certificate
     /// verification is disabled.  **Only use for testing** (e.g. Pebble).
     /// `connect_timeout_secs` is forwarded to the HTTP client.
+    // cancel-safe: GET /directory is idempotent and read-only.
     pub async fn new(
         directory_url: &str,
         account_key: AccountKey,
@@ -277,6 +285,9 @@ impl AcmeClient {
     ///
     /// If `eab` is `Some((kid, hmac_key))`, an External Account Binding
     /// (RFC 8555 §7.3.4) is included in the request.
+    // NOT cancel-safe: POST newAccount creates/looks-up account on CA. Drop
+    // mid-flight may leave a half-registered account; caller must re-issue with
+    // onlyReturnExisting=true to recover.
     pub async fn create_account(
         &mut self,
         contact: Option<Vec<String>>,
@@ -330,6 +341,7 @@ impl AcmeClient {
     }
 
     /// Deactivate the current account (RFC 8555 §7.3.6).
+    // NOT cancel-safe: irreversibly deactivates the account on the CA.
     pub async fn deactivate_account(&mut self) -> Result<Account> {
         let url: Url = self
             .transport
@@ -354,6 +366,7 @@ impl AcmeClient {
     // ── Order operations (RFC 8555 §7.4) ────────────────────────────────
 
     /// Submit a new order.  Returns `(order, order_url)`.
+    // NOT cancel-safe: creates a new order on the CA (rate-limit consuming).
     pub async fn new_order(
         &mut self,
         identifiers: Vec<Identifier>,
@@ -366,6 +379,7 @@ impl AcmeClient {
     /// Submit a replacement order (ARI, RFC 9702 §5).
     ///
     /// `replaces` is the ARI certID of the certificate being replaced.
+    // NOT cancel-safe: creates a new (replaces) order on the CA per RFC 9702.
     pub async fn new_order_replacing(
         &mut self,
         identifiers: Vec<Identifier>,
@@ -376,6 +390,7 @@ impl AcmeClient {
             .await
     }
 
+    // NOT cancel-safe: inner POST newOrder; same semantics as new_order.
     async fn new_order_inner(
         &mut self,
         identifiers: Vec<Identifier>,
@@ -411,6 +426,8 @@ impl AcmeClient {
     }
 
     /// Finalize an order by submitting a CSR (RFC 8555 §7.4).
+    // NOT cancel-safe: submits CSR; CA begins issuance. Drop mid-flight may
+    // still produce a certificate on the CA side that the client never sees.
     pub async fn finalize_order(&mut self, finalize_url: &Url, csr_der: &[u8]) -> Result<Order> {
         info!("Finalizing order");
         let payload = serde_json::to_string(&FinalizeRequest {
@@ -425,12 +442,16 @@ impl AcmeClient {
     }
 
     /// Poll an order's current status (POST-as-GET).
+    // NOT cancel-safe: POST-as-GET still consumes a nonce, but order state is
+    // unaffected; safe to retry.
     pub async fn poll_order(&mut self, order_url: &Url) -> Result<Order> {
         Ok(self.poll_order_with_retry_after(order_url).await?.0)
     }
 
     /// Poll an order's current status, returning the server-suggested
     /// `Retry-After` delay (RFC 8555 §7.4 / RFC 9110 §10.2.3) if present.
+    // NOT cancel-safe: consumes a nonce per poll; order state read-only but
+    // nonce leakage on cancel.
     pub async fn poll_order_with_retry_after(
         &mut self,
         order_url: &Url,
@@ -449,6 +470,7 @@ impl AcmeClient {
     // ── Authorization & challenge (RFC 8555 §7.5) ───────────────────────
 
     /// Fetch an authorization object (POST-as-GET).
+    // NOT cancel-safe: nonce-consuming POST-as-GET; authz state read-only.
     pub async fn get_authorization(&mut self, authz_url: &Url) -> Result<Authorization> {
         debug!("Fetching authorization: {authz_url}");
         let resp = self
@@ -464,6 +486,8 @@ impl AcmeClient {
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
     ///
     /// The payload is an empty JSON object `{}`.
+    // NOT cancel-safe: triggers CA-side validation attempt; drop mid-flight
+    // may still cause the CA to attempt validation against the deployed token.
     pub async fn respond_to_challenge(&mut self, challenge_url: &Url) -> Result<Challenge> {
         info!("Responding to challenge: {challenge_url}");
         let resp = self
@@ -477,6 +501,8 @@ impl AcmeClient {
     // ── Certificate (RFC 8555 §7.4.2, §7.6) ────────────────────────────
 
     /// Download the issued certificate chain (POST-as-GET).
+    // NOT cancel-safe: nonce-consuming POST-as-GET; cert payload itself is
+    // immutable, so retry is safe.
     pub async fn download_certificate(&mut self, cert_url: &Url) -> Result<String> {
         info!("Downloading certificate from {cert_url}");
         let resp = self
@@ -492,6 +518,9 @@ impl AcmeClient {
     /// Replaces the current signing key with `new_key`.  The request is a
     /// nested JWS: the outer JWS is signed by the **old** (current) key
     /// and the inner JWS is signed by the **new** key.
+    // NOT cancel-safe: rotates the account key on the CA. Drop mid-flight may
+    // leave the CA with the new key active while the client still believes it
+    // holds the old one - manual reconciliation required.
     pub async fn key_change(&mut self, new_key: &AccountKey) -> Result<()> {
         let account_url = self
             .transport
@@ -530,6 +559,7 @@ impl AcmeClient {
     ///
     /// Sends a POST to the `newAuthz` endpoint before creating an order.
     /// Returns `(authorization, authz_url)`.
+    // NOT cancel-safe: creates a new authz on the CA (pre-authorization flow).
     pub async fn new_authorization(
         &mut self,
         identifier: Identifier,
@@ -557,6 +587,8 @@ impl AcmeClient {
     }
 
     /// Revoke a certificate (RFC 8555 §7.6).
+    // NOT cancel-safe: irreversibly revokes the certificate. CA may complete
+    // revocation even if the client drops mid-flight.
     pub async fn revoke_certificate(&mut self, cert_der: &[u8], reason: Option<u8>) -> Result<()> {
         info!("Revoking certificate");
         let payload = serde_json::to_string(&RevokeCertRequest {
@@ -581,6 +613,8 @@ impl AcmeClient {
     ///
     /// Returns the suggested renewal window and an optional `Retry-After`
     /// value (in seconds) from the response header.
+    // cancel-safe: unauthenticated GET /renewalInfo per RFC 9702; no nonce, no
+    // server-side state mutation.
     pub async fn get_renewal_info(
         &mut self,
         cert_der: &[u8],

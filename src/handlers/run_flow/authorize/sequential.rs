@@ -17,6 +17,9 @@ use super::provisioners::{
     provision_tlsalpn01,
 };
 
+// NOT cancel-safe: dispatches to provision_* (each carries side effects:
+// HTTP server task, DNS hook, file write) and polls CA. Drop between
+// provision and final poll leaves dangling cleanup state.
 pub(super) async fn run_sequential(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,

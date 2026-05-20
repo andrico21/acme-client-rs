@@ -50,6 +50,8 @@ pub(crate) fn scrub_secret_env(cmd: &mut std::process::Command) {
     }
 }
 
+// NOT cancel-safe: drop between spawn and exit-status leaves an orphaned
+// child process. Callers must run to completion or kill the child.
 async fn run_with_timeout(
     mut cmd: tokio::process::Command,
     script: &Path,
@@ -68,6 +70,8 @@ async fn run_with_timeout(
         .with_context(|| format!("failed to run {label}: {}", script.display()))
 }
 
+// NOT cancel-safe: drop between spawn and timeout-wrap leaves an orphaned
+// child running until OS reaps it. Callers must run to completion.
 pub(crate) async fn run_hook(script: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
     let mut cmd = tokio::process::Command::new(script);
     for &(key, val) in env_vars {
@@ -86,6 +90,8 @@ pub(crate) async fn run_hook(script: &Path, env_vars: &[(&str, &str)]) -> Result
 /// `ACME_ACTION=create` env contract documented in README. Returns an error
 /// if the hook fails to spawn or exits non-zero — callers MUST treat that
 /// as fatal because the upcoming validation will fail without the record.
+// NOT cancel-safe: dropping after spawn may leak DNS record if hook had
+// already mutated remote state. Pair with run_dns_hook_cleanup_* on error.
 pub(crate) async fn run_dns_hook_create(
     hook: &Path,
     domain: &DnsName,
@@ -109,6 +115,8 @@ pub(crate) async fn run_dns_hook_create(
 /// callers are usually already on an error path (challenge timed out,
 /// validation failed) and a missing cleanup must not mask the original
 /// failure cause.
+// NOT cancel-safe: drop leaves orphaned child; cleanup may not complete and
+// the DNS record may persist. Callers run this from error-recovery paths.
 pub(crate) async fn run_dns_hook_cleanup_logged(
     hook: &Path,
     domain: &DnsName,
@@ -135,6 +143,7 @@ pub(crate) async fn run_dns_hook_cleanup_logged(
 /// Best-effort DNS cleanup hook for parallel-DNS rollback paths where any
 /// hook failure would be immediately followed by `anyhow::bail!` anyway,
 /// making logging redundant. Use [`run_dns_hook_cleanup_logged`] elsewhere.
+// NOT cancel-safe: drop leaves orphaned child; DNS record may persist.
 pub(crate) async fn run_dns_hook_cleanup_silent(
     hook: &Path,
     domain: &DnsName,

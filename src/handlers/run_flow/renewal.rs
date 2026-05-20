@@ -24,6 +24,8 @@ pub(super) enum RenewalDecision {
     Renew,
 }
 
+// cancel-safe: read-only — inspects existing cert + optional ARI HTTP GET.
+// No external mutation; drop has no side effects.
 pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
     if !ctx.cert_output.exists() {
         return Ok(RenewalDecision::Renew);

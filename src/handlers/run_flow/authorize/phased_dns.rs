@@ -19,6 +19,10 @@ use super::super::super::{
 use super::super::RunContext;
 use super::DnsPending;
 
+// NOT cancel-safe: creates DNS records via external hook in Phase 1 and
+// signals CAs in Phase 3. Drop mid-pipeline leaves unfinished TXT records
+// (cleanup registered in CleanupRegistry runs on Drop, but rollback is
+// best-effort and may itself be cancelled). Caller must run to completion.
 pub(super) async fn run_phased_dns(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,

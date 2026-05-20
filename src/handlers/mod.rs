@@ -68,6 +68,7 @@ pub(super) fn emit_result(
 
 /// Check whether a DNS TXT record with the expected value exists, using the
 /// configured [`DnsChecker`]. Comparison is byte-exact (no substring match).
+// cancel-safe: single DNS lookup; pure read.
 pub(super) async fn dns_txt_check(
     checker: &DnsChecker,
     name: &str,

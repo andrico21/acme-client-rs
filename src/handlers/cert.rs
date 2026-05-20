@@ -9,6 +9,7 @@ use crate::client::compute_cert_id;
 use crate::csr::pem_to_der;
 use crate::{build_client, outln};
 
+// NOT cancel-safe: revokes certificate on CA — irreversible side effect.
 pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &Path, reason: Option<u8>) -> Result<()> {
     let mut client = build_client(cli).await?;
 
@@ -37,6 +38,7 @@ pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &Path, reason: Option<u8>) 
     Ok(())
 }
 
+// cancel-safe: queries ARI endpoint; pure read.
 pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> {
     let mut client = build_client(cli).await?;
 

@@ -70,6 +70,10 @@ pub(super) struct RunContext<'a> {
 
 // ── Full automated flow ─────────────────────────────────────────────────────
 
+// NOT cancel-safe: top-level end-to-end flow. Inherits NOT-cancel-safe
+// contract from authorize, finalize, and hook calls. CleanupRegistry runs
+// on Drop to best-effort rollback (challenge files, DNS records, server
+// task) but the issued certificate (if finalize completed) is lost.
 pub(crate) async fn cmd_run(
     cli: &Cli,
     args: &RunArgs,

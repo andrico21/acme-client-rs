@@ -79,6 +79,7 @@ impl DnsChecker {
     }
 
     /// Return true iff any TXT record at `name` exactly matches `expected`.
+    // cancel-safe: single DNS TXT lookup, byte-exact comparison. Pure read.
     pub async fn txt_matches(&self, name: &str, expected: &str) -> Result<bool> {
         let fqdn = Name::from_str(name).with_context(|| format!("invalid DNS name: {name}"))?;
 
@@ -111,6 +112,7 @@ impl DnsChecker {
         Ok(false)
     }
 
+    // cancel-safe: NS lookup + resolver construction; pure read.
     async fn build_authoritative_resolver(&self, name: &Name) -> Result<TokioResolver> {
         // Walk up the labels (e.g. _acme-challenge.foo.example.com →
         // foo.example.com → example.com → com) and use the deepest ancestor

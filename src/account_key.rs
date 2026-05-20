@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use crate::fs_secure;
 use crate::jws::AccountKey;
 
+// cancel-safe: reads PKCS#8 file from disk + parses. Pure read.
 pub(crate) async fn load_account_key_with_password(
     path: &Path,
     password: Option<&str>,
@@ -24,6 +25,7 @@ pub(crate) async fn load_account_key_with_password(
 
 /// SEC-08: resolve the account-key password from CLI flag or password file.
 /// Returns None when neither is provided (unencrypted-key path).
+// cancel-safe: reads password-file from disk or returns inline value. Pure read.
 pub(crate) async fn resolve_account_key_password(
     inline: Option<&str>,
     file: Option<&std::path::Path>,

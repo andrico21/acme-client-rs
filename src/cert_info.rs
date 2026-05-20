@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 
 /// Parse a PEM certificate and return the number of days until expiry.
+// cancel-safe: reads cert from disk + parses. Pure read.
 pub(crate) async fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
     let pem_data = tokio::fs::read_to_string(path)
         .await
@@ -18,6 +19,7 @@ pub(crate) async fn cert_days_remaining(path: &std::path::Path) -> Result<i64> {
 /// Parse a PEM certificate and return the set of SAN identifiers (DNS names + IPs).
 ///
 /// DNS names are lowercased; IP addresses are canonicalized via `std::net::IpAddr`.
+// cancel-safe: reads cert from disk + parses SAN list. Pure read.
 pub(crate) async fn cert_san_identifiers(
     path: &std::path::Path,
 ) -> Result<std::collections::BTreeSet<String>> {

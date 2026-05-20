@@ -28,6 +28,10 @@ pub(super) struct ProvisionResult {
     pub serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
 }
 
+// NOT cancel-safe: spawns HTTP-01 server task, writes challenge file, and
+// signals CA via respond_to_challenge. Drop mid-flow may leave a registered
+// JoinHandle/file in CleanupRegistry which still runs on Drop, but the CA
+// may already be polling. Caller (sequential.rs) must run to completion.
 pub(super) async fn provision_http01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
@@ -104,6 +108,9 @@ pub(super) async fn provision_http01(
     Ok(result)
 }
 
+// NOT cancel-safe: may invoke external DNS create hook (remote side effect)
+// and signal CA. Drop between hook success and respond_to_challenge leaves
+// the TXT record published with no cleanup. Caller must run to completion.
 pub(super) async fn provision_dns01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
@@ -154,6 +161,8 @@ pub(super) async fn provision_dns01(
     Ok(ProvisionResult::default())
 }
 
+// NOT cancel-safe: identical contract to provision_dns01 — external DNS
+// hook + CA signal. dns-persist-01 record is intentionally long-lived.
 pub(super) async fn provision_dns_persist01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
@@ -225,6 +234,8 @@ pub(super) async fn provision_dns_persist01(
     Ok(ProvisionResult::default())
 }
 
+// NOT cancel-safe: invokes on_challenge_ready hook (remote side effect)
+// then signals CA. User must keep TLS-ALPN server alive externally.
 pub(super) async fn provision_tlsalpn01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
@@ -261,6 +272,8 @@ pub(super) async fn provision_tlsalpn01(
     Ok(ProvisionResult::default())
 }
 
+// cancel-safe: pure DNS polling loop with sleep; no external mutation.
+// Dropping aborts the wait with no side effects.
 async fn wait_for_dns_propagation(
     ctx: &RunContext<'_>,
     txt_name: &str,

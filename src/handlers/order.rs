@@ -10,6 +10,8 @@ use crate::csr::{encrypt_private_key, generate_csr};
 use crate::types::Identifier;
 use crate::{build_client, outln};
 
+// cancel-safe: client request only; CA-side order created on POST is
+// recoverable via account URL but no local state is mutated.
 pub(crate) async fn cmd_order(
     cli: &Cli,
     domains: Vec<String>,
@@ -58,6 +60,7 @@ pub(crate) async fn cmd_order(
     Ok(())
 }
 
+// cancel-safe: single HTTP GET to list profiles; pure read.
 pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
@@ -96,6 +99,7 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
+// cancel-safe: single signed POST-as-GET to authz URL.
 pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
@@ -140,6 +144,8 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
     Ok(())
 }
 
+// NOT cancel-safe: signals CA to validate. Drop after POST cannot recall
+// the request — CA may proceed with validation regardless.
 pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
@@ -159,6 +165,9 @@ pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+// NOT cancel-safe: generates key off-runtime, submits CSR, writes private
+// key to disk. Drop between key-write and CSR submission orphans key file;
+// drop between submission and exit means caller loses the order URL.
 pub(crate) async fn cmd_finalize(
     cli: &Cli,
     finalize_url: &str,
@@ -263,6 +272,7 @@ pub(crate) async fn cmd_finalize(
     Ok(())
 }
 
+// cancel-safe: single POST-as-GET; pure read of order state.
 pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
@@ -292,6 +302,9 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
     Ok(())
 }
 
+// NOT cancel-safe: downloads certificate then writes to disk. Drop between
+// download and write loses the issued cert (re-download possible only if
+// the URL is preserved externally).
 pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &Path) -> Result<()> {
     let (tls, net) =
         crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
