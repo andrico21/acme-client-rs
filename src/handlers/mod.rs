@@ -103,7 +103,7 @@ pub(super) fn parse_eab(
 
 // ── Hook helpers ────────────────────────────────────────────────────────────
 
-mod hooks;
+pub(crate) mod hooks;
 pub(super) use hooks::{
     run_dns_hook_cleanup_logged, run_dns_hook_cleanup_silent, run_dns_hook_create, run_hook,
 };

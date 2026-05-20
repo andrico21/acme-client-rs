@@ -80,12 +80,13 @@ fn run_one(action: &CleanupAction) {
             txt_name,
             txt_value,
         } => {
-            let _ = std::process::Command::new(hook)
-                .env("ACME_DOMAIN", domain.as_str())
+            let mut cmd = std::process::Command::new(hook);
+            cmd.env("ACME_DOMAIN", domain.as_str())
                 .env("ACME_TXT_NAME", txt_name.as_str())
                 .env("ACME_TXT_VALUE", txt_value)
-                .env("ACME_ACTION", "cleanup")
-                .status();
+                .env("ACME_ACTION", "cleanup");
+            crate::handlers::hooks::scrub_secret_env(&mut cmd);
+            let _ = cmd.status();
         }
         CleanupAction::ServerTask(handle) => {
             handle.abort();

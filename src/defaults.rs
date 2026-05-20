@@ -64,3 +64,15 @@ pub mod polling {
     /// generous ceiling that surfaces stuck orders as a clean timeout error.
     pub const ORDER_POLL_TIMEOUT: Duration = Duration::from_mins(10);
 }
+
+/// User-script hook execution bounds.
+pub mod hooks {
+    use std::time::Duration;
+
+    /// Maximum wall-clock time any single hook subprocess (DNS, on-cert-issued,
+    /// on-challenge-ready, SIGINT cleanup) may run before being killed. A hung
+    /// DNS provider script must not stall issuance indefinitely; 5 minutes is
+    /// long enough for legitimate DNS API calls + propagation polling inside a
+    /// hook, but bounded enough to surface a wedged provider as a clean error.
+    pub const HOOK_TIMEOUT: Duration = Duration::from_mins(5);
+}
