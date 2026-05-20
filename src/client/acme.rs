@@ -137,8 +137,16 @@ impl Transport {
             let body = match self.account_url {
                 Some(ref kid) => self
                     .account_key
-                    .sign_with_kid(payload, &nonce, url_str, kid)?,
-                None => self.account_key.sign_with_jwk(payload, &nonce, url_str)?,
+                    .sign_with_kid(payload, &nonce, url_str, kid)
+                    .with_context(|| {
+                        format!("failed to sign JWS POST to {url_str} with KID")
+                    })?,
+                None => self
+                    .account_key
+                    .sign_with_jwk(payload, &nonce, url_str)
+                    .with_context(|| {
+                        format!("failed to sign JWS POST to {url_str} with JWK")
+                    })?,
             };
 
             debug!(%url, attempt, "Sending signed POST");
