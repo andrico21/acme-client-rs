@@ -56,7 +56,7 @@ pub(super) struct RunContext<'a> {
     pub cert_key_alg: CertKeyAlgorithm,
     pub profile: Option<&'a str>,
     pub force: bool,
-    pub contact: Option<String>,
+    pub contact: Option<&'a str>,
     pub cleanup_registry: &'a crate::cleanup::CleanupRegistry,
 
     pub domains: Vec<String>,
@@ -135,7 +135,7 @@ pub(crate) async fn cmd_run(
         cert_key_alg: args.cert_key_algorithm,
         profile: args.profile.as_deref(),
         force: args.force,
-        contact: args.contact.clone(),
+        contact: args.contact.as_deref(),
         cleanup_registry,
         domains,
         dns_checker,
