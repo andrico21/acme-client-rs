@@ -92,14 +92,23 @@ pub(crate) async fn cmd_run(
         cli.unsafe_hooks,
     )?;
 
-    // Pre-flight: refuse to start if --key-output exists but neither
-    // --reuse-key nor --force is set. Catches the footgun where issuance
-    // succeeds at the CA but the key write fails after the fact, orphaning
-    // the certificate. Fail fast before contacting the ACME server.
-    if !args.force && args.reuse_key.is_none() && args.key_output.exists() {
+    // Pre-flight: on fresh issuance (no existing cert), refuse to start
+    // when --key-output already points at a file but neither --reuse-key
+    // nor --force is set. Catches the footgun where the CA issues a cert
+    // and then fs_secure rejects the key write, orphaning the cert.
+    // Renewal paths (cert_output exists) bypass this: renewal::check may
+    // decide Skip (no write), and Renew/Reissue inherently overwrite the
+    // existing keypair by user intent.
+    if !args.force
+        && args.reuse_key.is_none()
+        && !args.cert_output.exists()
+        && args.key_output.exists()
+    {
         anyhow::bail!(
-            "private key already exists at {}: pass --reuse-key {} to reuse it, or --force to overwrite",
+            "private key already exists at {} but no certificate found at {}: \
+             pass --reuse-key {} to reuse the key, or --force to overwrite",
             args.key_output.display(),
+            args.cert_output.display(),
             args.key_output.display(),
         );
     }
