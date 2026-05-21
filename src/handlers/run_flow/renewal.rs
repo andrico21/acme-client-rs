@@ -128,15 +128,16 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
         return Ok(RenewalDecision::Reissue);
     }
 
-    // ── 0a. ARI-based renewal check (RFC 9702) ─────────────────────
+    // ── 0a. ARI-based renewal check (RFC 9773) ─────────────────────
     if ctx.ari {
         match tokio::fs::read_to_string(ctx.cert_output).await {
             Ok(pem_data) => match pem_to_der(&pem_data) {
                 Ok(cert_der) => {
-                    // Build client early so we reuse directory + account for step 1
+                    // RFC 9773 §4.1+§6: ARI lookup is an unauthenticated GET,
+                    // so the directory-only client is sufficient and no
+                    // newAccount call may precede it (signing newAccount with
+                    // a stale account_url breaks RFC 8555 §6.2).
                     let mut ari_client = build_client(ctx.cli).await?;
-                    // ARI uses POST-as-GET, needs KID
-                    ari_client.create_account(None, true, None).await?;
 
                     if ari_client.supports_ari() {
                         match ari_client.get_renewal_info(&cert_der).await {
@@ -178,7 +179,6 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
                                         );
                                     }
                                 }
-                                // Set cert_id for replaceOrder
                                 if let Ok(cid) = compute_cert_id(&cert_der) {
                                     ctx.ari_cert_id = Some(cid);
                                 }

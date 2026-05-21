@@ -495,7 +495,7 @@ Examples:
         reason: Option<u8>,
     },
 
-    /// Query ACME Renewal Information for a certificate (RFC 9702)
+    /// Query ACME Renewal Information for a certificate (RFC 9773)
     #[command(after_long_help = "\
 Examples:
   # Check when a certificate should be renewed
@@ -631,7 +631,7 @@ pub(crate) struct RunArgs {
     /// Pre-authorize identifiers via newAuthz before creating the order
     #[arg(long)]
     pub(crate) pre_authorize: bool,
-    /// Use ACME Renewal Information (RFC 9702) to decide when to renew
+    /// Use ACME Renewal Information (RFC 9773) to decide when to renew
     #[arg(long)]
     pub(crate) ari: bool,
     /// Reissue the certificate if requested domains differ from existing cert's SANs

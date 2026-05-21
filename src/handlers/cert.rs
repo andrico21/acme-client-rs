@@ -42,11 +42,6 @@ pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &Path, reason: Option<u8>) 
 pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> {
     let mut client = build_client(cli).await?;
 
-    // ARI GET uses POST-as-GET, which needs KID signing
-    if client.account_url().is_none() {
-        client.create_account(None, true, None).await?;
-    }
-
     let pem_data = tokio::fs::read_to_string(cert_path)
         .await
         .with_context(|| format!("failed to read certificate from {}", cert_path.display()))?;
@@ -64,6 +59,7 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> 
                     "start": info.suggested_window.start,
                     "end": info.suggested_window.end,
                 },
+                "explanation_url": info.explanation_url,
                 "retry_after": retry_after,
             })
         },
@@ -72,6 +68,9 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> 
             outln!("Suggested renewal window:");
             outln!("  Start:  {}", info.suggested_window.start);
             outln!("  End:    {}", info.suggested_window.end);
+            if let Some(ref url) = info.explanation_url {
+                outln!("  Explanation: {url}");
+            }
 
             // Show whether renewal is due
             if let Ok(end) = time::OffsetDateTime::parse(

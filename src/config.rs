@@ -87,7 +87,7 @@ pub struct RunConfig {
     pub eab_hmac_key: Option<SecretString>,
     /// Pre-authorize identifiers via newAuthz before creating the order.
     pub pre_authorize: Option<bool>,
-    /// Use ACME Renewal Information (RFC 9702) to decide when to renew.
+    /// Use ACME Renewal Information (RFC 9773) to decide when to renew.
     pub ari: Option<bool>,
     /// Reissue the certificate if requested domains differ from existing cert's SANs.
     pub reissue_on_mismatch: Option<bool>,

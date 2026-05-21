@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
 
-Легковесный ACME-клиент в виде единого исполняемого файла, реализующий [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) с поддержкой [RFC 9702](https://www.rfc-editor.org/rfc/rfc9702) (ACME Renewal Information) и [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Полный жизненный цикл сертификата - от регистрации аккаунта до выпуска, продления и отзыва - в одном бинарнике размером ~2 МБ без внешних зависимостей.
+Легковесный ACME-клиент в виде единого исполняемого файла, реализующий [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) с поддержкой [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) и [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Полный жизненный цикл сертификата - от регистрации аккаунта до выпуска, продления и отзыва - в одном бинарнике размером ~2 МБ без внешних зависимостей.
 
 Написан на Rust (редакция 2024) с `#![forbid(unsafe_code)]`, защищёнными release-сборками (CFG, ASLR, full RELRO, NX) и структурированным JSON-выводом для интеграции с CI/CD.
 
@@ -41,7 +41,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 - Поддержка IP-идентификаторов (RFC 8738) с нормализацией IPv6 - автоматическое определение из аргументов командной строки
 - Автоматизированный сквозной процесс (субкоманда `run`) со встроенным продлением (`--days N` пропускает запуск обновления, если срок продления ещё не наступил - отдельная команда renew не нужна)
 - Защита от несовпадения доменов: обнаруживает, когда запрашиваемые домены отличаются от SAN существующего сертификата, предотвращает случайную перезапись (`--reissue-on-mismatch` для явного разрешения)
-- ACME Renewal Information (ARI, RFC 9702): субкоманда `renewal-info` для запроса рекомендуемого окна продления от CA, и флаг `--ari` в `run` для использования серверного расписания продления с привязкой заказа через поле `replaces`
+- ACME Renewal Information (ARI, RFC 9773): субкоманда `renewal-info` для запроса рекомендуемого окна продления от CA, и флаг `--ari` в `run` для использования серверного расписания продления с привязкой заказа через поле `replaces`
 - Профили сертификатов (draft-ietf-acme-profiles-01): субкоманда `list-profiles` для запроса доступных профилей, флаг `--profile` в `order` и `run` для выбора профиля
 - Опциональное шифрование закрытого ключа (`--key-password` / `--key-password-file`) с использованием PKCS#8 + AES-256-CBC с KDF scrypt
 - Пошаговый ручной процесс (отдельные субкоманды)
@@ -581,7 +581,7 @@ acme-client-rs show-config --verbose
   |  <------------------------------------  |   200 OK
   |                                         |
   | 11. GET /renewalInfo/{certID} (ARI)     |   -- renewal-info --
-  |  ------------------------------------>  |   Запрос сроков обновления (RFC 9702)
+  |  ------------------------------------>  |   Запрос сроков обновления (RFC 9773)
   |  <------------------------------------  |   suggestedWindow {start, end}
 ```
 
@@ -729,7 +729,7 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 0 3 * * * root acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --challenge-dir /var/www/acme --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key --days 30 example.com && systemctl reload nginx >> /var/log/acme-renew.log 2>&1
 ```
 
-### Серверное управление продлением с ARI (RFC 9702)
+### Серверное управление продлением с ARI (RFC 9773)
 
 ACME Renewal Information (ARI) позволяет CA сообщать клиенту, когда продлевать. Вместо фиксированного порога `--days` сервер предоставляет рекомендуемое временное окно на основе срока действия сертификата, событий отзыва или изменений политики.
 
@@ -809,7 +809,7 @@ acme-client-rs run --days 30 --reissue-on-mismatch --cert-output cert.pem --key-
 
 Сравнение нечувствительно к регистру и нормализует IP-адреса (IPv4 и IPv6). Если существующий сертификат не удаётся разобрать, проверка несовпадения пропускается и проверки ARI/days выполняются в обычном режиме (отказоустойчиво).
 
-> **Примечание:** Когда `--reissue-on-mismatch` вызывает перевыпуск, `ari_cert_id` НЕ устанавливается — это новый заказ, а не `replaceOrder` (RFC 9702), поскольку заменяемый сертификат содержит другие идентификаторы.
+> **Примечание:** Когда `--reissue-on-mismatch` вызывает перевыпуск, `ari_cert_id` НЕ устанавливается — это новый заказ, а не `replaceOrder` (RFC 9773), поскольку заменяемый сертификат содержит другие идентификаторы.
 
 ### Bash-скрипт: выпуск и продление
 
@@ -1274,7 +1274,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `deactivate-account` | Деактивация текущего аккаунта |
 | `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5) |
 | `pre-authorize` | Предварительная авторизация идентификатора перед созданием заказа (RFC 8555 Section 7.4.1) |
-| `renewal-info <path>` | Запрос ACME Renewal Information для сертификата (RFC 9702) |
+| `renewal-info <path>` | Запрос ACME Renewal Information для сертификата (RFC 9773) |
 | `list-profiles` | Список профилей сертификатов, объявленных ACME-сервером (draft-ietf-acme-profiles-01) |
 | `revoke-cert <path>` | Отзыв сертификата |
 | `run <domains...>` | Запуск полного ACME-процесса от начала до конца |
@@ -1304,7 +1304,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--persist-policy <POLICY>` | - | Политика для записей dns-persist-01 (например, `wildcard` для области wildcard + поддомены) |
 | `--persist-until <TIMESTAMP>` | - | Unix-метка времени для параметра `persistUntil` в dns-persist-01 |
 | `--cert-key-algorithm <ALG>` | `ec-p256` | Алгоритм ключа сертификата для CSR: `ec-p256`, `ec-p384` или `ed25519` |
-| `--ari` | `false` | **Режим продления ARI (RFC 9702):** запрос рекомендуемого окна продления от сервера и пропуск выпуска, если окно ещё не открылось. При продлении поле `replaces` включается в заказ для связывания нового сертификата со старым. Переход на `--days`, если ARI недоступна. |
+| `--ari` | `false` | **Режим продления ARI (RFC 9773):** запрос рекомендуемого окна продления от сервера и пропуск выпуска, если окно ещё не открылось. При продлении поле `replaces` включается в заказ для связывания нового сертификата со старым. Переход на `--days`, если ARI недоступна. |
 | `--reissue-on-mismatch` | `false` | Разрешить перевыпуск при несовпадении запрошенных доменов с SAN существующего сертификата (по умолчанию: пропуск с предупреждением) |
 | `--print-cert` | `false` | Вывести PEM выпущенного сертификата в stdout после сохранения в файл |
 | `--profile <NAME>` | - | Профиль сертификата (draft-ietf-acme-profiles-01). Используйте `list-profiles` для просмотра доступных вариантов. |

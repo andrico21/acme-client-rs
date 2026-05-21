@@ -57,6 +57,19 @@ pub struct AcmeClient {
     transport: Transport,
 }
 
+/// JWS signing-mode selector for `Transport::signed_request_inner`.
+///
+/// `Auto` picks KID when `account_url` is `Some`, JWK otherwise — the
+/// default for every endpoint except `newAccount`. `ForceJwk` overrides
+/// the cached `account_url` and signs with the inline JWK, as required
+/// by RFC 8555 §6.2 for newAccount even when this client previously
+/// learned an account URL (e.g. from a same-process ARI precheck).
+#[derive(Clone, Copy)]
+enum SigningMode {
+    Auto,
+    ForceJwk,
+}
+
 /// Mutable per-session state extracted from `AcmeClient` so that public
 /// methods can borrow `&self.directory.X` (URLs) and `&mut self.transport`
 /// at the same call site without a borrow conflict.
@@ -123,6 +136,12 @@ impl Transport {
 
     /// Send a signed POST to `url`. `new_nonce` is the directory's newNonce
     /// endpoint, used only if the nonce cache is empty.
+    ///
+    /// Signing mode is auto-selected from `account_url`: KID if set,
+    /// JWK otherwise. For newAccount, callers MUST use
+    /// [`signed_request_force_jwk`] instead — RFC 8555 §6.2 forbids `kid`
+    /// on `newAccount` regardless of any cached account URL on the same
+    /// client instance.
     // NOT cancel-safe: consumes a nonce and may mutate server state (account,
     // order, authz, challenge). Drop mid-POST leaves CA-side state partially
     // updated; retry with fresh nonce is the only recovery.
@@ -131,6 +150,36 @@ impl Transport {
         url: &Url,
         new_nonce: &Url,
         payload: &str,
+    ) -> Result<AcmeResponse> {
+        self.signed_request_inner(url, new_nonce, payload, SigningMode::Auto)
+            .await
+    }
+
+    /// Send a signed POST to `url` with the **JWK** signing mode forced,
+    /// regardless of whether `account_url` is already set on this client.
+    ///
+    /// RFC 8555 §6.2 mandates `jwk` (not `kid`) on `newAccount` requests.
+    /// This entry point exists so a single client instance can be reused
+    /// for multiple newAccount calls (e.g. after an ARI precheck stashed
+    /// an account URL) without violating §6.2.
+    // NOT cancel-safe: same as `signed_request`.
+    async fn signed_request_force_jwk(
+        &mut self,
+        url: &Url,
+        new_nonce: &Url,
+        payload: &str,
+    ) -> Result<AcmeResponse> {
+        self.signed_request_inner(url, new_nonce, payload, SigningMode::ForceJwk)
+            .await
+    }
+
+    // NOT cancel-safe: see `signed_request`.
+    async fn signed_request_inner(
+        &mut self,
+        url: &Url,
+        new_nonce: &Url,
+        payload: &str,
+        mode: SigningMode,
     ) -> Result<AcmeResponse> {
         let url_str = url.as_str();
         {
@@ -141,15 +190,15 @@ impl Transport {
         for attempt in 0u8..2 {
             let nonce = self.get_nonce(new_nonce).await?;
 
-            let body = match self.account_url {
-                Some(ref kid) => self
-                    .account_key
-                    .sign_with_kid(payload, &nonce, url_str, kid)
-                    .with_context(|| format!("failed to sign JWS POST to {url_str} with KID"))?,
-                None => self
+            let body = match (mode, self.account_url.as_deref()) {
+                (SigningMode::ForceJwk, _) | (SigningMode::Auto, None) => self
                     .account_key
                     .sign_with_jwk(payload, &nonce, url_str)
                     .with_context(|| format!("failed to sign JWS POST to {url_str} with JWK"))?,
+                (SigningMode::Auto, Some(kid)) => self
+                    .account_key
+                    .sign_with_kid(payload, &nonce, url_str, kid)
+                    .with_context(|| format!("failed to sign JWS POST to {url_str} with KID"))?,
             };
 
             debug!(%url, attempt, "Sending signed POST");
@@ -325,7 +374,7 @@ impl AcmeClient {
         })?;
         let resp = self
             .transport
-            .signed_request(
+            .signed_request_force_jwk(
                 &self.directory.new_account,
                 &self.directory.new_nonce,
                 &payload,
@@ -376,10 +425,10 @@ impl AcmeClient {
             .await
     }
 
-    /// Submit a replacement order (ARI, RFC 9702 §5).
+    /// Submit a replacement order (ARI, RFC 9773 §5).
     ///
     /// `replaces` is the ARI certID of the certificate being replaced.
-    // NOT cancel-safe: creates a new (replaces) order on the CA per RFC 9702.
+    // NOT cancel-safe: creates a new (replaces) order on the CA per RFC 9773.
     pub async fn new_order_replacing(
         &mut self,
         identifiers: Vec<Identifier>,
@@ -607,14 +656,19 @@ impl AcmeClient {
         Ok(())
     }
 
-    // ── ACME Renewal Information (RFC 9702) ─────────────────────────────
+    // ── ACME Renewal Information (RFC 9773) ─────────────────────────────
 
-    /// Fetch renewal information for a certificate (RFC 9702 §4).
+    /// Fetch renewal information for a certificate (RFC 9773 §4.1).
     ///
     /// Returns the suggested renewal window and an optional `Retry-After`
     /// value (in seconds) from the response header.
-    // cancel-safe: unauthenticated GET /renewalInfo per RFC 9702; no nonce, no
-    // server-side state mutation.
+    ///
+    /// Per RFC 9773 §4.1+§6, the ARI lookup is an **unauthenticated GET**
+    /// — it MUST NOT be a POST-as-GET, and it MUST NOT require an account.
+    /// This means the call does not consume a nonce and is safe to issue
+    /// before `create_account`.
+    // cancel-safe: unauthenticated GET; no nonce consumption, no server-side
+    // state mutation.
     pub async fn get_renewal_info(
         &mut self,
         cert_der: &[u8],
@@ -626,9 +680,6 @@ impl AcmeClient {
             .context("server does not support ARI (no renewalInfo in directory)")?;
 
         let cert_id = compute_cert_id(cert_der)?;
-        // RFC 9702 §4.1: ARI URL is `<renewalInfo>/<certID>`. Use Url::join
-        // for proper path composition (handles trailing-slash semantics and
-        // re-validates the resulting URL).
         let mut joined = base_url.clone();
         joined
             .path_segments_mut()
@@ -636,19 +687,39 @@ impl AcmeClient {
             .push(&cert_id);
         info!("Fetching ARI renewal info: {joined}");
 
+        let url_str = joined.as_str();
+        {
+            let (tls, net) = self.transport.url_policies();
+            validate_acme_url(url_str, tls, net)
+        }
+        .with_context(|| format!("ARI renewalInfo URL failed validation: {url_str}"))?;
+
         let resp = self
             .transport
-            .signed_request(&joined, &self.directory.new_nonce, "")
-            .await?;
-        resp.ensure_success()?;
+            .http
+            .get(url_str)
+            .send()
+            .await
+            .context("ARI renewalInfo GET request failed")?;
 
-        let retry_after = resp
+        let status = resp.status();
+        let headers = resp.headers().clone();
+        let body_bytes = resp.bytes().await?.to_vec();
+        let parsed = AcmeResponse {
+            status,
+            headers,
+            body: body_bytes,
+        };
+        parsed.ensure_success()?;
+
+        let retry_after = parsed
             .headers
             .get("retry-after")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok());
 
-        let info: RenewalInfo = resp.json()?;
+        let info: RenewalInfo = parsed.json()?;
+        info.validate_window()?;
         Ok((info, retry_after))
     }
 
@@ -668,7 +739,7 @@ impl AcmeClient {
     }
 }
 
-// ── ARI certID computation (RFC 9702 §4.1) ─────────────────────────────────
+// ── ARI certID computation (RFC 9773 §4.1) ─────────────────────────────────
 
 /// Compute the ARI certID: `base64url(AKI) "." base64url(Serial)`.
 ///
@@ -703,4 +774,428 @@ pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
     let serial_b64 = URL_SAFE_NO_PAD.encode(serial);
 
     Ok(format!("{aki_b64}.{serial_b64}"))
+}
+
+// ── Regression tests ────────────────────────────────────────────────────────
+//
+// These tests guard the fix for the ARI double-newAccount bug. Before the
+// fix, `Transport::signed_request` chose `jwk` vs `kid` purely on whether
+// `account_url` was `Some`. Calling `create_account` twice on the same
+// client (e.g. with `--ari` doing a precheck) then signed the second
+// newAccount with `kid`, which step-ca correctly rejects with HTTP 400
+// "jwk expected in protected header" (RFC 8555 §6.2).
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    use crate::jws::{AccountKey, KeyAlgorithm};
+    use anyhow::{Result, anyhow, bail};
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    #[derive(Debug, Clone)]
+    struct CapturedRequest {
+        method: String,
+        path: String,
+        body: Vec<u8>,
+    }
+
+    #[derive(Clone)]
+    struct Route {
+        method: &'static str,
+        path_prefix: &'static str,
+        status_line: &'static str,
+        extra_headers: Vec<(String, String)>,
+        body: Vec<u8>,
+    }
+
+    fn build_response(route: &Route, nonce: &str) -> Vec<u8> {
+        use std::fmt::Write as _;
+        let mut headers = String::new();
+        headers.push_str(route.status_line);
+        headers.push_str("\r\n");
+        let _ = writeln!(headers, "Replay-Nonce: {nonce}\r");
+        headers.push_str("connection: close\r\n");
+        for (k, v) in &route.extra_headers {
+            let _ = writeln!(headers, "{k}: {v}\r");
+        }
+        let _ = writeln!(headers, "content-length: {}\r", route.body.len());
+        headers.push_str("\r\n");
+        let mut out = headers.into_bytes();
+        out.extend_from_slice(&route.body);
+        out
+    }
+
+    /// Spawn an inline HTTP/1.1 mock on the given pre-bound listener.
+    /// Routes are matched by method + path-prefix.
+    fn spawn_mock(
+        listener: TcpListener,
+        routes: Vec<Route>,
+    ) -> Arc<Mutex<Vec<CapturedRequest>>> {
+        let captured: Arc<Mutex<Vec<CapturedRequest>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+        let routes = Arc::new(routes);
+        let nonce_counter = Arc::new(Mutex::new(0u64));
+
+        tokio::spawn(async move {
+            loop {
+                let Ok((socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let captured = Arc::clone(&captured_clone);
+                let routes = Arc::clone(&routes);
+                let nonce_counter = Arc::clone(&nonce_counter);
+                tokio::spawn(async move {
+                    // Fire-and-forget: any I/O failure simply drops the
+                    // connection. The test will fail loudly via missing
+                    // captured requests if the mock can't talk.
+                    let _ = handle_connection(
+                        socket,
+                        &captured,
+                        &routes,
+                        &nonce_counter,
+                    )
+                    .await;
+                });
+            }
+        });
+
+        captured
+    }
+
+    async fn handle_connection(
+        mut socket: tokio::net::TcpStream,
+        captured: &Mutex<Vec<CapturedRequest>>,
+        routes: &[Route],
+        nonce_counter: &Mutex<u64>,
+    ) -> Result<()> {
+        // Read until we have full headers (\r\n\r\n), then body by Content-Length.
+        let mut buf = Vec::with_capacity(4096);
+        let header_end = loop {
+            let mut chunk = [0u8; 1024];
+            let n = socket.read(&mut chunk).await?;
+            if n == 0 {
+                bail!("client closed before headers");
+            }
+            buf.extend_from_slice(chunk.get(..n).ok_or_else(|| anyhow!("range"))?);
+            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                break pos + 4;
+            }
+            if buf.len() > 64 * 1024 {
+                bail!("headers too large");
+            }
+        };
+
+        let header_slice = buf.get(..header_end.saturating_sub(4))
+            .ok_or_else(|| anyhow!("header range"))?;
+        let header_text = std::str::from_utf8(header_slice)
+            .context("headers not UTF-8")?;
+        let mut lines = header_text.split("\r\n");
+        let request_line = lines.next().ok_or_else(|| anyhow!("no request line"))?;
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next().unwrap_or("").to_string();
+        let path = parts.next().unwrap_or("").to_string();
+
+        let mut content_length: usize = 0;
+        for line in lines {
+            if let Some((k, v)) = line.split_once(':')
+                && k.trim().eq_ignore_ascii_case("content-length")
+            {
+                content_length = v.trim().parse().unwrap_or(0);
+            }
+        }
+
+        let body_slice = buf.get(header_end..)
+            .ok_or_else(|| anyhow!("body range"))?;
+        let mut body = body_slice.to_vec();
+        while body.len() < content_length {
+            let mut chunk = [0u8; 4096];
+            let n = socket.read(&mut chunk).await?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(chunk.get(..n).ok_or_else(|| anyhow!("range"))?);
+        }
+        body.truncate(content_length);
+
+        {
+            let mut lock = captured.lock().map_err(|_| anyhow!("poisoned"))?;
+            lock.push(CapturedRequest {
+                method: method.clone(),
+                path: path.clone(),
+                body: body.clone(),
+            });
+        }
+
+        let route = routes.iter().find(|r| {
+            r.method.eq_ignore_ascii_case(&method)
+                && path.starts_with(r.path_prefix)
+        });
+        let response = match route {
+            Some(r) => {
+                let counter_value = {
+                    let mut ctr = nonce_counter.lock().map_err(|_| anyhow!("poisoned"))?;
+                    *ctr += 1;
+                    *ctr
+                };
+                let nonce = format!("nonce-{counter_value:08}");
+                build_response(r, &nonce)
+            }
+            None => b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec(),
+        };
+        socket.write_all(&response).await?;
+        socket.shutdown().await?;
+        Ok(())
+    }
+
+    fn directory_json(port: u16, include_ari: bool) -> Vec<u8> {
+        let ari = if include_ari {
+            format!(",\"renewalInfo\":\"http://127.0.0.1:{port}/renewalInfo\"")
+        } else {
+            String::new()
+        };
+        format!(
+            "{{\"newNonce\":\"http://127.0.0.1:{port}/new-nonce\",\
+             \"newAccount\":\"http://127.0.0.1:{port}/new-account\",\
+             \"newOrder\":\"http://127.0.0.1:{port}/new-order\",\
+             \"revokeCert\":\"http://127.0.0.1:{port}/revoke-cert\",\
+             \"keyChange\":\"http://127.0.0.1:{port}/key-change\"\
+             {ari}}}"
+        )
+        .into_bytes()
+    }
+
+    fn protected_header_of(body: &[u8]) -> Result<serde_json::Value> {
+        let flat: serde_json::Value = serde_json::from_slice(body)?;
+        let protected_b64 = flat
+            .get("protected")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("no protected field"))?;
+        let bytes = URL_SAFE_NO_PAD.decode(protected_b64)?;
+        Ok(serde_json::from_slice(&bytes)?)
+    }
+
+    async fn build_client(port: u16) -> Result<AcmeClient> {
+        let (tls, net) =
+            super::super::net_policy::policies_from_cli_flags(true, true);
+        let key = AccountKey::generate(KeyAlgorithm::Es256)?;
+        let url = format!("http://127.0.0.1:{port}/directory");
+        AcmeClient::new(&url, key, tls, 5, net).await
+    }
+
+    fn account_routes(port: u16, include_ari: bool) -> Vec<Route> {
+        vec![
+            Route {
+                method: "GET",
+                path_prefix: "/directory",
+                status_line: "HTTP/1.1 200 OK",
+                extra_headers: vec![(
+                    "content-type".into(),
+                    "application/json".into(),
+                )],
+                body: directory_json(port, include_ari),
+            },
+            Route {
+                method: "HEAD",
+                path_prefix: "/new-nonce",
+                status_line: "HTTP/1.1 200 OK",
+                extra_headers: vec![],
+                body: vec![],
+            },
+            Route {
+                method: "POST",
+                path_prefix: "/new-account",
+                status_line: "HTTP/1.1 201 Created",
+                extra_headers: vec![
+                    (
+                        "Location".into(),
+                        format!("http://127.0.0.1:{port}/account/1"),
+                    ),
+                    ("content-type".into(), "application/json".into()),
+                ],
+                body: br#"{"status":"valid"}"#.to_vec(),
+            },
+        ]
+    }
+
+    fn collect_captured(
+        captured: &Mutex<Vec<CapturedRequest>>,
+    ) -> Result<Vec<CapturedRequest>> {
+        Ok(captured
+            .lock()
+            .map_err(|_| anyhow!("poisoned"))?
+            .clone())
+    }
+
+    // ── T1 ──────────────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn create_account_signs_with_jwk_even_when_account_url_set()
+    -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let captured = spawn_mock(listener, account_routes(port, false));
+
+        let mut client = build_client(port).await?;
+        client.create_account(None, true, None).await?;
+
+        let posts: Vec<_> = collect_captured(&captured)?
+            .into_iter()
+            .filter(|r| r.method == "POST" && r.path == "/new-account")
+            .collect();
+        assert_eq!(posts.len(), 1, "expected exactly one POST /new-account");
+        let first = posts.first().ok_or_else(|| anyhow!("no post"))?;
+        let header = protected_header_of(&first.body)?;
+        assert!(
+            header.get("jwk").is_some(),
+            "newAccount protected header must contain `jwk` (RFC 8555 §6.2), got: {header}"
+        );
+        assert!(
+            header.get("kid").is_none(),
+            "newAccount protected header must NOT contain `kid`, got: {header}"
+        );
+        Ok(())
+    }
+
+    // ── T2 ──────────────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn create_account_twice_still_signs_with_jwk_on_second_call()
+    -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let captured = spawn_mock(listener, account_routes(port, false));
+
+        let mut client = build_client(port).await?;
+
+        client.create_account(None, true, None).await?;
+        assert!(
+            client.account_url().is_some(),
+            "account_url should be set after first create_account"
+        );
+
+        client.create_account(None, true, None).await?;
+
+        let posts: Vec<_> = collect_captured(&captured)?
+            .into_iter()
+            .filter(|r| r.method == "POST" && r.path == "/new-account")
+            .collect();
+        assert_eq!(posts.len(), 2, "expected two POST /new-account calls");
+
+        for (i, post) in posts.iter().enumerate() {
+            let header = protected_header_of(&post.body)?;
+            assert!(
+                header.get("jwk").is_some(),
+                "newAccount call #{} must use jwk (RFC 8555 §6.2), got: {header}",
+                i + 1
+            );
+            assert!(
+                header.get("kid").is_none(),
+                "newAccount call #{} must NOT use kid, got: {header}",
+                i + 1
+            );
+        }
+        Ok(())
+    }
+
+    // ── T3 ──────────────────────────────────────────────────────────────
+    #[tokio::test]
+    async fn get_renewal_info_uses_unauthenticated_get() -> Result<()> {
+        use rcgen::{
+            BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair,
+            PKCS_ECDSA_P256_SHA256,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+
+        let mut routes = account_routes(port, true);
+        routes.push(Route {
+            method: "GET",
+            path_prefix: "/renewalInfo/",
+            status_line: "HTTP/1.1 200 OK",
+            extra_headers: vec![("content-type".into(), "application/json".into())],
+            body: br#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}}"#.to_vec(),
+        });
+        let captured = spawn_mock(listener, routes);
+
+        // Leaf cert signed by a CA so it carries the AKI extension required
+        // by RFC 9773 §4.1 certID computation.
+        let issuer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut issuer_params =
+            CertificateParams::new(vec!["Test CA".into()])?;
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let issuer = Issuer::new(issuer_params, issuer_key);
+        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut leaf_params =
+            CertificateParams::new(vec!["test.example".into()])?;
+        leaf_params.use_authority_key_identifier_extension = true;
+        let leaf = leaf_params.signed_by(&leaf_key, &issuer)?;
+        let cert_der = leaf.der().to_vec();
+
+        let mut client = build_client(port).await?;
+        // No create_account before the call — verifies the codepath is
+        // truly unauthenticated.
+        assert!(client.account_url().is_none());
+        let (_info, _retry) = client.get_renewal_info(&cert_der).await?;
+        assert!(
+            client.account_url().is_none(),
+            "get_renewal_info must not set account_url"
+        );
+
+        let reqs = collect_captured(&captured)?;
+        let ari_reqs: Vec<_> = reqs
+            .iter()
+            .filter(|r| r.path.starts_with("/renewalInfo/"))
+            .collect();
+        assert_eq!(ari_reqs.len(), 1, "expected one ARI request");
+        let ari = ari_reqs.first().ok_or_else(|| anyhow!("no ari"))?;
+        assert_eq!(
+            ari.method, "GET",
+            "ARI must be unauthenticated GET (RFC 9773 §6), not {:?}",
+            ari.method
+        );
+        let any_post_ari = reqs
+            .iter()
+            .any(|r| r.method == "POST" && r.path.starts_with("/renewalInfo"));
+        assert!(!any_post_ari, "ARI must not be a POST");
+        Ok(())
+    }
+
+    // ── T4 ──────────────────────────────────────────────────────────────
+    #[test]
+    fn renewal_info_validate_window_rejects_inverted_window() -> Result<()> {
+        let json = r#"{"suggestedWindow":{"start":"2026-01-02T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
+        let info: RenewalInfo = serde_json::from_str(json)?;
+        assert!(
+            info.validate_window().is_err(),
+            "inverted window (end<start) must be rejected"
+        );
+
+        let json_equal = r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
+        let info_equal: RenewalInfo = serde_json::from_str(json_equal)?;
+        assert!(
+            info_equal.validate_window().is_err(),
+            "degenerate window (end==start) must be rejected per RFC 9773 §4.2"
+        );
+        Ok(())
+    }
+
+    // ── T5 ──────────────────────────────────────────────────────────────
+    #[test]
+    fn renewal_info_parses_explanation_url() -> Result<()> {
+        let json = r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"},"explanationURL":"https://example.com/why"}"#;
+        let info: RenewalInfo = serde_json::from_str(json)?;
+        assert!(info.validate_window().is_ok());
+        assert_eq!(
+            info.explanation_url.as_deref(),
+            Some("https://example.com/why")
+        );
+
+        let json_absent = r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}}"#;
+        let info_absent: RenewalInfo = serde_json::from_str(json_absent)?;
+        assert!(info_absent.explanation_url.is_none());
+        Ok(())
+    }
 }

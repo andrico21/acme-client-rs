@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
 
-A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9702](https://www.rfc-editor.org/rfc/rfc9702) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
+A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
 
 Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX), and structured JSON output for CI/CD integration.
 
@@ -41,7 +41,7 @@ Alternatively, build from source — see [Building](#building) below.
 - IP identifier support (RFC 8738) with IPv6 normalization - auto-detected from CLI input
 - Automated end-to-end flow (`run` subcommand) with built-in renewal (`--days N` skips if not due - no separate renew command needed)
 - Domain mismatch protection: detects when requested domains differ from existing certificate's SANs, prevents accidental overwrites (`--reissue-on-mismatch` to explicitly allow)
-- ACME Renewal Information (ARI, RFC 9702): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
+- ACME Renewal Information (ARI, RFC 9773): `renewal-info` subcommand to query the CA's suggested renewal window, and `--ari` flag on `run` to use server-recommended renewal timing with `replaces` order linkage
 - Certificate profiles (draft-ietf-acme-profiles-01): `list-profiles` subcommand to query available profiles, `--profile` flag on `order` and `run` to select a profile
 - Optional private key encryption (`--key-password` / `--key-password-file`) using PKCS#8 + AES-256-CBC with scrypt KDF (parameters `N=16384, r=8, p=1` chosen for OpenSSL CLI interop — OpenSSL caps scrypt memory at 32 MB, which would reject the stronger `N=131072` default)
 - Step-by-step manual flow (individual subcommands)
@@ -581,7 +581,7 @@ Client                                ACME Server (e.g. Let's Encrypt)
   |  <------------------------------------  |   200 OK
   |                                         |
   | 11. GET /renewalInfo/{certID} (ARI)     |   -- renewal-info --
-  |  ------------------------------------>  |   Query renewal timing (RFC 9702)
+  |  ------------------------------------>  |   Query renewal timing (RFC 9773)
   |  <------------------------------------  |   suggestedWindow {start, end}
 ```
 
@@ -731,7 +731,7 @@ Add to cron for fully automated renewals:
 0 3 * * * root acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --account-key /etc/acme/account.key run --contact admin@example.com --challenge-type http-01 --challenge-dir /var/www/acme --cert-output /etc/ssl/certs/example.com.pem --key-output /etc/ssl/private/example.com.key --days 30 example.com && systemctl reload nginx >> /var/log/acme-renew.log 2>&1
 ```
 
-### Server-Guided Renewal with ARI (RFC 9702)
+### Server-Guided Renewal with ARI (RFC 9773)
 
 ACME Renewal Information (ARI) lets the CA tell your client when to renew. Instead of a fixed `--days` threshold, the server provides a suggested time window based on certificate lifetime, revocation events, or policy changes.
 
@@ -811,7 +811,7 @@ acme-client-rs run --days 30 --reissue-on-mismatch --cert-output cert.pem --key-
 
 The comparison is case-insensitive and normalizes IP addresses (IPv4 and IPv6). If the existing certificate cannot be parsed, the mismatch check is skipped and ARI/days checks proceed normally (fail-safe).
 
-> **Note:** When `--reissue-on-mismatch` triggers reissuance, `ari_cert_id` is NOT set — this is a new order, not a `replaceOrder` (RFC 9702), because the certificate being replaced has different identifiers.
+> **Note:** When `--reissue-on-mismatch` triggers reissuance, `ari_cert_id` is NOT set — this is a new order, not a `replaceOrder` (RFC 9773), because the certificate being replaced has different identifiers.
 
 ### Bash Script: Issue and Renew
 
@@ -1277,7 +1277,7 @@ Global options can be placed before or after the subcommand.
 | `deactivate-account` | Deactivate the current account |
 | `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5) |
 | `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1) |
-| `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9702) |
+| `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9773) |
 | `list-profiles` | List certificate profiles advertised by the ACME server (draft-ietf-acme-profiles-01) |
 | `revoke-cert <path>` | Revoke a certificate |
 | `run <domains...>` | Run the full ACME flow end-to-end |
@@ -1307,7 +1307,7 @@ Global options can be placed before or after the subcommand.
 | `--persist-policy <POLICY>` | - | Policy for dns-persist-01 records (e.g., `wildcard` for wildcard + subdomain scope) |
 | `--persist-until <TIMESTAMP>` | - | Unix timestamp for dns-persist-01 `persistUntil` parameter |
 | `--cert-key-algorithm <ALG>` | `ec-p256` | Certificate key algorithm for CSR: `ec-p256`, `ec-p384`, or `ed25519` |
-| `--ari` | `false` | **ARI renewal mode (RFC 9702):** query the server's suggested renewal window and skip issuance if the window has not opened. When renewing, the `replaces` field is included in the order to link the new cert to the old one. Falls back to `--days` if ARI is unavailable. |
+| `--ari` | `false` | **ARI renewal mode (RFC 9773):** query the server's suggested renewal window and skip issuance if the window has not opened. When renewing, the `replaces` field is included in the order to link the new cert to the old one. Falls back to `--days` if ARI is unavailable. |
 | `--reissue-on-mismatch` | `false` | Allow reissuance when requested domains differ from the existing certificate's SANs (default: skip with warning) |
 | `--print-cert` | `false` | Print the issued certificate PEM to stdout after saving to file |
 | `--profile <NAME>` | - | Certificate profile to request (draft-ietf-acme-profiles-01). Use `list-profiles` to see available options. |

@@ -85,7 +85,7 @@ graph TD
 
     ARI_CHECK{"--ari flag?"}
 
-    ARI_CHECK -- Yes --> ARI_QUERY["Query ACME server<br/>renewal info (RFC 9702)"]
+    ARI_CHECK -- Yes --> ARI_QUERY["Query ACME server<br/>renewal info (RFC 9773)"]
     ARI_QUERY --> ARI_RESULT{"ARI result?"}
     ARI_RESULT -- "NOW < window.start" --> SKIP_ARI["SKIP: not yet<br/>in renewal window"]
     ARI_RESULT -- "window open" --> ARI_COMPUTE{"compute_cert_id<br/>succeeds?"}
@@ -121,7 +121,7 @@ graph TD
 
     %% Create order
     NEW_ORDER{"ari_cert_id<br/>available?"}
-    NEW_ORDER -- Yes --> REPLACE_ORD["new_order_replacing(profile)<br/>(RFC 9702)"]
+    NEW_ORDER -- Yes --> REPLACE_ORD["new_order_replacing(profile)<br/>(RFC 9773)"]
     NEW_ORDER -- No --> NORMAL_ORD["new_order(profile)"]
     REPLACE_ORD --> AUTHZ_MODE
     NORMAL_ORD --> AUTHZ_MODE
@@ -525,7 +525,7 @@ graph TD
     RI_URL -- Yes --> RI_READ
     RI_LOOKUP --> RI_READ["Read cert PEM → DER"]
     RI_READ --> RI_CID["compute_cert_id()"]
-    RI_CID --> RI_CALL["get_renewal_info()<br/>(RFC 9702)"]
+    RI_CID --> RI_CALL["get_renewal_info()<br/>(RFC 9773)"]
     RI_CALL --> RI_FMT{"--output-format?"}
 
     RI_FMT -- json --> RI_JSON["JSON: cert_id,<br/>window.start/end,<br/>retry_after"]
@@ -576,7 +576,7 @@ graph TD
 1. **Config precedence**:
    - **Without `--config` / `ACME_CONFIG`** (legacy mode): CLI > env > defaults.
    - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_CONNECT_TIMEOUT`) are actively stripped so the config file is the single source of truth. Secret/safety env vars (`ACME_INSECURE`, `ACME_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
-2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9702) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
+2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9773) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
 3. **Authorization path split**: `--dns-hook` + DNS challenge type triggers **phased parallel** (5 phases with concurrent propagation checks); everything else goes **sequential**. Sequential DNS paths are always manual (no hook) — hook-based DNS always takes the parallel path.
 4. **Parallel phase 2 is conditional**: DNS propagation wait (phase 2) only runs if `--dns-wait` is set. Without it, phase 1 goes directly to phase 3.
 5. **Challenge terminal logic**: Only `status == Invalid` is terminal; `Pending` with an error field keeps polling (allows step-ca retry).

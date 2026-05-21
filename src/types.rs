@@ -411,7 +411,7 @@ pub struct NewOrderRequest {
     pub not_before: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_after: Option<String>,
-    /// ARI replacement indicator (RFC 9702 §5) - the certID of the cert being replaced.
+    /// ARI replacement indicator (RFC 9773 §5) - the certID of the cert being replaced.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replaces: Option<String>,
     /// Certificate profile (draft-ietf-acme-profiles-01 §4).
@@ -788,13 +788,55 @@ pub struct Subproblem {
 
 // ── Certificate revocation (RFC 8555 §7.6) ──────────────────────────────────
 
-// ── ACME Renewal Information (RFC 9702) ──────────────────────────────────────
+// ── ACME Renewal Information (RFC 9773) ──────────────────────────────────────
 
-/// ARI renewal info response (RFC 9702 §4.2).
+/// ARI renewal info response (RFC 9773 §4.2).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenewalInfo {
     pub suggested_window: RenewalInfoWindow,
+    #[serde(
+        default,
+        rename = "explanationURL",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub explanation_url: Option<String>,
+}
+
+impl RenewalInfo {
+    /// Validate the suggested window per RFC 9773 §4.2: both endpoints MUST
+    /// be RFC 3339 timestamps and `end` MUST be strictly after `start`.
+    pub fn validate_window(&self) -> anyhow::Result<()> {
+        use anyhow::Context as _;
+        let start = time::OffsetDateTime::parse(
+            &self.suggested_window.start,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .with_context(|| {
+            format!(
+                "ARI suggestedWindow.start is not a valid RFC 3339 timestamp: {}",
+                self.suggested_window.start
+            )
+        })?;
+        let end = time::OffsetDateTime::parse(
+            &self.suggested_window.end,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .with_context(|| {
+            format!(
+                "ARI suggestedWindow.end is not a valid RFC 3339 timestamp: {}",
+                self.suggested_window.end
+            )
+        })?;
+        if end <= start {
+            anyhow::bail!(
+                "ARI suggestedWindow violates RFC 9773 §4.2: end ({}) must be strictly after start ({})",
+                self.suggested_window.end,
+                self.suggested_window.start,
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Time window within which the client should attempt renewal.
