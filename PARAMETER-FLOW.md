@@ -198,10 +198,13 @@ graph TD
     SEQ_LOOP -- "All done" --> GEN_CSR
 
     %% CSR & Finalize
-    GEN_CSR["Generate CSR<br/>--cert-key-algorithm"] --> CSR_ALG{"algorithm?"}
+    GEN_CSR["Build CSR"] --> REUSE_KEY{"--reuse-key set?"}
+    REUSE_KEY -- "Yes" --> LOAD_KEY["Load unencrypted PKCS#8 PEM<br/>from --reuse-key (algorithm auto-detected)"]
+    REUSE_KEY -- "No" --> CSR_ALG{"--cert-key-algorithm?"}
     CSR_ALG -- ec-p256 --> EC256["ECDSA P-256"]
     CSR_ALG -- ec-p384 --> EC384["ECDSA P-384"]
     CSR_ALG -- ed25519 --> ED25519["Ed25519"]
+    LOAD_KEY --> FINALIZE
     EC256 --> FINALIZE
     EC384 --> FINALIZE
     ED25519 --> FINALIZE
@@ -210,7 +213,9 @@ graph TD
     POLL_FIN --> DOWNLOAD["Download certificate"]
 
     %% Save key first, then cert (matches code order)
-    DOWNLOAD --> KEY_ENC{"--key-password or<br/>--key-password-file?"}
+    DOWNLOAD --> SAME_PATH{"--reuse-key path<br/>== --key-output?"}
+    SAME_PATH -- "Yes" --> SAVE_CERT["Save cert to<br/>--cert-output<br/>(skip key write)"]
+    SAME_PATH -- "No" --> KEY_ENC{"--key-password or<br/>--key-password-file?"}
     KEY_ENC -- Yes --> ENCRYPT["Encrypt private key<br/>(scrypt + AES-256-CBC)"]
     KEY_ENC -- No --> SAVE_RAW["Save key unencrypted"]
     ENCRYPT --> SAVE_KEY["Save key to<br/>--key-output"]
@@ -238,7 +243,7 @@ graph TD
     class BAIL_DOMAIN,BAIL_IP,BAIL_IP2,BAIL_IDN,FAIL_AUTH error
     class SKIP_ARI,SKIP_DAYS,SKIP_MISMATCH skip
     class DONE success
-    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PROF_VAL,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,CSR_ALG,PRE_CH_TYPE,P2_CHECK,PRINT_CERT decision
+    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PROF_VAL,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,REUSE_KEY,CSR_ALG,SAME_PATH,PRE_CH_TYPE,P2_CHECK,PRINT_CERT decision
 ```
 
 ### Configuration Commands

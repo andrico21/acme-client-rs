@@ -275,6 +275,9 @@ fn apply_run(
     if args.on_cert_issued.is_none() {
         args.on_cert_issued.clone_from(&cfg_run.on_cert_issued);
     }
+    if args.reuse_key.is_none() {
+        args.reuse_key.clone_from(&cfg_run.reuse_key);
+    }
     if !args.pre_authorize && cfg_run.pre_authorize == Some(true) {
         args.pre_authorize = true;
     }

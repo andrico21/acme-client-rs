@@ -1296,6 +1296,7 @@ Global options can be placed before or after the subcommand.
 | `--challenge-timeout <SECONDS>` | `300` | Max seconds to wait for challenge validation after responding (polls every 2s) |
 | `--cert-output <PATH>` | `certificate.pem` | Save the certificate to this file |
 | `--key-output <PATH>` | `private.key` | Save the private key to this file |
+| `--reuse-key <PATH>` | - | Reuse an existing unencrypted PKCS#8 PEM key for the CSR instead of generating a fresh one (e.g. for DANE TLSA pinning, HSM-bound keys, or external key custody). If this path differs from `--key-output` the key is copied through to `--key-output`. Algorithm is auto-detected from the loaded key; `--cert-key-algorithm` is ignored. RFC 8555 §11.1 permits reusing certificate keys; only account keys must be unique. |
 | `--days <N>` | - | **Renewal mode:** skip issuance if existing `--cert-output` has more than N days remaining. Use this to make `run` idempotent for cron/scheduled tasks. |
 | `--key-password <PW>` | - | Encrypt the private key (PKCS#8, AES-256-CBC + scrypt KDF) |
 | `--key-password-file <PATH>` | - | Read the key encryption password from a file (first line) |

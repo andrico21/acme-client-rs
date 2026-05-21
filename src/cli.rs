@@ -607,6 +607,9 @@ pub(crate) struct RunArgs {
     /// Save the private key to this file
     #[arg(long, default_value = crate::defaults::run::KEY_OUTPUT_FILE)]
     pub(crate) key_output: PathBuf,
+    /// Reuse an existing unencrypted PKCS#8 PEM key for the CSR instead of generating a fresh one (e.g. for DANE TLSA pinning). If this path differs from --key-output the key is copied through.
+    #[arg(long)]
+    pub(crate) reuse_key: Option<PathBuf>,
     /// Skip renewal if existing certificate has more than N days remaining
     #[arg(long)]
     pub(crate) days: Option<u32>,

@@ -73,6 +73,8 @@ pub struct RunConfig {
     pub cert_output: Option<PathBuf>,
     /// Save the private key to this file.
     pub key_output: Option<PathBuf>,
+    /// Reuse an existing PKCS#8 PEM key for the CSR instead of generating a fresh one.
+    pub reuse_key: Option<PathBuf>,
     /// Skip renewal if existing certificate has more than N days remaining.
     pub days: Option<u32>,
     /// Read the private key encryption password from a file.

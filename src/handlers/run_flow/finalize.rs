@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::client::AcmeClient;
-use crate::csr::{encrypt_private_key, generate_csr};
+use crate::csr::{build_csr_with_keypair, encrypt_private_key, generate_csr, load_keypair_from_pem_file};
 use crate::outln;
 use crate::types::{Order, OrderStatus};
 
@@ -35,10 +35,17 @@ pub(super) async fn finalize(
     // so it MUST run on the blocking pool, not the async runtime.
     let domains_for_csr = ctx.domains.clone();
     let cert_key_alg = ctx.cert_key_alg;
-    let (csr_der, key_pem) =
-        tokio::task::spawn_blocking(move || generate_csr(&domains_for_csr, cert_key_alg))
-            .await
-            .context("CSR generation task panicked")??;
+    let reuse_key_path = ctx.reuse_key.map(|p| p.to_path_buf());
+    let (csr_der, key_pem) = tokio::task::spawn_blocking(move || {
+        if let Some(path) = reuse_key_path {
+            let kp = load_keypair_from_pem_file(&path)?;
+            build_csr_with_keypair(&domains_for_csr, &kp)
+        } else {
+            generate_csr(&domains_for_csr, cert_key_alg)
+        }
+    })
+    .await
+    .context("CSR generation task panicked")??;
     let mut order = client.finalize_order(&order.finalize, &csr_der).await?;
     if !ctx.json && !ctx.silent {
         outln!("Order status: {}", order.status);
@@ -122,25 +129,38 @@ pub(super) async fn finalize(
     } else {
         zeroize::Zeroizing::new(key_pem.as_bytes().to_vec())
     };
-    let key_output_owned = ctx.key_output.to_path_buf();
-    let force = ctx.force;
-    let key_display = ctx.key_output.display().to_string();
-    tokio::task::spawn_blocking(move || {
-        crate::fs_secure::write_secret_file(
-            &key_output_owned,
-            &key_bytes,
-            if force {
-                crate::fs_secure::Overwrite::Allow
-            } else {
-                crate::fs_secure::Overwrite::Forbid
-            },
-        )
-    })
-    .await
-    .context("write_secret_file task panicked")?
-    .with_context(|| format!("failed to write private key to {key_display}"))?;
+    // --reuse-key path == --key-output path → on-disk file is the source of
+    // truth; skip the write so we don't trip the SEC-08 "refusing to
+    // overwrite" guardrail and don't re-encode an unchanged key.
+    let skip_key_write = ctx
+        .reuse_key
+        .is_some_and(|src| paths_resolve_same(src, ctx.key_output));
+    if !skip_key_write {
+        let key_output_owned = ctx.key_output.to_path_buf();
+        let force = ctx.force;
+        let key_display = ctx.key_output.display().to_string();
+        tokio::task::spawn_blocking(move || {
+            crate::fs_secure::write_secret_file(
+                &key_output_owned,
+                &key_bytes,
+                if force {
+                    crate::fs_secure::Overwrite::Allow
+                } else {
+                    crate::fs_secure::Overwrite::Forbid
+                },
+            )
+        })
+        .await
+        .context("write_secret_file task panicked")?
+        .with_context(|| format!("failed to write private key to {key_display}"))?;
+    }
     if !ctx.json && !ctx.silent {
-        if key_encrypted {
+        if skip_key_write {
+            outln!(
+                "Private key reused from {} (not rewritten)",
+                ctx.key_output.display()
+            );
+        } else if key_encrypted {
             outln!(
                 "Private key saved to {} (encrypted)",
                 ctx.key_output.display()
@@ -195,4 +215,11 @@ pub(super) async fn finalize(
     }
 
     Ok(())
+}
+
+fn paths_resolve_same(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
 }

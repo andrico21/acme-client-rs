@@ -158,6 +158,15 @@
 # Default: "private.key"
 # key_output = "/etc/ssl/private/example.com.key"
 
+# Reuse an existing unencrypted PKCS#8 PEM key for the CSR instead of
+# generating a fresh one each run. Use cases: DANE TLSA selector=1
+# pinning, HSM-bound keys, audit/key-custody continuity. If this path
+# equals key_output the on-disk file is left untouched; if it differs
+# the key is copied through (and encrypted at the destination if
+# key_password_file is set).
+# CLI: --reuse-key
+# reuse_key = "/etc/ssl/private/example.com.key"
+
 # Renewal mode: skip issuance if the existing certificate at cert_output has
 # more than N days remaining. Makes `run` idempotent for cron/scheduled tasks.
 # The command exits 0 whether it renewed or skipped.
