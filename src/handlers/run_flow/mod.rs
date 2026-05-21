@@ -92,6 +92,18 @@ pub(crate) async fn cmd_run(
         cli.unsafe_hooks,
     )?;
 
+    // Pre-flight: refuse to start if --key-output exists but neither
+    // --reuse-key nor --force is set. Catches the footgun where issuance
+    // succeeds at the CA but the key write fails after the fact, orphaning
+    // the certificate. Fail fast before contacting the ACME server.
+    if !args.force && args.reuse_key.is_none() && args.key_output.exists() {
+        anyhow::bail!(
+            "private key already exists at {}: pass --reuse-key {} to reuse it, or --force to overwrite",
+            args.key_output.display(),
+            args.key_output.display(),
+        );
+    }
+
     let domains: Vec<String> = args
         .domains
         .iter()
