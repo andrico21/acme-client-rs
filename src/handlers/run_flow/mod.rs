@@ -42,12 +42,12 @@ pub(super) struct RunContext<'a> {
     pub key_output: &'a std::path::Path,
     pub reuse_key: Option<&'a std::path::Path>,
     pub days: Option<u32>,
-    pub key_password: Option<&'a str>,
+    pub key_password: Option<secrecy::SecretString>,
     pub key_password_file: Option<&'a std::path::Path>,
     pub on_challenge_ready: Option<&'a std::path::Path>,
     pub on_cert_issued: Option<&'a std::path::Path>,
     pub eab_kid: Option<&'a str>,
-    pub eab_hmac_key: Option<&'a str>,
+    pub eab_hmac_key: Option<secrecy::SecretString>,
     pub pre_authorize: bool,
     pub ari: bool,
     pub reissue_on_mismatch: bool,
@@ -126,12 +126,18 @@ pub(crate) async fn cmd_run(
         key_output: &args.key_output,
         reuse_key: args.reuse_key.as_deref(),
         days: args.days,
-        key_password: args.key_password.as_deref(),
+        key_password: args
+            .key_password
+            .as_ref()
+            .map(|s| secrecy::SecretString::from(s.clone())),
         key_password_file: args.key_password_file.as_deref(),
         on_challenge_ready: args.on_challenge_ready.as_deref(),
         on_cert_issued: args.on_cert_issued.as_deref(),
         eab_kid: args.eab_kid.as_deref(),
-        eab_hmac_key: args.eab_hmac_key.as_deref(),
+        eab_hmac_key: args
+            .eab_hmac_key
+            .as_ref()
+            .map(|s| secrecy::SecretString::from(s.clone())),
         pre_authorize: args.pre_authorize,
         ari: args.ari,
         reissue_on_mismatch: args.reissue_on_mismatch,
@@ -163,7 +169,12 @@ pub(crate) async fn cmd_run(
         None => build_client(ctx.cli).await?,
     };
     let contact_list = ctx.contact.take().map(|c| vec![format!("mailto:{c}")]);
-    let eab = parse_eab(ctx.eab_kid, ctx.eab_hmac_key)?;
+    let eab = parse_eab(
+        ctx.eab_kid,
+        ctx.eab_hmac_key
+            .as_ref()
+            .map(<secrecy::SecretString as secrecy::ExposeSecret<str>>::expose_secret),
+    )?;
     let eab_ref = eab.as_ref().map(|(kid, key)| {
         use secrecy::ExposeSecret;
         (kid.as_str(), key.expose_secret().as_slice())

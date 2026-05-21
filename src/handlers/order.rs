@@ -174,7 +174,7 @@ pub(crate) async fn cmd_finalize(
     domains: &[String],
     cert_key_alg: CertKeyAlgorithm,
     key_output: &std::path::Path,
-    key_password: Option<&str>,
+    key_password: Option<secrecy::SecretString>,
     key_password_file: Option<&std::path::Path>,
     force: bool,
 ) -> Result<()> {
@@ -197,7 +197,7 @@ pub(crate) async fn cmd_finalize(
             .context("CSR generation task panicked")??;
 
     let password: Option<secrecy::SecretString> = if let Some(pw) = key_password {
-        Some(secrecy::SecretString::from(pw.to_string()))
+        Some(pw)
     } else if let Some(path) = key_password_file {
         crate::fs_secure::warn_if_world_readable(path, "password");
         let content = zeroize::Zeroizing::new(

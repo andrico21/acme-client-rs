@@ -830,12 +830,8 @@ mod regression_tests {
 
     /// Spawn an inline HTTP/1.1 mock on the given pre-bound listener.
     /// Routes are matched by method + path-prefix.
-    fn spawn_mock(
-        listener: TcpListener,
-        routes: Vec<Route>,
-    ) -> Arc<Mutex<Vec<CapturedRequest>>> {
-        let captured: Arc<Mutex<Vec<CapturedRequest>>> =
-            Arc::new(Mutex::new(Vec::new()));
+    fn spawn_mock(listener: TcpListener, routes: Vec<Route>) -> Arc<Mutex<Vec<CapturedRequest>>> {
+        let captured: Arc<Mutex<Vec<CapturedRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let captured_clone = Arc::clone(&captured);
         let routes = Arc::new(routes);
         let nonce_counter = Arc::new(Mutex::new(0u64));
@@ -852,13 +848,7 @@ mod regression_tests {
                     // Fire-and-forget: any I/O failure simply drops the
                     // connection. The test will fail loudly via missing
                     // captured requests if the mock can't talk.
-                    let _ = handle_connection(
-                        socket,
-                        &captured,
-                        &routes,
-                        &nonce_counter,
-                    )
-                    .await;
+                    let _ = handle_connection(socket, &captured, &routes, &nonce_counter).await;
                 });
             }
         });
@@ -889,10 +879,10 @@ mod regression_tests {
             }
         };
 
-        let header_slice = buf.get(..header_end.saturating_sub(4))
+        let header_slice = buf
+            .get(..header_end.saturating_sub(4))
             .ok_or_else(|| anyhow!("header range"))?;
-        let header_text = std::str::from_utf8(header_slice)
-            .context("headers not UTF-8")?;
+        let header_text = std::str::from_utf8(header_slice).context("headers not UTF-8")?;
         let mut lines = header_text.split("\r\n");
         let request_line = lines.next().ok_or_else(|| anyhow!("no request line"))?;
         let mut parts = request_line.split_whitespace();
@@ -908,8 +898,7 @@ mod regression_tests {
             }
         }
 
-        let body_slice = buf.get(header_end..)
-            .ok_or_else(|| anyhow!("body range"))?;
+        let body_slice = buf.get(header_end..).ok_or_else(|| anyhow!("body range"))?;
         let mut body = body_slice.to_vec();
         while body.len() < content_length {
             let mut chunk = [0u8; 4096];
@@ -930,10 +919,9 @@ mod regression_tests {
             });
         }
 
-        let route = routes.iter().find(|r| {
-            r.method.eq_ignore_ascii_case(&method)
-                && path.starts_with(r.path_prefix)
-        });
+        let route = routes
+            .iter()
+            .find(|r| r.method.eq_ignore_ascii_case(&method) && path.starts_with(r.path_prefix));
         let response = match route {
             Some(r) => {
                 let counter_value = {
@@ -944,7 +932,9 @@ mod regression_tests {
                 let nonce = format!("nonce-{counter_value:08}");
                 build_response(r, &nonce)
             }
-            None => b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec(),
+            None => {
+                b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n".to_vec()
+            }
         };
         socket.write_all(&response).await?;
         socket.shutdown().await?;
@@ -979,8 +969,7 @@ mod regression_tests {
     }
 
     async fn build_client(port: u16) -> Result<AcmeClient> {
-        let (tls, net) =
-            super::super::net_policy::policies_from_cli_flags(true, true);
+        let (tls, net) = super::super::net_policy::policies_from_cli_flags(true, true);
         let key = AccountKey::generate(KeyAlgorithm::Es256)?;
         let url = format!("http://127.0.0.1:{port}/directory");
         AcmeClient::new(&url, key, tls, 5, net).await
@@ -992,10 +981,7 @@ mod regression_tests {
                 method: "GET",
                 path_prefix: "/directory",
                 status_line: "HTTP/1.1 200 OK",
-                extra_headers: vec![(
-                    "content-type".into(),
-                    "application/json".into(),
-                )],
+                extra_headers: vec![("content-type".into(), "application/json".into())],
                 body: directory_json(port, include_ari),
             },
             Route {
@@ -1021,19 +1007,13 @@ mod regression_tests {
         ]
     }
 
-    fn collect_captured(
-        captured: &Mutex<Vec<CapturedRequest>>,
-    ) -> Result<Vec<CapturedRequest>> {
-        Ok(captured
-            .lock()
-            .map_err(|_| anyhow!("poisoned"))?
-            .clone())
+    fn collect_captured(captured: &Mutex<Vec<CapturedRequest>>) -> Result<Vec<CapturedRequest>> {
+        Ok(captured.lock().map_err(|_| anyhow!("poisoned"))?.clone())
     }
 
     // ── T1 ──────────────────────────────────────────────────────────────
     #[tokio::test]
-    async fn create_account_signs_with_jwk_even_when_account_url_set()
-    -> Result<()> {
+    async fn create_account_signs_with_jwk_even_when_account_url_set() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let captured = spawn_mock(listener, account_routes(port, false));
@@ -1061,8 +1041,7 @@ mod regression_tests {
 
     // ── T2 ──────────────────────────────────────────────────────────────
     #[tokio::test]
-    async fn create_account_twice_still_signs_with_jwk_on_second_call()
-    -> Result<()> {
+    async fn create_account_twice_still_signs_with_jwk_on_second_call() -> Result<()> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let port = listener.local_addr()?.port();
         let captured = spawn_mock(listener, account_routes(port, false));
@@ -1103,8 +1082,7 @@ mod regression_tests {
     #[tokio::test]
     async fn get_renewal_info_uses_unauthenticated_get() -> Result<()> {
         use rcgen::{
-            BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair,
-            PKCS_ECDSA_P256_SHA256,
+            BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, PKCS_ECDSA_P256_SHA256,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -1123,13 +1101,11 @@ mod regression_tests {
         // Leaf cert signed by a CA so it carries the AKI extension required
         // by RFC 9773 §4.1 certID computation.
         let issuer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let mut issuer_params =
-            CertificateParams::new(vec!["Test CA".into()])?;
+        let mut issuer_params = CertificateParams::new(vec!["Test CA".into()])?;
         issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         let issuer = Issuer::new(issuer_params, issuer_key);
         let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
-        let mut leaf_params =
-            CertificateParams::new(vec!["test.example".into()])?;
+        let mut leaf_params = CertificateParams::new(vec!["test.example".into()])?;
         leaf_params.use_authority_key_identifier_extension = true;
         let leaf = leaf_params.signed_by(&leaf_key, &issuer)?;
         let cert_der = leaf.der().to_vec();
@@ -1166,14 +1142,16 @@ mod regression_tests {
     // ── T4 ──────────────────────────────────────────────────────────────
     #[test]
     fn renewal_info_validate_window_rejects_inverted_window() -> Result<()> {
-        let json = r#"{"suggestedWindow":{"start":"2026-01-02T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
+        let json =
+            r#"{"suggestedWindow":{"start":"2026-01-02T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
         let info: RenewalInfo = serde_json::from_str(json)?;
         assert!(
             info.validate_window().is_err(),
             "inverted window (end<start) must be rejected"
         );
 
-        let json_equal = r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
+        let json_equal =
+            r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-01T00:00:00Z"}}"#;
         let info_equal: RenewalInfo = serde_json::from_str(json_equal)?;
         assert!(
             info_equal.validate_window().is_err(),
@@ -1193,7 +1171,8 @@ mod regression_tests {
             Some("https://example.com/why")
         );
 
-        let json_absent = r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}}"#;
+        let json_absent =
+            r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}}"#;
         let info_absent: RenewalInfo = serde_json::from_str(json_absent)?;
         assert!(info_absent.explanation_url.is_none());
         Ok(())

@@ -78,6 +78,10 @@ fn apply_global(
             ("account_url", "ACME_ACCOUNT_URL"),
             ("output_format", "ACME_OUTPUT_FORMAT"),
             ("connect_timeout", "ACME_CONNECT_TIMEOUT"),
+            ("allow_private_network", "ACME_ALLOW_PRIVATE_NETWORK"),
+            ("unsafe_hooks", "ACME_UNSAFE_HOOKS"),
+            ("dns_check_mode", "ACME_DNS_CHECK_MODE"),
+            ("dns_check_dnssec", "ACME_DNS_CHECK_DNSSEC"),
         ] {
             if matches.value_source(id) == Some(ValueSource::EnvVariable) {
                 tracing::debug!(
@@ -154,26 +158,20 @@ fn apply_global(
         }
     }
 
-    if matches!(
-        matches.value_source("allow_private_network"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(v) = cfg.allow_private_network
+    if should_apply_config(matches.value_source("allow_private_network"))
+        && let Some(v) = cfg.allow_private_network
     {
         cli.allow_private_network = v;
     }
 
-    if matches!(
-        matches.value_source("unsafe_hooks"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(v) = cfg.unsafe_hooks
+    if should_apply_config(matches.value_source("unsafe_hooks"))
+        && let Some(v) = cfg.unsafe_hooks
     {
         cli.unsafe_hooks = v;
     }
 
-    if matches!(
-        matches.value_source("dns_check_mode"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(ref s) = cfg.dns_check_mode
+    if should_apply_config(matches.value_source("dns_check_mode"))
+        && let Some(ref s) = cfg.dns_check_mode
     {
         if let Ok(m) = <DnsCheckMode as clap::ValueEnum>::from_str(s, true) {
             cli.dns_check_mode = m;
@@ -184,10 +182,8 @@ fn apply_global(
         }
     }
 
-    if matches!(
-        matches.value_source("dns_check_dnssec"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(v) = cfg.dns_check_dnssec
+    if should_apply_config(matches.value_source("dns_check_dnssec"))
+        && let Some(v) = cfg.dns_check_dnssec
     {
         cli.dns_check_dnssec = v;
     }
@@ -204,6 +200,19 @@ fn apply_run(
     };
 
     if let Some((_, sub_matches)) = matches.subcommand() {
+        use clap::parser::ValueSource;
+
+        if config_mode {
+            for (id, env_name) in [("profile", "ACME_PROFILE")] {
+                if sub_matches.value_source(id) == Some(ValueSource::EnvVariable) {
+                    tracing::debug!(
+                        "Config file mode: ignoring {env_name} env var (use --config values or pass --{} on CLI)",
+                        id.replace('_', "-"),
+                    );
+                }
+            }
+        }
+
         if should_apply_config(sub_matches.value_source("challenge_type"))
             && let Some(ref v) = cfg_run.challenge_type
         {
@@ -230,6 +239,21 @@ fn apply_run(
         {
             args.cert_key_algorithm = a;
         }
+        if should_apply_config(sub_matches.value_source("dns_propagation_concurrency"))
+            && let Some(v) = cfg_run.dns_propagation_concurrency
+        {
+            args.dns_propagation_concurrency = v;
+        }
+        if should_apply_config(sub_matches.value_source("challenge_timeout"))
+            && let Some(v) = cfg_run.challenge_timeout
+        {
+            args.challenge_timeout = v;
+        }
+        if should_apply_config(sub_matches.value_source("profile"))
+            && let Some(ref v) = cfg_run.profile
+        {
+            args.profile = Some(v.clone());
+        }
     }
 
     if args.domains.is_empty() {
@@ -254,16 +278,6 @@ fn apply_run(
     }
     if args.dns_wait.is_none() {
         args.dns_wait = cfg_run.dns_wait;
-    }
-    if args.dns_propagation_concurrency == 5
-        && let Some(v) = cfg_run.dns_propagation_concurrency
-    {
-        args.dns_propagation_concurrency = v;
-    }
-    if args.challenge_timeout == 300
-        && let Some(v) = cfg_run.challenge_timeout
-    {
-        args.challenge_timeout = v;
     }
     if args.days.is_none() {
         args.days = cfg_run.days;
@@ -295,9 +309,6 @@ fn apply_run(
     }
     if args.persist_until.is_none() {
         args.persist_until = cfg_run.persist_until;
-    }
-    if args.profile.is_none() {
-        args.profile.clone_from(&cfg_run.profile);
     }
 
     // Secrets remain allowed from env even in config mode:

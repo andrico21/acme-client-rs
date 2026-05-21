@@ -154,7 +154,9 @@ async fn run(
                 contact.clone(),
                 *agree_tos,
                 eab_kid.as_deref(),
-                eab_hmac_key.as_deref(),
+                eab_hmac_key
+                    .as_ref()
+                    .map(|s| secrecy::SecretString::from(s.clone())),
             )
             .await
         }
@@ -199,7 +201,9 @@ async fn run(
                 domains,
                 *cert_key_algorithm,
                 key_output,
-                key_password.as_deref(),
+                key_password
+                    .as_ref()
+                    .map(|s| secrecy::SecretString::from(s.clone())),
                 key_password_file.as_deref(),
                 *force,
             )

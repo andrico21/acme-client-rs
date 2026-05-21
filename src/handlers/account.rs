@@ -80,7 +80,7 @@ pub(crate) async fn cmd_account(
     contact: Vec<String>,
     agree_tos: bool,
     eab_kid: Option<&str>,
-    eab_hmac_key: Option<&str>,
+    eab_hmac_key: Option<secrecy::SecretString>,
 ) -> Result<()> {
     let mut client = build_client(cli).await?;
     let contact = if contact.is_empty() {
@@ -88,7 +88,12 @@ pub(crate) async fn cmd_account(
     } else {
         Some(contact.into_iter().map(|c| format!("mailto:{c}")).collect())
     };
-    let eab = parse_eab(eab_kid, eab_hmac_key)?;
+    let eab = parse_eab(
+        eab_kid,
+        eab_hmac_key
+            .as_ref()
+            .map(<secrecy::SecretString as secrecy::ExposeSecret<str>>::expose_secret),
+    )?;
     let eab_ref = eab.as_ref().map(|(kid, key)| {
         use secrecy::ExposeSecret;
         (kid.as_str(), key.expose_secret().as_slice())

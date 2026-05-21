@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::client::AcmeClient;
-use crate::csr::{build_csr_with_keypair, encrypt_private_key, generate_csr, load_keypair_from_pem_file};
+use crate::csr::{
+    build_csr_with_keypair, encrypt_private_key, generate_csr, load_keypair_from_pem_file,
+};
 use crate::outln;
 use crate::types::{Order, OrderStatus};
 
@@ -35,7 +37,7 @@ pub(super) async fn finalize(
     // so it MUST run on the blocking pool, not the async runtime.
     let domains_for_csr = ctx.domains.clone();
     let cert_key_alg = ctx.cert_key_alg;
-    let reuse_key_path = ctx.reuse_key.map(|p| p.to_path_buf());
+    let reuse_key_path = ctx.reuse_key.map(std::path::Path::to_path_buf);
     let (csr_der, key_pem) = tokio::task::spawn_blocking(move || {
         if let Some(path) = reuse_key_path {
             let kp = load_keypair_from_pem_file(&path)?;
@@ -97,8 +99,8 @@ pub(super) async fn finalize(
         .context("order is valid but has no certificate URL")?;
     let cert = client.download_certificate(&cert_url).await?;
 
-    let password: Option<secrecy::SecretString> = if let Some(pw) = ctx.key_password {
-        Some(secrecy::SecretString::from(pw.to_string()))
+    let password: Option<secrecy::SecretString> = if let Some(pw) = ctx.key_password.take() {
+        Some(pw)
     } else if let Some(path) = ctx.key_password_file {
         crate::fs_secure::warn_if_world_readable(path, "password");
         let content = zeroize::Zeroizing::new(
