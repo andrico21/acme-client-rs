@@ -1,6 +1,6 @@
 [package]
 name = "acme-client-rs"
-version = "2.1.3"
+version = "2.1.4"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -41,6 +41,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 # ── Correctness / safety (deny) ──────────────────────────────────────────────
 await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
 indexing_slicing = "deny"
 wildcard_enum_match_arm = "deny"
 fn_params_excessive_bools = "deny"
@@ -49,6 +50,13 @@ mem_forget = "deny"
 lossy_float_literal = "deny"
 float_cmp = "deny"
 float_cmp_const = "deny"
+# Unsafe / alignment hazards. Defense-in-depth behind `unsafe_code = "forbid"`
+# above — these cannot fire while unsafe is forbidden, but stay correct if the
+# forbid is ever weakened to deny. Sourced from RUST_GUIDELINES §9
+# "Lints for LLM-generated code".
+cast_ptr_alignment = "deny"
+transmute_ptr_to_ref = "deny"
+not_unsafe_ptr_arg_deref = "deny"
 # ── Panic prevention (deny) ──────────────────────────────────────────────────
 unwrap_used = "deny"
 expect_used = "deny"
@@ -67,6 +75,7 @@ needless_pass_by_value = "warn"
 ptr_arg = "warn"
 inefficient_to_string = "warn"
 large_stack_arrays = "warn"
+large_stack_frames = "warn"
 mutex_atomic = "warn"
 # ── Broad opt-in groups (warn) ───────────────────────────────────────────────
 pedantic = { level = "warn", priority = -1 }
