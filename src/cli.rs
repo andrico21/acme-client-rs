@@ -470,7 +470,7 @@ Note: Not all ACME servers support pre-authorization.
         /// Domain or IP to pre-authorize
         #[arg(long, required = true)]
         domain: String,
-        /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
+        /// Challenge type to use (http-01 | dns-01 | tls-alpn-01 | dns-persist-01)
         #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
         challenge_type: String,
     },
@@ -581,7 +581,7 @@ pub(crate) struct RunArgs {
     /// Contact email
     #[arg(long)]
     pub(crate) contact: Option<String>,
-    /// Challenge type to use (http-01 | dns-01 | tls-alpn-01)
+    /// Challenge type to use (http-01 | dns-01 | tls-alpn-01 | dns-persist-01)
     #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
     pub(crate) challenge_type: String,
     /// HTTP-01 server port (standalone mode)

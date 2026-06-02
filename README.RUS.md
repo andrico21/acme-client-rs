@@ -485,7 +485,7 @@ acme-client-rs generate-config > acme-client-rs.toml
 **Приоритет без конфигурационного файла:** флаги CLI > переменные окружения > встроенные значения по умолчанию.
 **Приоритет с конфигурационным файлом:** флаги CLI > конфигурационный файл > встроенные значения по умолчанию.
 
-При загрузке конфигурационного файла переменные окружения **игнорируются** -- конфигурационный файл является единственным источником данных. Исключения: `ACME_INSECURE`, пароли ключей (`--key-password-file`) и EAB-учётные данные (`--eab-kid`, `--eab-hmac-key`) по-прежнему читаются из окружения как запасной вариант для секретов, которые не должны храниться в файлах конфигурации.
+При загрузке конфигурационного файла переменные окружения **игнорируются** -- конфигурационный файл является единственным источником данных. Исключения: переключатель безопасности `ACME_INSECURE` и переменные с секретами, которые не должны храниться в файле конфигурации, по-прежнему читаются из окружения как запасной вариант. Эти секретные исключения: `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID` и `ACME_EAB_HMAC_KEY`.
 
 Поведение загрузки:
 - `--config <PATH>` (или переменная `ACME_CONFIG`): загрузка из указанного пути (переменные окружения игнорируются)
@@ -1247,9 +1247,16 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--config <PATH>` | | `ACME_CONFIG` | - | Путь к TOML-файлу конфигурации (при загрузке переменные окружения игнорируются, кроме секретов) |
 | `--directory <URL>` | `-d` | `ACME_DIRECTORY_URL` | `https://localhost:14000/dir` | URL директории ACME-сервера |
 | `--account-key <PATH>` | `-k` | `ACME_ACCOUNT_KEY_FILE` | `account.key` | Путь к ключу аккаунта (PKCS#8 PEM) |
+| `--account-key-password <PW>` | | `ACME_ACCOUNT_KEY_PASSWORD` | - | Пароль для расшифровки ключа аккаунта (виден в списке процессов — предпочитайте `--account-key-password-file`). Конфликтует с `--account-key-password-file`. |
+| `--account-key-password-file <PATH>` | | `ACME_ACCOUNT_KEY_PASSWORD_FILE` | - | Прочитать пароль расшифровки ключа аккаунта из файла (первая непустая строка). Конфликтует с `--account-key-password`. |
 | `--account-url <URL>` | `-a` | `ACME_ACCOUNT_URL` | - | URL аккаунта (требуется после создания аккаунта) |
 | `--output-format <FMT>` | | `ACME_OUTPUT_FORMAT` | `text` | Формат вывода: `text` (для человека) или `json` (структурированный) |
-| `--insecure` | | `ACME_INSECURE` | `false` | Отключить проверку TLS-сертификата (для тестирования с самоподписанными CA, такими как Pebble) |
+| `--insecure` | | `ACME_INSECURE` | `false` | Отключить проверку TLS-сертификата (для тестирования с самоподписанными CA, такими как Pebble). Подразумевает `--allow-private-network`. |
+| `--connect-timeout <SECONDS>` | | `ACME_CONNECT_TIMEOUT` | `15` | Таймаут HTTP-соединения (TCP + TLS handshake) в секундах. Таймаут запроса целиком фиксирован на 120 с. |
+| `--allow-private-network` | | `ACME_ALLOW_PRIVATE_NETWORK` | `false` | Разрешить обращение к приватным/loopback/link-local IP (RFC1918, 127/8, 169.254/16, `::1`, `fc00::/7`, `fe80::/10`). По умолчанию блокируется для предотвращения SSRF. Подразумевается `--insecure`. Включайте для внутренних/on-prem развёртываний ACME. |
+| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Понизить нарушения владельца/прав hook-скриптов с жёстких ошибок до предупреждений в stderr. По умолчанию запуск запрещён, если hook не абсолютный, не принадлежит текущему пользователю/root или доступен на запись группе/всем (или лежит в таком каталоге). Включайте, только если принимаете риск повышения привилегий. |
+| `--dns-check-mode <MODE>` | | `ACME_DNS_CHECK_MODE` | `authoritative` | Стратегия резолвера для проверок распространения DNS-01: `authoritative` (запрос напрямую к NS зоны, минуя кэши), `cached` (публичные резолверы 1.1.1.1/8.8.8.8/9.9.9.9) или `system` (resolv.conf хоста). |
+| `--dns-check-dnssec` | | `ACME_DNS_CHECK_DNSSEC` | `false` | Включить проверку DNSSEC при проверках распространения DNS-01. По умолчанию выключено (ошибочная настройка DNSSEC в родительской зоне вне вашего контроля вызвала бы ложные сбои). |
 | `--silent` | | - | `false` | Подавить весь вывод в stdout; только код завершения указывает на успех/ошибку |
 
 Глобальные опции можно указывать до или после субкоманды.
@@ -1259,20 +1266,20 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | Команда | Описание |
 |---|---|
 | `generate-config` | Генерация самодокументирующегося шаблона TOML-конфигурации |
-| `show-config` | Показать итоговую объединённую конфигурацию (с `--verbose` - источники значений) |
-| `generate-key` | Генерация новой пары ключей аккаунта (ES256, ES384, ES512, RSA-2048, RSA-4096, Ed25519) |
-| `account` | Создание или поиск ACME-аккаунта |
+| `show-config` | Показать итоговую объединённую конфигурацию (`--verbose` — источники значений; `--show-secrets` раскрывает пароли/HMAC-ключи) |
+| `generate-key` | Генерация новой пары ключей аккаунта (ES256, ES384, ES512, RSA-2048, RSA-4096, Ed25519). `--force` перезаписывает существующий файл ключа |
+| `account` | Создание или поиск ACME-аккаунта (`--contact`, EAB-флаги; `--agree-tos` по умолчанию `true`) |
 | `order <domains...>` | Создание нового заказа на сертификат |
 | `get-authz <url>` | Получение объекта авторизации |
 | `respond-challenge <url>` | Сообщить серверу, что вызов готов |
-| `serve-http-01` | Обслуживание ответа на вызов HTTP-01 |
+| `serve-http-01` | Обслуживание ответа на вызов HTTP-01 (`--token`, `--port`; `--challenge-dir` записывает файл ответа вместо запуска сервера) |
 | `show-dns-01` | Показать инструкции по настройке TXT-записи DNS-01 |
 | `show-dns-persist-01` | Показать инструкции по настройке постоянной TXT-записи DNS-PERSIST-01 |
-| `finalize` | Финализация заказа с новым CSR |
+| `finalize` | Финализация заказа с новым CSR (`--key-output` обязателен; `--cert-key-algorithm`, `--key-password`/`--key-password-file`, `--force`) |
 | `poll-order <url>` | Опрос текущего статуса заказа |
-| `download-cert <url>` | Загрузка выпущенного сертификата |
+| `download-cert <url>` | Загрузка выпущенного сертификата (`--output`, по умолчанию `certificate.pem`) |
 | `deactivate-account` | Деактивация текущего аккаунта |
-| `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5) |
+| `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5). `--new-key` обязателен; `--new-key-password`/`--new-key-password-file` шифруют новый ключ |
 | `pre-authorize` | Предварительная авторизация идентификатора перед созданием заказа (RFC 8555 Section 7.4.1) |
 | `renewal-info <path>` | Запрос ACME Renewal Information для сертификата (RFC 9773) |
 | `list-profiles` | Список профилей сертификатов, объявленных ACME-сервером (draft-ietf-acme-profiles-01) |
@@ -1309,6 +1316,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--reissue-on-mismatch` | `false` | Разрешить перевыпуск при несовпадении запрошенных доменов с SAN существующего сертификата (по умолчанию: пропуск с предупреждением) |
 | `--print-cert` | `false` | Вывести PEM выпущенного сертификата в stdout после сохранения в файл |
 | `--profile <NAME>` | - | Профиль сертификата (draft-ietf-acme-profiles-01). Используйте `list-profiles` для просмотра доступных вариантов. |
+| `--force` | `false` | Перезаписать файл `--key-output`, если он уже существует (по умолчанию: не затирать существующий закрытый ключ) |
 
 <details>
 <summary><strong>Ротация ключей (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1365,10 +1373,19 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_CONFIG` | Путь к файлу конфигурации (альтернатива `--config`) |
 | `ACME_DIRECTORY_URL` | URL директории ACME (альтернатива `--directory`) |
 | `ACME_ACCOUNT_KEY_FILE` | Путь к ключу аккаунта (альтернатива `--account-key`) |
+| `ACME_ACCOUNT_KEY_PASSWORD` | Пароль расшифровки ключа аккаунта (альтернатива `--account-key-password`) |
+| `ACME_ACCOUNT_KEY_PASSWORD_FILE` | Путь к файлу пароля расшифровки ключа аккаунта (альтернатива `--account-key-password-file`) |
 | `ACME_ACCOUNT_URL` | URL аккаунта (альтернатива `--account-url`) |
 | `ACME_OUTPUT_FORMAT` | Формат вывода: `text` или `json` (альтернатива `--output-format`) |
 | `ACME_INSECURE` | Отключить проверку TLS-сертификата (альтернатива `--insecure`) |
+| `ACME_CONNECT_TIMEOUT` | Таймаут HTTP-соединения в секундах (альтернатива `--connect-timeout`) |
+| `ACME_ALLOW_PRIVATE_NETWORK` | Разрешить обращение к приватным/loopback IP (альтернатива `--allow-private-network`) |
+| `ACME_UNSAFE_HOOKS` | Понизить ошибки владельца/прав hook до предупреждений (альтернатива `--unsafe-hooks`) |
+| `ACME_DNS_CHECK_MODE` | Стратегия резолвера DNS-01: `authoritative`, `cached` или `system` (альтернатива `--dns-check-mode`) |
+| `ACME_DNS_CHECK_DNSSEC` | Включить проверку DNSSEC при проверках DNS-01 (альтернатива `--dns-check-dnssec`) |
 | `ACME_KEY_PASSWORD_FILE` | Путь к файлу пароля закрытого ключа (альтернатива `--key-password-file`) |
+| `ACME_NEW_KEY_PASSWORD` | Пароль нового ключа аккаунта для `key-rollover` (альтернатива `--new-key-password`) |
+| `ACME_NEW_KEY_PASSWORD_FILE` | Файл пароля нового ключа аккаунта для `key-rollover` (альтернатива `--new-key-password-file`) |
 | `ACME_EAB_KID` | EAB Key ID (альтернатива `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC-ключ, base64url-кодировка (альтернатива `--eab-hmac-key`) |
 | `ACME_PROFILE` | Профиль сертификата (альтернатива `--profile`) |

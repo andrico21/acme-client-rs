@@ -485,7 +485,7 @@ The config file is optional. Load it with `--config <PATH>` or `ACME_CONFIG` env
 **Priority without config file:** CLI flags > environment variables > built-in defaults.
 **Priority with config file:** CLI flags > config file > built-in defaults.
 
-When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exceptions: `ACME_INSECURE`, key passwords (`--key-password-file`), and EAB credentials (`--eab-kid`, `--eab-hmac-key`) are still read from the environment as a fallback for secrets that shouldn't be stored in config files.
+When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exceptions: the safety toggle `ACME_INSECURE` and secret-bearing variables that should never be stored in a config file are still read from the environment as a fallback. Those secret exceptions are: `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, and `ACME_EAB_HMAC_KEY`.
 
 Loading behavior:
 - `--config <PATH>` (or `ACME_CONFIG` env var): load from the specified path (env vars ignored)
@@ -1250,9 +1250,16 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--config <PATH>` | | `ACME_CONFIG` | - | Path to TOML config file (env vars ignored when loaded, except secrets) |
 | `--directory <URL>` | `-d` | `ACME_DIRECTORY_URL` | `https://localhost:14000/dir` | ACME server directory URL |
 | `--account-key <PATH>` | `-k` | `ACME_ACCOUNT_KEY_FILE` | `account.key` | Path to the account key (PKCS#8 PEM) |
+| `--account-key-password <PW>` | | `ACME_ACCOUNT_KEY_PASSWORD` | - | Password to decrypt the account key (visible in process list — prefer `--account-key-password-file`). Conflicts with `--account-key-password-file`. |
+| `--account-key-password-file <PATH>` | | `ACME_ACCOUNT_KEY_PASSWORD_FILE` | - | Read the account key decryption password from a file (first non-empty line). Conflicts with `--account-key-password`. |
 | `--account-url <URL>` | `-a` | `ACME_ACCOUNT_URL` | - | Account URL (required after account creation) |
 | `--output-format <FMT>` | | `ACME_OUTPUT_FORMAT` | `text` | Output format: `text` (human-readable) or `json` (structured) |
-| `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (for testing with self-signed CAs like Pebble) |
+| `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (for testing with self-signed CAs like Pebble). Implies `--allow-private-network`. |
+| `--connect-timeout <SECONDS>` | | `ACME_CONNECT_TIMEOUT` | `15` | HTTP connect timeout (TCP + TLS handshake) in seconds. The whole-request timeout is fixed at 120s. |
+| `--allow-private-network` | | `ACME_ALLOW_PRIVATE_NETWORK` | `false` | Allow contacting private/loopback/link-local IPs (RFC1918, 127/8, 169.254/16, `::1`, `fc00::/7`, `fe80::/10`). Default blocks these to prevent SSRF. Implied by `--insecure`. Set for internal/on-prem ACME deployments. |
+| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Downgrade hook-script ownership/permission violations from hard errors to stderr warnings. Default refuses to run if any hook is not absolute, not owned by current user/root, or group/world-writable (or sits in such a directory). Set only if you accept the privilege-escalation risk. |
+| `--dns-check-mode <MODE>` | | `ACME_DNS_CHECK_MODE` | `authoritative` | Resolver strategy for DNS-01 propagation checks: `authoritative` (queries the zone's NS directly, bypasses caches), `cached` (public resolvers 1.1.1.1/8.8.8.8/9.9.9.9), or `system` (host's resolv.conf). |
+| `--dns-check-dnssec` | | `ACME_DNS_CHECK_DNSSEC` | `false` | Enable DNSSEC validation on DNS-01 propagation checks. Off by default (parent-zone DNSSEC misconfig outside your control would cause spurious failures). |
 | `--silent` | | - | `false` | Suppress all stdout output; only exit code indicates success/failure |
 
 Global options can be placed before or after the subcommand.
@@ -1262,20 +1269,20 @@ Global options can be placed before or after the subcommand.
 | Command | Description |
 |---|---|
 | `generate-config` | Generate a self-documented TOML config file template |
-| `show-config` | Show the effective merged configuration (use `--verbose` to see value sources) |
-| `generate-key` | Generate a new account key pair (ES256, ES384, ES512, RSA-2048, RSA-4096, Ed25519) |
-| `account` | Create or look up an ACME account |
+| `show-config` | Show the effective merged configuration (`--verbose` shows value sources; `--show-secrets` unmasks passwords/HMAC keys) |
+| `generate-key` | Generate a new account key pair (ES256, ES384, ES512, RSA-2048, RSA-4096, Ed25519). `--force` overwrites an existing key file |
+| `account` | Create or look up an ACME account (`--contact`, EAB flags; `--agree-tos` defaults to `true`) |
 | `order <domains...>` | Request a new certificate order |
 | `get-authz <url>` | Fetch an authorization object |
 | `respond-challenge <url>` | Tell the server a challenge is ready |
-| `serve-http-01` | Serve an HTTP-01 challenge response |
+| `serve-http-01` | Serve an HTTP-01 challenge response (`--token`, `--port`; `--challenge-dir` writes the response file instead of serving) |
 | `show-dns-01` | Show DNS-01 TXT record setup instructions |
 | `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions |
-| `finalize` | Finalize an order with a new CSR |
+| `finalize` | Finalize an order with a new CSR (`--key-output` required; `--cert-key-algorithm`, `--key-password`/`--key-password-file`, `--force`) |
 | `poll-order <url>` | Poll an order's current status |
-| `download-cert <url>` | Download the issued certificate |
+| `download-cert <url>` | Download the issued certificate (`--output`, default `certificate.pem`) |
 | `deactivate-account` | Deactivate the current account |
-| `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5) |
+| `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5). `--new-key` required; `--new-key-password`/`--new-key-password-file` encrypt the new key |
 | `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1) |
 | `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9773) |
 | `list-profiles` | List certificate profiles advertised by the ACME server (draft-ietf-acme-profiles-01) |
@@ -1312,6 +1319,7 @@ Global options can be placed before or after the subcommand.
 | `--reissue-on-mismatch` | `false` | Allow reissuance when requested domains differ from the existing certificate's SANs (default: skip with warning) |
 | `--print-cert` | `false` | Print the issued certificate PEM to stdout after saving to file |
 | `--profile <NAME>` | - | Certificate profile to request (draft-ietf-acme-profiles-01). Use `list-profiles` to see available options. |
+| `--force` | `false` | Overwrite the `--key-output` file if it already exists (default: refuse to clobber an existing private key) |
 
 <details>
 <summary><strong>Key Rollover (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1368,10 +1376,19 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_CONFIG` | Config file path (alternative to `--config`) |
 | `ACME_DIRECTORY_URL` | ACME directory URL (alternative to `--directory`) |
 | `ACME_ACCOUNT_KEY_FILE` | Account key path (alternative to `--account-key`) |
+| `ACME_ACCOUNT_KEY_PASSWORD` | Account key decryption password (alternative to `--account-key-password`) |
+| `ACME_ACCOUNT_KEY_PASSWORD_FILE` | Account key decryption password file path (alternative to `--account-key-password-file`) |
 | `ACME_ACCOUNT_URL` | Account URL (alternative to `--account-url`) |
 | `ACME_OUTPUT_FORMAT` | Output format: `text` or `json` (alternative to `--output-format`) |
 | `ACME_INSECURE` | Disable TLS certificate verification (alternative to `--insecure`) |
+| `ACME_CONNECT_TIMEOUT` | HTTP connect timeout in seconds (alternative to `--connect-timeout`) |
+| `ACME_ALLOW_PRIVATE_NETWORK` | Allow contacting private/loopback IPs (alternative to `--allow-private-network`) |
+| `ACME_UNSAFE_HOOKS` | Downgrade hook ownership/permission errors to warnings (alternative to `--unsafe-hooks`) |
+| `ACME_DNS_CHECK_MODE` | DNS-01 resolver strategy: `authoritative`, `cached`, or `system` (alternative to `--dns-check-mode`) |
+| `ACME_DNS_CHECK_DNSSEC` | Enable DNSSEC validation on DNS-01 checks (alternative to `--dns-check-dnssec`) |
 | `ACME_KEY_PASSWORD_FILE` | Private key password file path (alternative to `--key-password-file`) |
+| `ACME_NEW_KEY_PASSWORD` | New account key password for `key-rollover` (alternative to `--new-key-password`) |
+| `ACME_NEW_KEY_PASSWORD_FILE` | New account key password file for `key-rollover` (alternative to `--new-key-password-file`) |
 | `ACME_EAB_KID` | EAB Key ID (alternative to `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC key, base64url-encoded (alternative to `--eab-hmac-key`) |
 | `ACME_PROFILE` | Certificate profile (alternative to `--profile`) |
