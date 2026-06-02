@@ -98,8 +98,25 @@ jobs:
           docker run --rm --platform linux/arm64 \
             -v "$PWD":/work -w /work \
             rust:1.96.0-alpine sh -c '
+              set -e
               apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
-              OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
+              # QEMU user-mode aarch64 emulation intermittently segfaults rustc
+              # mid-build. cargo is incremental, so retry resumes from the cached
+              # target/ dir and converges within a couple of attempts.
+              attempt=1
+              max=3
+              while :; do
+                if OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack; then
+                  break
+                fi
+                if [ "$attempt" -ge "$max" ]; then
+                  echo "aarch64 build failed after $max attempts" >&2
+                  exit 1
+                fi
+                echo "build attempt $attempt failed (likely QEMU emulation segfault); retrying..." >&2
+                attempt=$((attempt + 1))
+                sleep 5
+              done
               strip target/release/acme-client-rs
               file target/release/acme-client-rs
               file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
