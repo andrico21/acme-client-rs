@@ -55,13 +55,13 @@ pub fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> 
         .file_name()
         .with_context(|| format!("invalid output path {}", path.display()))?
         .to_string_lossy();
-    let tmp_name = format!(".{}.acme-tmp.{}", file_name, std::process::id());
-    let tmp_path = parent.join(tmp_name);
 
-    let _ = std::fs::remove_file(&tmp_path);
-
-    write_temp_file(&tmp_path, contents)
-        .with_context(|| format!("failed to write temp file {}", tmp_path.display()))?;
+    // Create the temp file under an unpredictable, randomly-suffixed name with
+    // `O_EXCL` (`create_new`) and never `remove_file` an existing temp first:
+    // a deterministic name plus pre-removal lets an attacker in a shared parent
+    // dir pre-plant or race the temp path (symlink attack / DoS). We retry on
+    // the rare `AlreadyExists` collision rather than clobbering.
+    let tmp_path = write_unique_temp_file(parent, &file_name, contents)?;
 
     if let Err(e) = std::fs::rename(&tmp_path, path) {
         let _ = std::fs::remove_file(&tmp_path);
@@ -74,8 +74,60 @@ pub fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> 
     Ok(())
 }
 
+const TEMP_NAME_RETRIES: u32 = 8;
+
+/// Write `contents` to a freshly created, randomly named temp file in `parent`
+/// and return its path. Each attempt uses `O_EXCL`/`create_new`; an
+/// `AlreadyExists` collision (random-name clash or attacker-planted path) is
+/// retried with a fresh suffix up to [`TEMP_NAME_RETRIES`] times.
+fn write_unique_temp_file(
+    parent: &Path,
+    file_name: &str,
+    contents: &[u8],
+) -> Result<std::path::PathBuf> {
+    let mut last_err: Option<std::io::Error> = None;
+    for _ in 0..TEMP_NAME_RETRIES {
+        let tmp_name = format!(".{}.acme-tmp.{}", file_name, random_suffix());
+        let tmp_path = parent.join(tmp_name);
+        match write_temp_file(&tmp_path, contents) {
+            Ok(()) => return Ok(tmp_path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_err = Some(e);
+            }
+            Err(e) => {
+                return Err(e)
+                    .with_context(|| format!("failed to write temp file in {}", parent.display()));
+            }
+        }
+    }
+    Err(last_err.map_or_else(
+        || anyhow::anyhow!("temp file name collision"),
+        anyhow::Error::from,
+    ))
+    .with_context(|| {
+        format!(
+            "failed to create unique temp file in {} after {} attempts",
+            parent.display(),
+            TEMP_NAME_RETRIES
+        )
+    })
+}
+
+/// 16 lowercase-hex characters from 8 bytes of OS CSPRNG entropy.
+fn random_suffix() -> String {
+    use rand_core::RngCore;
+    let mut bytes = [0u8; 8];
+    rand_core::OsRng.fill_bytes(&mut bytes);
+    let mut s = String::with_capacity(16);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(s, "{b:02x}");
+    }
+    s
+}
+
 #[cfg(unix)]
-fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
+fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -92,7 +144,7 @@ fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
 }
 
 #[cfg(not(unix))]
-fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
+fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
     let mut f = OpenOptions::new()
@@ -113,24 +165,31 @@ fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> Result<()> {
 pub fn warn_if_world_readable(path: &Path, kind: &str) {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::MetadataExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mode = meta.mode() & 0o777;
-            if mode & 0o077 != 0 {
-                tracing::warn!(
-                    "{} file {} has permissive mode {:o} (group/world accessible) — consider `chmod 600 {}`",
-                    kind,
-                    path.display(),
-                    mode,
-                    path.display(),
-                );
-            }
+        if let Some(mode) = permissive_mode(path) {
+            tracing::warn!(
+                "{} file {} has permissive mode {:o} (group/world accessible) — consider `chmod 600 {}`",
+                kind,
+                path.display(),
+                mode,
+                path.display(),
+            );
         }
     }
     #[cfg(not(unix))]
     {
         let _ = (path, kind);
     }
+}
+
+/// Group/world-accessible `0o777` bits of `path`, or `None`. Uses
+/// `symlink_metadata` (NOT `metadata`) so a sensitive path that is itself a
+/// symlink is flagged via its own `0o777` mode instead of statting the target.
+#[cfg(unix)]
+fn permissive_mode(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::symlink_metadata(path).ok()?;
+    let mode = meta.mode() & 0o777;
+    (mode & 0o077 != 0).then_some(mode)
 }
 
 #[cfg(unix)]
@@ -209,6 +268,54 @@ mod tests {
             panic!("expected refusal on symlink");
         };
         assert!(err.to_string().contains("symlink"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn l4_symlink_metadata_used() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmpdir("l4_symlink_metadata")?;
+        let target = dir.join("secret");
+        std::fs::write(&target, b"x")?;
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))?;
+        assert_eq!(permissive_mode(&target), None);
+
+        let link = dir.join("link");
+        std::os::unix::fs::symlink(&target, &link)?;
+        assert!(
+            permissive_mode(&link).is_some(),
+            "symlink must be flagged via symlink_metadata (metadata would follow to the 0600 target)"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn m4_random_suffix_is_unpredictable() {
+        let a = random_suffix();
+        let b = random_suffix();
+        assert_eq!(a.len(), 16);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(
+            a, b,
+            "two suffixes must differ (random, not pid-deterministic)"
+        );
+    }
+
+    #[test]
+    fn m4_no_leftover_temp_files_after_write() -> anyhow::Result<()> {
+        let dir = tmpdir("m4_no_leftover")?;
+        let path = dir.join("k.pem");
+        write_secret_file(&path, b"secret", Overwrite::Forbid)?;
+        let leftover: Vec<_> = std::fs::read_dir(&dir)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains("acme-tmp"))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "temp files must not survive: {leftover:?}"
+        );
         Ok(())
     }
 }

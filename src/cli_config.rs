@@ -24,7 +24,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::cli::{CertKeyAlgorithm, Cli, Commands, OutputFormat};
@@ -50,10 +50,12 @@ pub(crate) fn apply_config(
     matches: &clap::ArgMatches,
     config: &config::Config,
     config_mode: bool,
-) {
-    apply_global(cli, matches, &config.global, config_mode);
-    apply_run(cli, matches, &config.run, config_mode);
+) -> Result<()> {
+    apply_global(cli, matches, &config.global, config_mode)?;
+    apply_run(cli, matches, &config.run, config_mode)?;
+    apply_order(cli, matches, config_mode);
     apply_account(cli, &config.account);
+    Ok(())
 }
 
 /// Returns true when the config-file value should replace the current Cli
@@ -63,12 +65,38 @@ fn should_apply_config(source: Option<clap::parser::ValueSource>) -> bool {
     !matches!(source, Some(ValueSource::CommandLine))
 }
 
+/// Resolve one field in the CLI ⇄ config ⇄ env merge. Returns `Some(new)` to
+/// assign, or `None` to leave the current value untouched.
+///
+/// Precedence: an explicit CLI flag always wins (→ leave); otherwise a config
+/// value wins; otherwise, in config mode, an env-sourced value is reset to the
+/// secure built-in `default` — env must NOT survive config mode. The last rule
+/// is the H1 fail-open fix for the security toggles.
+fn config_or_env_reset<T>(
+    source: Option<clap::parser::ValueSource>,
+    config_value: Option<T>,
+    config_mode: bool,
+    default: T,
+) -> Option<T> {
+    use clap::parser::ValueSource;
+    if matches!(source, Some(ValueSource::CommandLine)) {
+        return None;
+    }
+    if let Some(v) = config_value {
+        return Some(v);
+    }
+    if config_mode && source == Some(ValueSource::EnvVariable) {
+        return Some(default);
+    }
+    None
+}
+
 fn apply_global(
     cli: &mut Cli,
     matches: &clap::ArgMatches,
     cfg: &config::GlobalConfig,
     config_mode: bool,
-) {
+) -> Result<()> {
     use clap::parser::ValueSource;
 
     if config_mode {
@@ -97,7 +125,7 @@ fn apply_global(
             cli.directory.clone_from(v);
         } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable)
         {
-            cli.directory = "https://localhost:14000/dir".to_string();
+            cli.directory = crate::defaults::global::DIRECTORY_URL.to_string();
         }
     }
 
@@ -107,7 +135,7 @@ fn apply_global(
         } else if config_mode
             && matches.value_source("account_key") == Some(ValueSource::EnvVariable)
         {
-            cli.account_key = PathBuf::from("account.key");
+            cli.account_key = PathBuf::from(crate::defaults::global::ACCOUNT_KEY_FILE);
         }
     }
 
@@ -125,9 +153,7 @@ fn apply_global(
 
     if should_apply_config(matches.value_source("output_format")) {
         if let Some(ref v) = cfg.output_format {
-            if v == "json" {
-                cli.output_format = OutputFormat::Json;
-            }
+            cli.output_format = parse_output_format(v)?;
         } else if config_mode
             && matches.value_source("output_format") == Some(ValueSource::EnvVariable)
         {
@@ -154,38 +180,67 @@ fn apply_global(
         } else if config_mode
             && matches.value_source("connect_timeout") == Some(ValueSource::EnvVariable)
         {
-            cli.connect_timeout = 15;
+            cli.connect_timeout = crate::defaults::global::CONNECT_TIMEOUT_SECS;
         }
     }
 
-    if should_apply_config(matches.value_source("allow_private_network"))
-        && let Some(v) = cfg.allow_private_network
-    {
+    if let Some(v) = config_or_env_reset(
+        matches.value_source("allow_private_network"),
+        cfg.allow_private_network,
+        config_mode,
+        false,
+    ) {
         cli.allow_private_network = v;
     }
 
-    if should_apply_config(matches.value_source("unsafe_hooks"))
-        && let Some(v) = cfg.unsafe_hooks
-    {
+    if let Some(v) = config_or_env_reset(
+        matches.value_source("unsafe_hooks"),
+        cfg.unsafe_hooks,
+        config_mode,
+        false,
+    ) {
         cli.unsafe_hooks = v;
     }
 
-    if should_apply_config(matches.value_source("dns_check_mode"))
-        && let Some(ref s) = cfg.dns_check_mode
-    {
-        if let Ok(m) = <DnsCheckMode as clap::ValueEnum>::from_str(s, true) {
-            cli.dns_check_mode = m;
-        } else {
-            tracing::warn!(
-                "config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
-            );
-        }
+    let cfg_dns_mode = cfg.dns_check_mode.as_ref().and_then(|s| {
+        <DnsCheckMode as clap::ValueEnum>::from_str(s, true).map_or_else(
+            |_| {
+                tracing::warn!(
+                    "config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
+                );
+                None
+            },
+            Some,
+        )
+    });
+    if let Some(m) = config_or_env_reset(
+        matches.value_source("dns_check_mode"),
+        cfg_dns_mode,
+        config_mode,
+        DnsCheckMode::Authoritative,
+    ) {
+        cli.dns_check_mode = m;
     }
 
-    if should_apply_config(matches.value_source("dns_check_dnssec"))
-        && let Some(v) = cfg.dns_check_dnssec
-    {
+    if let Some(v) = config_or_env_reset(
+        matches.value_source("dns_check_dnssec"),
+        cfg.dns_check_dnssec,
+        config_mode,
+        false,
+    ) {
         cli.dns_check_dnssec = v;
+    }
+
+    Ok(())
+}
+
+/// Parse a config-file `output_format` strictly: unknown values are a hard
+/// error (L5), never a silent fallback that could downgrade the format.
+fn parse_output_format(value: &str) -> Result<OutputFormat> {
+    match value {
+        "text" => Ok(OutputFormat::Text),
+        "json" => Ok(OutputFormat::Json),
+        other => anyhow::bail!("config: output_format must be one of: text, json (got {other:?})"),
     }
 }
 
@@ -194,9 +249,9 @@ fn apply_run(
     matches: &clap::ArgMatches,
     cfg_run: &config::RunConfig,
     config_mode: bool,
-) {
+) -> Result<()> {
     let Commands::Run(args) = &mut cli.command else {
-        return;
+        return Ok(());
     };
 
     if let Some((_, sub_matches)) = matches.subcommand() {
@@ -216,6 +271,8 @@ fn apply_run(
         if should_apply_config(sub_matches.value_source("challenge_type"))
             && let Some(ref v) = cfg_run.challenge_type
         {
+            crate::types::ChallengeType::parse_strict(v)
+                .context("config: invalid challenge_type")?;
             args.challenge_type.clone_from(v);
         }
         if should_apply_config(sub_matches.value_source("http_port"))
@@ -235,9 +292,13 @@ fn apply_run(
         }
         if should_apply_config(sub_matches.value_source("cert_key_algorithm"))
             && let Some(ref v) = cfg_run.cert_key_algorithm
-            && let Ok(a) = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true)
         {
-            args.cert_key_algorithm = a;
+            args.cert_key_algorithm = <CertKeyAlgorithm as clap::ValueEnum>::from_str(v, true)
+                .map_err(|_| {
+                    anyhow::anyhow!(
+                        "config: cert_key_algorithm must be one of: ec-p256, ec-p384, ed25519 (got {v:?})"
+                    )
+                })?;
         }
         if should_apply_config(sub_matches.value_source("dns_propagation_concurrency"))
             && let Some(v) = cfg_run.dns_propagation_concurrency
@@ -249,10 +310,13 @@ fn apply_run(
         {
             args.challenge_timeout = v;
         }
-        if should_apply_config(sub_matches.value_source("profile"))
-            && let Some(ref v) = cfg_run.profile
-        {
-            args.profile = Some(v.clone());
+        if let Some(p) = config_or_env_reset(
+            sub_matches.value_source("profile"),
+            cfg_run.profile.clone().map(Some),
+            config_mode,
+            None,
+        ) {
+            args.profile = p;
         }
     }
 
@@ -327,6 +391,25 @@ fn apply_run(
             .as_ref()
             .map(|s| s.expose_secret().to_string());
     }
+
+    Ok(())
+}
+
+fn apply_order(cli: &mut Cli, matches: &clap::ArgMatches, config_mode: bool) {
+    let Commands::Order { profile, .. } = &mut cli.command else {
+        return;
+    };
+    let Some((_, sub_matches)) = matches.subcommand() else {
+        return;
+    };
+    if let Some(p) = config_or_env_reset::<Option<String>>(
+        sub_matches.value_source("profile"),
+        None,
+        config_mode,
+        None,
+    ) {
+        *profile = p;
+    }
 }
 
 fn apply_account(cli: &mut Cli, cfg_acct: &config::AccountConfig) {
@@ -354,5 +437,142 @@ fn apply_account(cli: &mut Cli, cfg_acct: &config::AccountConfig) {
             .eab_hmac_key
             .as_ref()
             .map(|s| s.expose_secret().to_string());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use clap::parser::ValueSource;
+
+    use super::{config_or_env_reset, should_apply_config};
+    use crate::dns_check::DnsCheckMode;
+
+    // H1: an env-sourced safety toggle with no config override must reset to
+    // the secure default in config mode (fail-closed); CLI and config still win.
+    #[test]
+    fn h1_config_mode_resets_env_safety_toggles() {
+        assert_eq!(
+            config_or_env_reset(Some(ValueSource::CommandLine), Some(true), true, false),
+            None,
+        );
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::CommandLine), None, true, false),
+            None,
+        );
+        assert_eq!(
+            config_or_env_reset(Some(ValueSource::EnvVariable), Some(true), true, false),
+            Some(true),
+        );
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::EnvVariable), None, true, false),
+            Some(false),
+        );
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::EnvVariable), None, false, false),
+            None,
+        );
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::DefaultValue), None, true, false),
+            None,
+        );
+        assert_eq!(config_or_env_reset::<bool>(None, None, true, false), None);
+        assert_eq!(
+            config_or_env_reset(
+                Some(ValueSource::EnvVariable),
+                None,
+                true,
+                DnsCheckMode::Authoritative,
+            ),
+            Some(DnsCheckMode::Authoritative),
+        );
+    }
+
+    #[test]
+    fn h1_secure_defaults_are_failclosed() {
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::EnvVariable), None, true, false),
+            Some(false),
+        );
+    }
+
+    // L3: config-mode reset literals must track the defaults module, not drift.
+    #[test]
+    fn l3_reset_literals_match_defaults_module() {
+        assert_eq!(
+            crate::defaults::global::DIRECTORY_URL,
+            "https://localhost:14000/dir",
+        );
+        assert_eq!(crate::defaults::global::ACCOUNT_KEY_FILE, "account.key");
+        assert_eq!(crate::defaults::global::CONNECT_TIMEOUT_SECS, 15);
+    }
+
+    // L2: env-sourced profile must clear to None in config mode; config/CLI win.
+    #[test]
+    fn l2_profile_env_reset_in_config_mode() {
+        assert_eq!(
+            config_or_env_reset::<Option<String>>(Some(ValueSource::EnvVariable), None, true, None,),
+            Some(None),
+        );
+        assert_eq!(
+            config_or_env_reset(
+                Some(ValueSource::EnvVariable),
+                Some(Some("shortlived".to_string())),
+                true,
+                None,
+            ),
+            Some(Some("shortlived".to_string())),
+        );
+        assert_eq!(
+            config_or_env_reset::<Option<String>>(Some(ValueSource::CommandLine), None, true, None,),
+            None,
+        );
+        assert_eq!(
+            config_or_env_reset::<Option<String>>(
+                Some(ValueSource::EnvVariable),
+                None,
+                false,
+                None,
+            ),
+            None,
+        );
+    }
+
+    #[test]
+    fn should_apply_config_cli_wins() {
+        assert!(!should_apply_config(Some(ValueSource::CommandLine)));
+        assert!(should_apply_config(Some(ValueSource::EnvVariable)));
+        assert!(should_apply_config(Some(ValueSource::DefaultValue)));
+        assert!(should_apply_config(None));
+    }
+
+    #[test]
+    fn l5_output_format_parses_both_and_rejects_unknown() {
+        use super::parse_output_format;
+        use crate::cli::OutputFormat;
+        assert!(matches!(
+            parse_output_format("text").expect("text"),
+            OutputFormat::Text
+        ));
+        assert!(matches!(
+            parse_output_format("json").expect("json"),
+            OutputFormat::Json
+        ));
+        assert!(parse_output_format("yaml").is_err());
+        assert!(parse_output_format("JSON").is_err());
+        assert!(parse_output_format("").is_err());
+    }
+
+    #[test]
+    fn l5_unknown_challenge_and_key_algorithm_are_errors() {
+        assert!(crate::types::ChallengeType::parse_strict("bogus-99").is_err());
+        assert!(crate::types::ChallengeType::parse_strict("http-01").is_ok());
+        assert!(
+            <crate::cli::CertKeyAlgorithm as clap::ValueEnum>::from_str("rsa-9000", true).is_err()
+        );
+        assert!(
+            <crate::cli::CertKeyAlgorithm as clap::ValueEnum>::from_str("ec-p256", true).is_ok()
+        );
     }
 }

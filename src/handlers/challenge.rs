@@ -17,7 +17,9 @@ pub(crate) async fn cmd_serve_http01(
     challenge_dir: Option<&std::path::Path>,
 ) -> Result<()> {
     let pw = resolve_account_key_password(
-        cli.account_key_password.as_deref(),
+        cli.account_key_password
+            .as_ref()
+            .map(secrecy::ExposeSecret::expose_secret),
         cli.account_key_password_file.as_deref(),
     )
     .await?;
@@ -28,18 +30,23 @@ pub(crate) async fn cmd_serve_http01(
     .await?;
     if let Some(dir) = challenge_dir {
         let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
-        if !cli.silent {
-            super::emit_result(
-                cli,
-                || {
-                    serde_json::json!({
-                        "command": "serve-http-01",
-                        "mode": "challenge-dir",
-                        "path": file.display().to_string(),
-                    })
-                },
-                || outln!("Challenge file written to {}", file.display()),
-            );
+        super::emit_result(
+            cli,
+            || {
+                serde_json::json!({
+                    "command": "serve-http-01",
+                    "mode": "challenge-dir",
+                    "path": file.display().to_string(),
+                })
+            },
+            || outln!("Challenge file written to {}", file.display()),
+        );
+        // Keep serving until shutdown regardless of --silent: the challenge
+        // file must outlive the wait or the CA cannot validate. Gate only the
+        // interactive prompt on output suppression.
+        if crate::output::is_silent() {
+            let _ = tokio::signal::ctrl_c().await;
+        } else {
             outln!("Press Enter after validation to clean up...");
             let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new()))
                 .await;
@@ -60,7 +67,9 @@ pub(crate) async fn cmd_show_dns01(
     let domain =
         crate::types::DnsName::parse(domain).context("invalid --domain for show-dns-01")?;
     let pw = resolve_account_key_password(
-        cli.account_key_password.as_deref(),
+        cli.account_key_password
+            .as_ref()
+            .map(secrecy::ExposeSecret::expose_secret),
         cli.account_key_password_file.as_deref(),
     )
     .await?;

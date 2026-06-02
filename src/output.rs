@@ -16,10 +16,33 @@
 
 #![allow(clippy::print_stdout)]
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Process-global suppression flag for all user-facing stdout.
+///
+/// Set once from `--silent` after the CLI/config merge. When true, every
+/// `out!`/`outln!` write is dropped at the sink, so `--silent` cannot be
+/// defeated by a call site that forgets a per-message guard — including JSON
+/// result output. stderr (`tracing`) is unaffected.
+static SILENT: AtomicBool = AtomicBool::new(false);
+
+/// Enable/disable global stdout suppression. Call once after merging config.
+pub fn set_silent(silent: bool) {
+    SILENT.store(silent, Ordering::Relaxed);
+}
+
+#[must_use]
+pub fn is_silent() -> bool {
+    SILENT.load(Ordering::Relaxed)
+}
+
 /// Internal helper: write to stdout, exit(0) on broken pipe, ignore other errors.
 #[doc(hidden)]
 pub fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
     use std::io::Write as _;
+    if is_silent() {
+        return;
+    }
     let stdout = std::io::stdout();
     let mut h = stdout.lock();
     let res = if newline {
@@ -49,4 +72,17 @@ macro_rules! out {
     ($($arg:tt)*) => {{
         $crate::output::__write_or_exit(::std::format_args!($($arg)*), false);
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_silent, set_silent};
+
+    #[test]
+    fn m7_set_silent_toggles_global_suppression() {
+        set_silent(true);
+        assert!(is_silent());
+        set_silent(false);
+        assert!(!is_silent());
+    }
 }

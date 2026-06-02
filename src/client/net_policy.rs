@@ -71,7 +71,26 @@ fn is_private_or_special_ipv6(ip: Ipv6Addr) -> bool {
     if s[0] == 0x2001 && s[1] == 0x0db8 {
         return true;
     }
+    // NAT64 well-known prefix (RFC 6052) 64:ff9b::/96 and deprecated
+    // IPv4-compatible IPv6 (RFC 4291 §2.5.5.1) ::/96 both embed an IPv4 in the
+    // low 32 bits. On a host with such routing, [64:ff9b::7f00:1] / [::7f00:1]
+    // actually reach the embedded IPv4 (e.g. 127.0.0.1), so classify it to
+    // close that SSRF bypass. (`::`/`::1` are already handled above.)
+    if (s[0] == 0x0064 && s[1] == 0xff9b && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0)
+        || (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0 && s[4] == 0 && s[5] == 0)
+    {
+        return is_private_or_special_ipv4(embedded_ipv4(s));
+    }
     false
+}
+
+fn embedded_ipv4(s: [u16; 8]) -> Ipv4Addr {
+    Ipv4Addr::new(
+        (s[6] >> 8) as u8,
+        (s[6] & 0xff) as u8,
+        (s[7] >> 8) as u8,
+        (s[7] & 0xff) as u8,
+    )
 }
 
 /// TLS policy for ACME URL validation. Distinct enum (not `bool`) so it cannot
@@ -157,6 +176,21 @@ mod tests {
         assert!(is_private_or_special_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
         assert!(is_private_or_special_ip("fc00::1".parse()?));
         assert!(is_private_or_special_ip("fe80::1".parse()?));
+        Ok(())
+    }
+
+    #[test]
+    fn l1_nat64_and_v4compat_blocked() -> anyhow::Result<()> {
+        // NAT64 64:ff9b::/96 embedding loopback / private must be blocked,
+        // embedding a public IPv4 must NOT be (NAT64 to public is legitimate).
+        assert!(is_private_or_special_ip("64:ff9b::7f00:1".parse()?)); // 127.0.0.1
+        assert!(is_private_or_special_ip("64:ff9b::a00:1".parse()?)); // 10.0.0.1
+        assert!(is_private_or_special_ip("64:ff9b::a9fe:a9fe".parse()?)); // 169.254.169.254
+        assert!(!is_private_or_special_ip("64:ff9b::808:808".parse()?)); // 8.8.8.8
+        // Deprecated IPv4-compatible ::/96 embedding loopback / private blocked.
+        assert!(is_private_or_special_ip("::7f00:1".parse()?)); // ::127.0.0.1
+        assert!(is_private_or_special_ip("::a00:1".parse()?)); // ::10.0.0.1
+        assert!(!is_private_or_special_ip("::808:808".parse()?)); // ::8.8.8.8
         Ok(())
     }
 }

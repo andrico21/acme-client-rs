@@ -55,7 +55,8 @@ pub(super) async fn provision_http01(
         if !ctx.json && !ctx.silent {
             outln!("  Challenge file written to {}", file.display());
         }
-        ctx.cleanup_registry
+        let _ = ctx
+            .cleanup_registry
             .register(crate::cleanup::CleanupAction::HttpChallengeFile(
                 file.clone(),
             ));
@@ -81,7 +82,8 @@ pub(super) async fn provision_http01(
         let task = tokio::spawn(crate::challenge::http01::run_accept_loop(
             listener, auth, path,
         ));
-        ctx.cleanup_registry
+        let _ = ctx
+            .cleanup_registry
             .register(crate::cleanup::CleanupAction::ServerTask(
                 task.abort_handle(),
             ));

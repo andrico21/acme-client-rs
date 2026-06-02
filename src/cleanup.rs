@@ -13,10 +13,13 @@
 //! challenge files are not silently leaked when an operator aborts an issuance.
 //!
 //! Actions are idempotent: rerunning a cleanup on an already-cleaned resource
-//! is a no-op (file removal, DNS hook cleanup on a missing record). The
-//! happy-path cleanup code intentionally does **not** de-register actions —
-//! relying on idempotency keeps the registration sites small and avoids the
-//! risk of forgetting to de-register on a code path.
+//! is a no-op (file removal, DNS hook cleanup on a missing record).
+//! [`CleanupRegistry::register`] returns a [`CleanupHandle`]; once the
+//! happy-path code has finished cleaning a resource it calls
+//! [`CleanupHandle::complete`] to de-register that action, so a later SIGINT
+//! does not re-invoke a hook for a record that was already torn down. A handle
+//! dropped *without* `complete` leaves its action registered, so an early
+//! cancel still cleans up — de-registration is opt-in and failure-safe.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -36,9 +39,34 @@ pub enum CleanupAction {
     ServerTask(tokio::task::AbortHandle),
 }
 
+#[derive(Default)]
+struct Inner {
+    next_id: u64,
+    actions: Vec<(u64, CleanupAction)>,
+}
+
 #[derive(Clone, Default)]
 pub struct CleanupRegistry {
-    inner: Arc<Mutex<Vec<CleanupAction>>>,
+    inner: Arc<Mutex<Inner>>,
+}
+
+/// De-registration token returned by [`CleanupRegistry::register`].
+///
+/// Dropping it without calling [`complete`](CleanupHandle::complete) keeps the
+/// action registered so an early SIGINT still cleans up.
+#[must_use = "hold the handle until cleanup is done, then call complete()"]
+pub struct CleanupHandle {
+    registry: CleanupRegistry,
+    id: u64,
+}
+
+impl CleanupHandle {
+    /// De-register this action: the happy path already cleaned the resource, so
+    /// a later SIGINT must not re-run the hook. Idempotent.
+    pub fn complete(&self) {
+        let mut guard = self.registry.lock_recover();
+        guard.actions.retain(|(id, _)| *id != self.id);
+    }
 }
 
 impl CleanupRegistry {
@@ -49,9 +77,31 @@ impl CleanupRegistry {
         Self::default()
     }
 
-    pub fn register(&self, action: CleanupAction) {
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.push(action);
+    /// Lock the registry, recovering the guard if a previous holder panicked.
+    /// A poisoned mutex must not silently disable all cleanup.
+    fn lock_recover(&self) -> std::sync::MutexGuard<'_, Inner> {
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(
+                    "cleanup registry mutex poisoned; recovering to drain pending actions"
+                );
+                poisoned.into_inner()
+            }
+        }
+    }
+
+    pub fn register(&self, action: CleanupAction) -> CleanupHandle {
+        let id = {
+            let mut guard = self.lock_recover();
+            let id = guard.next_id;
+            guard.next_id = guard.next_id.wrapping_add(1);
+            guard.actions.push((id, action));
+            id
+        };
+        CleanupHandle {
+            registry: self.clone(),
+            id,
         }
     }
 
@@ -59,11 +109,11 @@ impl CleanupRegistry {
     /// cleanup is best-effort by design (the original record may already be
     /// gone, the hook may exit non-zero, etc.).
     pub fn run_all_sync(&self) {
-        let actions = match self.inner.lock() {
-            Ok(mut guard) => std::mem::take(&mut *guard),
-            Err(_) => return,
+        let actions = {
+            let mut guard = self.lock_recover();
+            std::mem::take(&mut guard.actions)
         };
-        for action in actions {
+        for (_, action) in actions {
             run_one(&action);
         }
     }
@@ -96,6 +146,8 @@ fn run_one(action: &CleanupAction) {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
     use super::*;
     use std::io::Write;
 
@@ -108,7 +160,7 @@ mod tests {
         assert!(path.exists());
 
         let reg = CleanupRegistry::new();
-        reg.register(CleanupAction::HttpChallengeFile(path.clone()));
+        let _handle = reg.register(CleanupAction::HttpChallengeFile(path.clone()));
         reg.run_all_sync();
         assert!(!path.exists(), "challenge file should be cleaned");
         Ok(())
@@ -132,10 +184,10 @@ mod tests {
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
 
         let reg = CleanupRegistry::new();
-        reg.register(CleanupAction::DnsRecord {
+        let _handle = reg.register(CleanupAction::DnsRecord {
             hook,
             domain: DnsName::parse("example.com")?,
-            txt_name: DnsName::parse("_acme-challenge.example.com")?,
+            txt_name: DnsName::parse_record_name("_acme-challenge.example.com")?,
             txt_value: "abc123".into(),
         });
         reg.run_all_sync();
@@ -154,10 +206,52 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("token");
         std::fs::write(&path, "x")?;
-        reg.register(CleanupAction::HttpChallengeFile(path));
+        let _handle = reg.register(CleanupAction::HttpChallengeFile(path));
         reg.run_all_sync();
         // Second drain should be a no-op even though file no longer exists.
         reg.run_all_sync();
+        Ok(())
+    }
+
+    #[test]
+    fn l9_complete_removes_action() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let completed = tmp.path().join("completed");
+        let pending = tmp.path().join("pending");
+        std::fs::write(&completed, "x")?;
+        std::fs::write(&pending, "x")?;
+
+        let reg = CleanupRegistry::new();
+        let completed_handle = reg.register(CleanupAction::HttpChallengeFile(completed.clone()));
+        let _pending_handle = reg.register(CleanupAction::HttpChallengeFile(pending.clone()));
+        completed_handle.complete();
+        reg.run_all_sync();
+
+        assert!(
+            completed.exists(),
+            "completed action must not run on SIGINT"
+        );
+        assert!(!pending.exists(), "pending action must still run");
+        Ok(())
+    }
+
+    #[test]
+    fn l9_poisoned_lock_still_drains() -> anyhow::Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("token");
+        std::fs::write(&path, "x")?;
+
+        let reg = CleanupRegistry::new();
+        let poisoner = reg.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = poisoner.inner.lock().expect("lock");
+            panic!("poison the mutex");
+        }));
+        assert!(reg.inner.is_poisoned(), "mutex should be poisoned");
+
+        let _handle = reg.register(CleanupAction::HttpChallengeFile(path.clone()));
+        reg.run_all_sync();
+        assert!(!path.exists(), "poisoned registry must still drain");
         Ok(())
     }
 }

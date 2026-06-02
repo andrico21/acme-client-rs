@@ -276,7 +276,7 @@ pub mod dns01 {
             .as_str()
             .strip_prefix("*.")
             .unwrap_or(domain.as_str());
-        crate::types::DnsName::parse(&format!("_acme-challenge.{base}"))
+        crate::types::DnsName::parse_record_name(&format!("_acme-challenge.{base}"))
     }
 
     /// Print human-readable instructions for manual DNS record setup.
@@ -302,6 +302,9 @@ pub mod dns01 {
 
 pub mod dns_persist01 {
     use crate::outln;
+
+    const MAX_ISSUER_DOMAIN_NAMES: usize = 10;
+
     /// DNS record name for dns-persist-01 validation.
     ///
     /// For wildcard identifiers (`*.example.com`), the leading `*.` is
@@ -311,7 +314,7 @@ pub mod dns_persist01 {
             .as_str()
             .strip_prefix("*.")
             .unwrap_or(domain.as_str());
-        crate::types::DnsName::parse(&format!("_validation-persist.{base}"))
+        crate::types::DnsName::parse_record_name(&format!("_validation-persist.{base}"))
     }
 
     /// Construct the TXT record value (RFC 8659 issue-value syntax).
@@ -346,6 +349,17 @@ pub mod dns_persist01 {
         persist_until: Option<u64>,
     ) -> anyhow::Result<()> {
         let name = record_name(domain)?;
+        // L7 (security): issuer names come from the ACME directory; bound the list
+        // and validate every entry before rendering it verbatim to the operator.
+        if !(1..=MAX_ISSUER_DOMAIN_NAMES).contains(&issuer_domain_names.len()) {
+            anyhow::bail!(
+                "issuer_domain_names must contain between 1 and {MAX_ISSUER_DOMAIN_NAMES} entries (got {})",
+                issuer_domain_names.len()
+            );
+        }
+        for idn in issuer_domain_names {
+            crate::client::validate_issuer_domain_name(idn)?;
+        }
         let issuer = issuer_domain_names
             .first()
             .ok_or_else(|| anyhow::anyhow!("issuer_domain_names is empty"))?;
@@ -431,6 +445,8 @@ pub mod tlsalpn01 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
+
     #[test]
     fn dns01_record_name_strips_wildcard_prefix() -> anyhow::Result<()> {
         let wildcard = crate::types::DnsName::parse("*.example.com")?;
@@ -523,5 +539,20 @@ mod tests {
         )?;
         assert!(v.starts_with("letsencrypt.org; "));
         Ok(())
+    }
+
+    #[test]
+    fn l7_print_instructions_bounds_and_validates_issuers() {
+        let domain = crate::types::DnsName::parse("example.com").expect("domain");
+        let uri = "https://acme.example/acct/1";
+        assert!(super::dns_persist01::print_instructions(&domain, &[], uri, None, None).is_err());
+        let too_many: Vec<String> = (0..11).map(|i| format!("ca{i}.example.org")).collect();
+        assert!(
+            super::dns_persist01::print_instructions(&domain, &too_many, uri, None, None).is_err()
+        );
+        let bad = vec!["ca.example.org".to_string(), "bad issuer".to_string()];
+        assert!(super::dns_persist01::print_instructions(&domain, &bad, uri, None, None).is_err());
+        let ok = vec!["ca.example.org".to_string()];
+        assert!(super::dns_persist01::print_instructions(&domain, &ok, uri, None, None).is_ok());
     }
 }

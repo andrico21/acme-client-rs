@@ -32,6 +32,7 @@ pub(super) struct DnsPending {
     pub token: Option<ChallengeToken>,
     pub txt_name: DnsName,
     pub txt_value: String,
+    pub cleanup_handle: crate::cleanup::CleanupHandle,
 }
 
 // NOT cancel-safe: thin dispatcher to run_phased_dns / run_sequential.

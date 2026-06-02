@@ -98,15 +98,10 @@ impl DnsChecker {
 
         let expected_bytes = expected.as_bytes();
         for record in lookup.answers() {
-            if let RData::TXT(txt) = &record.data {
-                // RFC 1035 §3.3.14: TXT rdata is one or more <character-string>s.
-                // ACME key authorizations are always a single ASCII string, so
-                // compare each chunk individually for exact equality.
-                for chunk in &txt.txt_data {
-                    if chunk.as_ref() == expected_bytes {
-                        return Ok(true);
-                    }
-                }
+            if let RData::TXT(txt) = &record.data
+                && joined_txt_matches(&txt.txt_data, expected_bytes)
+            {
+                return Ok(true);
             }
         }
         Ok(false)
@@ -225,8 +220,21 @@ fn build_system_resolver(dnssec: Dnssec) -> Result<TokioResolver> {
         .context("failed to build system DNS resolver")
 }
 
+/// True iff the concatenation of a TXT record's `<character-string>` chunks
+/// equals `expected`. RFC 1035 §3.3.14 caps each chunk at 255 bytes, so a
+/// longer value (e.g. a dns-persist token) is split and MUST be rejoined
+/// before comparison; comparing chunks individually would never match it.
+fn joined_txt_matches<C: AsRef<[u8]>>(chunks: &[C], expected: &[u8]) -> bool {
+    let mut joined: Vec<u8> = Vec::with_capacity(expected.len());
+    for chunk in chunks {
+        joined.extend_from_slice(chunk.as_ref());
+    }
+    joined == expected
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
 
     #[test]
@@ -234,6 +242,36 @@ mod tests {
         assert_ne!(DnsCheckMode::Authoritative, DnsCheckMode::Cached);
         assert_ne!(DnsCheckMode::Cached, DnsCheckMode::System);
         Ok(())
+    }
+
+    #[test]
+    fn m2_concatenated_txt_chunks_match() {
+        let single = b"short-token".to_vec();
+        assert!(joined_txt_matches(
+            std::slice::from_ref(&single),
+            b"short-token"
+        ));
+        assert!(!joined_txt_matches(&[single], b"short"));
+
+        let long: Vec<u8> = (0..600)
+            .map(|i| b'a' + u8::try_from(i % 26).unwrap_or(0))
+            .collect();
+        let split: Vec<Vec<u8>> = long.chunks(255).map(<[u8]>::to_vec).collect();
+        assert!(split.len() >= 3, "value should span multiple chunks");
+        assert!(
+            joined_txt_matches(&split, &long),
+            "multi-chunk value must match its concatenation"
+        );
+
+        let part_only = split.first().expect("split is non-empty");
+        assert!(
+            !joined_txt_matches(&split, part_only),
+            "a single chunk must not match the full value"
+        );
+
+        let empty: [Vec<u8>; 0] = [];
+        assert!(joined_txt_matches(&empty, b""));
+        assert!(!joined_txt_matches(&empty, b"x"));
     }
 
     #[tokio::test]

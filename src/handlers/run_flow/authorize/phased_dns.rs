@@ -121,13 +121,14 @@ pub(super) async fn run_phased_dns(
             }
             return Err(e);
         }
-        ctx.cleanup_registry
-            .register(crate::cleanup::CleanupAction::DnsRecord {
-                hook: hook.to_path_buf(),
-                domain: dns_for_pending.clone(),
-                txt_name: txt_name.clone(),
-                txt_value: txt_value.clone(),
-            });
+        let cleanup_handle =
+            ctx.cleanup_registry
+                .register(crate::cleanup::CleanupAction::DnsRecord {
+                    hook: hook.to_path_buf(),
+                    domain: dns_for_pending.clone(),
+                    txt_name: txt_name.clone(),
+                    txt_value: txt_value.clone(),
+                });
 
         pending.push(DnsPending {
             authz_url: authz_url.clone(),
@@ -136,6 +137,7 @@ pub(super) async fn run_phased_dns(
             token,
             txt_name,
             txt_value,
+            cleanup_handle,
         });
     }
 
@@ -336,6 +338,7 @@ pub(super) async fn run_phased_dns(
                 p.domain
             );
             run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value).await;
+            p.cleanup_handle.complete();
         }
     }
     Ok(())

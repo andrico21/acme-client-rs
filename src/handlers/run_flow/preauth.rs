@@ -59,6 +59,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
         let mut challenge_file: Option<std::path::PathBuf> = None;
         let mut serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>> = None;
         let mut dns_cleanup_info: Option<(crate::types::DnsName, String)> = None;
+        let mut dns_cleanup_handle: Option<crate::cleanup::CleanupHandle> = None;
 
         match &ctx.challenge_type {
             ChallengeType::Http01 => {
@@ -72,7 +73,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     if !ctx.json && !ctx.silent {
                         outln!("  Challenge file written to {}", file.display());
                     }
-                    ctx.cleanup_registry.register(
+                    let _ = ctx.cleanup_registry.register(
                         crate::cleanup::CleanupAction::HttpChallengeFile(file.clone()),
                     );
                     challenge_file = Some(file);
@@ -91,10 +92,11 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     let task = tokio::spawn(crate::challenge::http01::run_accept_loop(
                         listener, auth, path,
                     ));
-                    ctx.cleanup_registry
-                        .register(crate::cleanup::CleanupAction::ServerTask(
-                            task.abort_handle(),
-                        ));
+                    let _ =
+                        ctx.cleanup_registry
+                            .register(crate::cleanup::CleanupAction::ServerTask(
+                                task.abort_handle(),
+                            ));
                     serve_task = Some(task);
                 }
                 client.respond_to_challenge(&challenge_url).await?;
@@ -114,13 +116,14 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     crate::challenge::dns01::txt_record_value(token, client.account_key())?;
                 if let Some(hook) = ctx.dns_hook {
                     run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
-                    ctx.cleanup_registry
-                        .register(crate::cleanup::CleanupAction::DnsRecord {
+                    dns_cleanup_handle = Some(ctx.cleanup_registry.register(
+                        crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
                             domain: dns.clone(),
                             txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
-                        });
+                        },
+                    ));
                 } else if !ctx.silent {
                     crate::challenge::dns01::print_instructions(dns, token, client.account_key())?;
                 }
@@ -200,13 +203,14 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 )?;
                 if let Some(hook) = ctx.dns_hook {
                     run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
-                    ctx.cleanup_registry
-                        .register(crate::cleanup::CleanupAction::DnsRecord {
+                    dns_cleanup_handle = Some(ctx.cleanup_registry.register(
+                        crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
                             domain: dns.clone(),
                             txt_name: txt_name.clone(),
                             txt_value: txt_value.clone(),
-                        });
+                        },
+                    ));
                 } else if !ctx.silent {
                     crate::challenge::dns_persist01::print_instructions(
                         dns,
@@ -374,6 +378,9 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             && let Some(ref dns) = dns_for_hook
         {
             run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value).await;
+            if let Some(handle) = &dns_cleanup_handle {
+                handle.complete();
+            }
         }
         if let Some(handle) = serve_task.take() {
             handle.abort();

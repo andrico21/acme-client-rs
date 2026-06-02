@@ -148,6 +148,14 @@ impl DnsName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Validate an ACME challenge **record name** (e.g.
+    /// `_acme-challenge.example.com`). Unlike [`DnsName::parse`], which is
+    /// LDH-only for certificate identifiers, this permits the leading `_`
+    /// service label. NOT for certificate identifiers.
+    pub fn parse_record_name(input: &str) -> Result<Self> {
+        Ok(Self(validate_and_normalize_record_name(input)?))
+    }
 }
 
 impl std::fmt::Display for DnsName {
@@ -274,9 +282,37 @@ impl std::fmt::Display for Identifier {
     }
 }
 
-/// Validate and normalize a DNS identifier per RFC 8555 §7.1.3 / §9.7.5
-/// and RFC 5280 §7 (which references RFC 1034 preferred name syntax).
+/// Whether `_` is permitted in a normalized DNS name.
 ///
+/// Certificate `dNSName` identifiers follow RFC 5280 §7 / RFC 1034
+/// preferred name syntax (LDH only — letters, digits, hyphen); `_` is
+/// NOT a legal hostname character and MUST be rejected. Challenge record
+/// names (`_acme-challenge`, `_validation-persist`) are not certificate
+/// identifiers and legitimately carry an underscore service label, so
+/// they use a distinct entry point that permits it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UnderscorePolicy {
+    Reject,
+    AllowServiceLabel,
+}
+
+/// Validate and normalize a certificate DNS identifier (LDH-only) per
+/// RFC 8555 §7.1.3 / §9.7.5 and RFC 5280 §7 (RFC 1034 preferred name
+/// syntax). Rejects `_`; use [`validate_and_normalize_record_name`] for
+/// ACME challenge record names that need a leading `_` service label.
+pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
+    validate_and_normalize_dns_with(input, UnderscorePolicy::Reject)
+}
+
+/// Validate and normalize an ACME challenge **record name**, permitting
+/// the leading `_` service label (`_acme-challenge.<host>`,
+/// `_validation-persist.<host>`). Same label/length/IDN rules as
+/// [`validate_and_normalize_dns`]; only the underscore is additionally
+/// allowed. NOT for certificate identifiers.
+pub fn validate_and_normalize_record_name(input: &str) -> Result<String> {
+    validate_and_normalize_dns_with(input, UnderscorePolicy::AllowServiceLabel)
+}
+
 /// Steps:
 /// 1. Strip a single trailing dot — RFC 1034 preferred name syntax used
 ///    in certificates has no trailing dot (the dot is the zone-file
@@ -289,7 +325,7 @@ impl std::fmt::Display for Identifier {
 ///    which lowercases ASCII, validates the labels, and converts any
 ///    U-labels to A-labels (`xn--…`) per RFC 5890. The wildcard prefix
 ///    is re-attached after IDN conversion (idna does not accept `*`).
-pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
+fn validate_and_normalize_dns_with(input: &str, underscore: UnderscorePolicy) -> Result<String> {
     let trimmed = input.trim_end_matches('.');
     if trimmed.is_empty() {
         bail!("empty DNS identifier");
@@ -313,12 +349,14 @@ pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
     let normalized_base = idna::domain_to_ascii(base)
         .map_err(|e| anyhow::anyhow!("invalid DNS identifier {input:?}: {e}"))?;
 
-    if !normalized_base
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_')
-    {
+    if !normalized_base.chars().all(|c| {
+        c.is_ascii_alphanumeric()
+            || c == '.'
+            || c == '-'
+            || (c == '_' && underscore == UnderscorePolicy::AllowServiceLabel)
+    }) {
         bail!(
-            "DNS identifier {input:?} contains characters outside [A-Za-z0-9._-] after normalization"
+            "DNS identifier {input:?} contains characters outside [A-Za-z0-9.-] after normalization"
         );
     }
     for label in normalized_base.split('.') {
@@ -1068,9 +1106,28 @@ mod tests {
     }
 
     #[test]
-    fn dns_normalize_accepts_underscore_label() -> anyhow::Result<()> {
+    fn m3_cert_identifier_ldh_only() -> anyhow::Result<()> {
+        assert!(validate_and_normalize_dns("_acme-challenge.example.com").is_err());
+        assert!(validate_and_normalize_dns("_bad.example.com").is_err());
+        assert!(validate_and_normalize_dns("a_b.example.com").is_err());
+        assert!(DnsName::parse("_acme-challenge.example.com").is_err());
+        assert!(DnsName::parse_canonical("_acme-challenge.example.com").is_err());
+        assert_eq!(validate_and_normalize_dns("example.com")?, "example.com");
+        Ok(())
+    }
+
+    #[test]
+    fn m3_record_name_allows_acme_underscore() -> anyhow::Result<()> {
         assert_eq!(
-            validate_and_normalize_dns("_acme-challenge.example.com")?,
+            validate_and_normalize_record_name("_acme-challenge.example.com")?,
+            "_acme-challenge.example.com"
+        );
+        assert_eq!(
+            validate_and_normalize_record_name("_validation-persist.example.com")?,
+            "_validation-persist.example.com"
+        );
+        assert_eq!(
+            DnsName::parse_record_name("_acme-challenge.example.com")?.as_str(),
             "_acme-challenge.example.com"
         );
         Ok(())

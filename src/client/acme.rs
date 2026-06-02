@@ -382,7 +382,10 @@ impl AcmeClient {
             .await?;
         resp.ensure_success()?;
 
-        let account_url = resp.location()?;
+        let account_url = {
+            let (tls, net) = self.transport.url_policies();
+            resp.validated_location(tls, net)?
+        };
         info!("Account URL: {account_url}");
         self.transport.account_url = Some(account_url.to_string());
 
@@ -468,7 +471,10 @@ impl AcmeClient {
             .await?;
         resp.ensure_success()?;
 
-        let order_url = resp.location()?;
+        let order_url = {
+            let (tls, net) = self.transport.url_policies();
+            resp.validated_location(tls, net)?
+        };
         info!("Order URL: {order_url}");
         let order: Order = resp.json()?;
         Ok((order, order_url))
@@ -629,7 +635,10 @@ impl AcmeClient {
             .signed_request(new_authz, &self.directory.new_nonce, &payload)
             .await?;
         resp.ensure_success()?;
-        let authz_url = resp.location()?;
+        let authz_url = {
+            let (tls, net) = self.transport.url_policies();
+            resp.validated_location(tls, net)?
+        };
         let authz: Authorization = resp.json()?;
         validate_server_identifier(&authz.identifier)?;
         Ok((authz, authz_url))

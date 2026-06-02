@@ -100,9 +100,10 @@ pub(crate) struct Cli {
         long,
         global = true,
         env = "ACME_ACCOUNT_KEY_PASSWORD",
+        value_parser = parse_secret_string,
         conflicts_with = "account_key_password_file"
     )]
-    pub(crate) account_key_password: Option<String>,
+    pub(crate) account_key_password: Option<secrecy::SecretString>,
 
     /// Read the account key decryption password from a file (first non-empty line)
     #[arg(
@@ -573,7 +574,7 @@ Examples:
 /// three layers. Field-level clap attributes (`#[arg(...)]`, defaults, env
 /// vars, conflicts, requires) are preserved verbatim from the original
 /// inline-variant form — clap derive behaviour is unchanged.
-#[derive(Args, Debug)]
+#[derive(Args)]
 pub(crate) struct RunArgs {
     /// Domain names (can also be set in config file under [run].domains)
     pub(crate) domains: Vec<String>,
@@ -660,8 +661,105 @@ pub(crate) struct RunArgs {
     pub(crate) force: bool,
 }
 
+/// clap value parser that wraps a password argument in [`secrecy::SecretString`]
+/// so it is zeroized on drop and cannot be accidentally logged in full.
+fn parse_secret_string(raw: &str) -> Result<secrecy::SecretString, std::convert::Infallible> {
+    Ok(secrecy::SecretString::from(raw.to_string()))
+}
+
+/// Partially masks a secret for debug output: keeps the first two and last two
+/// characters, replacing the middle with an ellipsis. Values of four or fewer
+/// characters are fully masked so short secrets cannot be reconstructed.
+fn mask_secret(value: &str) -> String {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= 4 {
+        return "****".to_string();
+    }
+    let first: String = chars.iter().take(2).collect();
+    let last: String = chars
+        .iter()
+        .rev()
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{first}…{last}")
+}
+
+/// Hand-written `Debug` so the private-key encryption password is never shown
+/// in full in logs or panic output (only a first-two/last-two mask). The EAB
+/// HMAC key is intentionally shown in full: operators rely on its visibility to
+/// confirm the External Account Binding credential when debugging onboarding.
+/// All fields are destructured so a newly added field forces a compile error
+/// here rather than silently escaping the redaction review.
+impl std::fmt::Debug for RunArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            domains,
+            contact,
+            challenge_type,
+            http_port,
+            challenge_dir,
+            dns_hook,
+            dns_wait,
+            dns_propagation_concurrency,
+            challenge_timeout,
+            cert_output,
+            key_output,
+            reuse_key,
+            days,
+            key_password,
+            key_password_file,
+            on_challenge_ready,
+            on_cert_issued,
+            eab_kid,
+            eab_hmac_key,
+            pre_authorize,
+            ari,
+            reissue_on_mismatch,
+            print_cert,
+            persist_policy,
+            persist_until,
+            cert_key_algorithm,
+            profile,
+            force,
+        } = self;
+        f.debug_struct("RunArgs")
+            .field("domains", domains)
+            .field("contact", contact)
+            .field("challenge_type", challenge_type)
+            .field("http_port", http_port)
+            .field("challenge_dir", challenge_dir)
+            .field("dns_hook", dns_hook)
+            .field("dns_wait", dns_wait)
+            .field("dns_propagation_concurrency", dns_propagation_concurrency)
+            .field("challenge_timeout", challenge_timeout)
+            .field("cert_output", cert_output)
+            .field("key_output", key_output)
+            .field("reuse_key", reuse_key)
+            .field("days", days)
+            .field("key_password", &key_password.as_deref().map(mask_secret))
+            .field("key_password_file", key_password_file)
+            .field("on_challenge_ready", on_challenge_ready)
+            .field("on_cert_issued", on_cert_issued)
+            .field("eab_kid", eab_kid)
+            .field("eab_hmac_key", eab_hmac_key)
+            .field("pre_authorize", pre_authorize)
+            .field("ari", ari)
+            .field("reissue_on_mismatch", reissue_on_mismatch)
+            .field("print_cert", print_cert)
+            .field("persist_policy", persist_policy)
+            .field("persist_until", persist_until)
+            .field("cert_key_algorithm", cert_key_algorithm)
+            .field("profile", profile)
+            .field("force", force)
+            .finish()
+    }
+}
+
 #[cfg(test)]
-#[allow(clippy::panic)]
+#[allow(clippy::panic, clippy::expect_used)]
 mod tests {
     use super::*;
     use anyhow::Context;
@@ -737,5 +835,58 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    #[test]
+    fn m5_run_args_debug_masks_password_shows_eab() {
+        let cli = Cli::try_parse_from([
+            "acme",
+            "run",
+            "example.com",
+            "--key-password",
+            "supersecretpw",
+            "--eab-kid",
+            "kid-123",
+            "--eab-hmac-key",
+            "visible-hmac-value",
+        ])
+        .expect("parse run args");
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected run command");
+        };
+        let rendered = format!("{args:?}");
+        assert!(
+            !rendered.contains("supersecretpw"),
+            "raw password leaked: {rendered}"
+        );
+        assert!(
+            rendered.contains("su…pw"),
+            "password not masked: {rendered}"
+        );
+        assert!(
+            rendered.contains("visible-hmac-value"),
+            "eab_hmac_key must be shown in full: {rendered}"
+        );
+    }
+
+    #[test]
+    fn m5_mask_secret_fully_masks_short_values() {
+        assert_eq!(mask_secret("abcd"), "****");
+        assert_eq!(mask_secret(""), "****");
+        assert_eq!(mask_secret("abcde"), "ab…de");
+    }
+
+    #[test]
+    fn l6_account_key_password_is_secret() {
+        use secrecy::ExposeSecret;
+        let cli = Cli::try_parse_from([
+            "acme",
+            "--account-key-password",
+            "topsecret",
+            "list-profiles",
+        ])
+        .expect("parse account key password");
+        let pw = cli.account_key_password.as_ref().expect("password present");
+        assert_eq!(pw.expose_secret(), "topsecret");
     }
 }

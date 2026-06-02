@@ -64,7 +64,10 @@ async fn main() {
     };
 
     if let Some(ref config) = loaded_config {
-        apply_config(&mut cli, &matches, config, config_mode);
+        if let Err(err) = apply_config(&mut cli, &matches, config, config_mode) {
+            error!("{err:#}");
+            std::process::exit(1);
+        }
     } else if config_mode {
         // config_mode was requested but the env/cli pointed nowhere — should not happen
         // (load_config already errors), but guard anyway.
@@ -80,6 +83,8 @@ async fn main() {
             );
         }
     }
+
+    output::set_silent(cli.silent);
 
     let cleanup_registry = cleanup::CleanupRegistry::new();
     let sigint_registry = cleanup_registry.clone();
@@ -129,7 +134,9 @@ async fn run(
         ),
         Commands::GenerateKey { algorithm, force } => {
             let pw = resolve_account_key_password(
-                cli.account_key_password.as_deref(),
+                cli.account_key_password
+                    .as_ref()
+                    .map(secrecy::ExposeSecret::expose_secret),
                 cli.account_key_password_file.as_deref(),
             )
             .await?;
@@ -249,7 +256,9 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
 
     client::validate_directory_url(&cli.directory, tls, net)?;
     let pw = resolve_account_key_password(
-        cli.account_key_password.as_deref(),
+        cli.account_key_password
+            .as_ref()
+            .map(secrecy::ExposeSecret::expose_secret),
         cli.account_key_password_file.as_deref(),
     )
     .await?;
@@ -261,13 +270,8 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     if cli.insecure {
         tracing::warn!("TLS certificate verification is disabled (--insecure)");
     }
-    let (tls, network) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
-    let mut client =
-        AcmeClient::new(&cli.directory, key, tls, cli.connect_timeout, network).await?;
+    let mut client = AcmeClient::new(&cli.directory, key, tls, cli.connect_timeout, net).await?;
     if let Some(ref url) = cli.account_url {
-        let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
-
         client::validate_acme_url(url, tls, net)?;
         client.set_account_url(url.as_str());
     }

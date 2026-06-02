@@ -129,6 +129,23 @@ impl AcmeResponse {
             .with_context(|| format!("Location header is not a valid URL: {raw}"))
     }
 
+    /// Like [`location`](Self::location) but rejects the URL if it points at a
+    /// private/loopback/special-purpose address or otherwise violates policy.
+    /// A malicious or compromised CA can redirect follow-up navigation
+    /// (account/order/authz URLs) at internal services via the `Location`
+    /// header; this closes that SSRF vector at the boundary where the URL
+    /// first enters the client.
+    pub(crate) fn validated_location(
+        &self,
+        tls: super::net_policy::TlsPolicy,
+        network: super::net_policy::NetworkPolicy,
+    ) -> Result<url::Url> {
+        let url = self.location()?;
+        super::url_validation::validate_acme_url(url.as_str(), tls, network)
+            .context("Location header URL failed validation")?;
+        Ok(url)
+    }
+
     pub(crate) fn ensure_success(&self) -> Result<()> {
         if self.status.is_client_error() || self.status.is_server_error() {
             if let Ok(err) = serde_json::from_slice::<AcmeError>(&self.body) {
@@ -146,6 +163,7 @@ impl AcmeResponse {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used)]
     use super::*;
 
     #[test]
@@ -176,5 +194,57 @@ mod tests {
         let out = truncate_for_log(body);
         assert!(out.contains("valid"));
         assert!(out.contains("end"));
+    }
+
+    fn response_with_location(loc: &str) -> AcmeResponse {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "location",
+            reqwest::header::HeaderValue::from_str(loc).expect("valid header"),
+        );
+        AcmeResponse {
+            status: reqwest::StatusCode::CREATED,
+            headers,
+            body: Vec::new(),
+        }
+    }
+
+    // M1: a Location pointing at a private/loopback address must be rejected
+    // under the production policy, but accepted for a public host.
+    #[test]
+    fn m1_validated_location_rejects_private_targets() {
+        let (tls, net) = super::super::net_policy::policies_from_cli_flags(false, false);
+
+        assert!(
+            response_with_location("https://acme.example.com/acct/1")
+                .validated_location(tls, net)
+                .is_ok()
+        );
+
+        assert!(
+            response_with_location("https://127.0.0.1/acct/1")
+                .validated_location(tls, net)
+                .is_err()
+        );
+        assert!(
+            response_with_location("https://[::1]/acct/1")
+                .validated_location(tls, net)
+                .is_err()
+        );
+        assert!(
+            response_with_location("file:///etc/passwd")
+                .validated_location(tls, net)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn m1_validated_location_allows_private_with_override() {
+        let (tls, net) = super::super::net_policy::policies_from_cli_flags(true, true);
+        assert!(
+            response_with_location("https://127.0.0.1/acct/1")
+                .validated_location(tls, net)
+                .is_ok()
+        );
     }
 }
