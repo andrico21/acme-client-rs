@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
 
-A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single ~2 MB binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
+A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single self-contained binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
 
 Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX), and structured JSON output for CI/CD integration.
 
@@ -34,7 +34,7 @@ Alternatively, build from source — see [Building](#building) below.
 ## Features
 
 - Full RFC 8555 protocol: account management, key rollover, order lifecycle, challenge handling, certificate download, revocation
-- Four challenge types: HTTP-01 (built-in server or `--challenge-dir`), DNS-01 (interactive, hook scripts, auto-propagation check), DNS-PERSIST-01 (persistent DNS records, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist)), TLS-ALPN-01 (interactive)
+- Four challenge types: HTTP-01 (built-in server or `--challenge-dir`), DNS-01 (interactive, hook scripts, auto-propagation check), DNS-PERSIST-01 (persistent DNS records, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist)), TLS-ALPN-01 (interactive)
 - External Account Binding (EAB) for CAs that require it (`--eab-kid` + `--eab-hmac-key`)
 - Pre-authorization (RFC 8555 Section 7.4.1) via `pre-authorize` subcommand or `--pre-authorize` flag on `run`
 - Generic hook scripts: `--on-challenge-ready` (called after each dns-01, dns-persist-01, or tls-alpn-01 challenge is set up) and `--on-cert-issued` (called after certificate is saved)
@@ -264,7 +264,7 @@ With JSON output:
 acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
 ```
 
-> **Note:** DNS-PERSIST-01 is defined in [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Pebble already supports it. Let's Encrypt staging support is expected late Q1 2026, production Q2 2026.
+> **Note:** DNS-PERSIST-01 is defined in [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist). Pebble already supports it. Let's Encrypt staging support is expected late Q1 2026, production Q2 2026.
 
 ### Using --challenge-dir (reverse proxy integration)
 
@@ -459,13 +459,13 @@ To use Docker instead of Podman, simply replace `podman` with `docker` in all co
 
 ### Size Comparison
 
-Typical binary sizes (x86_64, Windows MSVC):
+Typical binary sizes (x86_64 Linux, gnu, with statically vendored OpenSSL 3.5.x):
 
 | Profile | Approximate Size |
 |---|---|
-| `debug` (default) | ~25-30 MB |
-| `release` (before tuning) | ~4.8 MB |
-| `release` (opt-level=z, LTO, strip, abort + CFG/ASLR/DEP/CET) | ~2.3 MB |
+| `debug` (default) | ~157 MB |
+| `release` (before tuning) | ~22 MB |
+| `release` (opt-level=z, LTO, strip, abort) | ~7 MB |
 
 </details>
 

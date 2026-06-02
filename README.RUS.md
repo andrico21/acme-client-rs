@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml/badge.svg?branch=master)](https://github.com/andrico21/acme-client-rs/actions/workflows/rust.yaml)
 
-Легковесный ACME-клиент в виде единого исполняемого файла, реализующий [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) с поддержкой [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) и [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Полный жизненный цикл сертификата - от регистрации аккаунта до выпуска, продления и отзыва - в одном бинарнике размером ~2 МБ без внешних зависимостей.
+Легковесный ACME-клиент в виде единого исполняемого файла, реализующий [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) с поддержкой [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) и [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist). Полный жизненный цикл сертификата - от регистрации аккаунта до выпуска, продления и отзыва - в одном самодостаточном бинарнике без внешних зависимостей.
 
 Написан на Rust (редакция 2024) с `#![forbid(unsafe_code)]`, защищёнными release-сборками (CFG, ASLR, full RELRO, NX) и структурированным JSON-выводом для интеграции с CI/CD.
 
@@ -34,7 +34,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 ## Возможности
 
 - Полная реализация протокола RFC 8555: управление аккаунтами, ротация ключей, жизненный цикл заказов, обработка вызовов, загрузка сертификатов, отзыв
-- Четыре типа вызовов: HTTP-01 (встроенный сервер или `--challenge-dir`), DNS-01 (интерактивный, hook-скрипты, автопроверка появления TXT-записи), DNS-PERSIST-01 (постоянные DNS-записи, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist)), TLS-ALPN-01 (интерактивный)
+- Четыре типа вызовов: HTTP-01 (встроенный сервер или `--challenge-dir`), DNS-01 (интерактивный, hook-скрипты, автопроверка появления TXT-записи), DNS-PERSIST-01 (постоянные DNS-записи, [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist)), TLS-ALPN-01 (интерактивный)
 - Привязка внешнего аккаунта (EAB) для CA, которые этого требуют в обязательном порядке (`--eab-kid` + `--eab-hmac-key`)
 - Предварительная авторизация (RFC 8555 Section 7.4.1) через субкоманду `pre-authorize` или флаг `--pre-authorize` в `run`
 - Универсальные hook-скрипты: `--on-challenge-ready` (вызывается после подготовки каждого вызова dns-01, dns-persist-01 или tls-alpn-01) и `--on-cert-issued` (вызывается после сохранения сертификата)
@@ -264,7 +264,7 @@ acme-client-rs --directory https://your-acme-server/directory show-dns-persist-0
 acme-client-rs --directory https://your-acme-server/directory --output-format json show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org --persist-policy wildcard --persist-until 1767225600
 ```
 
-> **Примечание:** DNS-PERSIST-01 определён в [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-sheurich-acme-dns-persist). Pebble уже поддерживает его. Поддержка Let's Encrypt staging ожидается в конце Q1 2026, production - в Q2 2026.
+> **Примечание:** DNS-PERSIST-01 определён в [draft-ietf-acme-dns-persist](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist). Pebble уже поддерживает его. Поддержка Let's Encrypt staging ожидается в конце Q1 2026, production - в Q2 2026.
 
 ### Использование --challenge-dir (интеграция с reverse proxy)
 
@@ -459,13 +459,13 @@ podman run --rm -v ./certs:/certs:Z acme-client-rs --directory https://acme-serv
 
 ### Сравнение размеров
 
-Типичные размеры бинарника (x86_64, Windows MSVC):
+Типичные размеры бинарника (x86_64 Linux, gnu, со статически вендоренным OpenSSL 3.5.x):
 
 | Профиль | Примерный размер |
 |---|---|
-| `debug` (по умолчанию) | ~25-30 МБ |
-| `release` (до оптимизации) | ~4.8 МБ |
-| `release` (opt-level=z, LTO, strip, abort + CFG/ASLR/DEP/CET) | ~2.3 МБ |
+| `debug` (по умолчанию) | ~157 МБ |
+| `release` (до оптимизации) | ~22 МБ |
+| `release` (opt-level=z, LTO, strip, abort) | ~7 МБ |
 
 </details>
 
