@@ -19,11 +19,17 @@ allow = [
     "Apache-2.0 WITH LLVM-exception",
     "BSD-2-Clause",
     "BSD-3-Clause",
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "Unicode-3.0",
     "Unlicense",
 ]
+
+# CDLA-Permissive-2.0 is required by `webpki-root-certs` (transitive via
+# `rustls-platform-verifier` -> `reqwest` rustls feature). It is the standard
+# license for compiled CA-certificate bundles (same as Mozilla's webpki-roots),
+# permissive and compatible with our Apache-2.0 distribution.
 
 [bans]
 multiple-versions = "warn"

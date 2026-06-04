@@ -1,6 +1,6 @@
 [package]
 name = "acme-client-rs"
-version = "2.1.5"
+version = "2.2.0"
 edition = "2024"
 license = "Apache-2.0"
 
@@ -22,7 +22,7 @@ pem = "3"
 pkcs8 = { version = "0.11", features = ["encryption"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rcgen = "0.14"
-reqwest = { version = "0.13", default-features = false, features = ["native-tls", "http2", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }
 rsa = { version = "0.9", features = ["sha2"] }
 scrypt = "0.12"
 serde = { version = "1", features = ["derive"] }

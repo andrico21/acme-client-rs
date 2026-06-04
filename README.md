@@ -339,14 +339,14 @@ cargo build --release
 
 #### Linux (GNU/musl)
 
-**Prerequisites:** The `native-tls` crate uses OpenSSL on Linux. Install the development headers first:
+**Prerequisites:** TLS is provided by `rustls` with the `aws-lc-rs` crypto provider — no OpenSSL or system TLS libraries required. You only need a working C toolchain (the `aws-lc-sys` build script invokes `cc` to compile the AWS-LC C sources):
 
 | Distro | Install command |
 |---|---|
-| Debian / Ubuntu | `sudo apt install pkg-config libssl-dev` |
-| RHEL / Fedora | `sudo dnf install pkg-config openssl-devel` |
-| Alpine (musl) | `apk add pkgconf openssl-dev openssl-libs-static` |
-| Arch | `sudo pacman -S pkg-config openssl` |
+| Debian / Ubuntu | `sudo apt install build-essential pkg-config` |
+| RHEL / Fedora | `sudo dnf install gcc make pkg-config` |
+| Alpine (musl) | `apk add musl-dev pkgconf` |
+| Arch | `sudo pacman -S base-devel pkg-config` |
 
 ```sh
 RUSTFLAGS="-C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" cargo build --release
@@ -399,9 +399,9 @@ file target/release/acme-client-rs  # should say "ELF 64-bit ... dynamically lin
 
 ### Building with Podman (or Docker)
 
-You can produce a fully static Linux binary inside a container - no local Rust toolchain or OpenSSL headers needed.
+You can produce a fully static Linux binary inside a container - no local Rust toolchain needed.
 
-The example below uses a multi-stage build: the first stage compiles against musl with a vendored OpenSSL 3.5.x, and the second stage copies out the binary.
+The example below uses a multi-stage build: the first stage compiles against musl with `rustls` + `aws-lc-rs` (no OpenSSL), and the second stage copies out the binary.
 
 Create a `Containerfile` (works with both `podman` and `docker`):
 
@@ -409,13 +409,12 @@ Create a `Containerfile` (works with both `podman` and `docker`):
 # -- Stage 1: Build --
 FROM docker.io/library/rust:alpine AS builder
 
-RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static perl make
+RUN apk add --no-cache musl-dev pkgconf
 
 WORKDIR /src
 COPY . .
 
 # Static musl build with full security hardening
-ENV OPENSSL_STATIC=1
 ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
 
 RUN cargo build --release && strip target/release/acme-client-rs
@@ -453,19 +452,19 @@ podman run --rm acme-client-rs --help
 podman run --rm -v ./certs:/certs:Z acme-client-rs --directory https://acme-server/directory --account-key /certs/account.key run --contact you@example.com your.domain.com
 ```
 
-> **Note:** Alpine's `openssl-dev` package ships OpenSSL 3.5.x (3.5.5 as of this writing). The `OPENSSL_STATIC=1` env var tells the `openssl-sys` build script to link OpenSSL statically, producing a fully self-contained binary with no runtime dependencies. The `rust:alpine` base image uses musl libc natively, so no cross-compilation target is needed.
+> **Note:** TLS is handled by `rustls` with the `aws-lc-rs` crypto provider and the `rustls-platform-verifier` crate, which delegates certificate-chain validation to the host OS — Windows CryptoAPI, macOS Security framework, or `/etc/ssl/certs` on Linux. Enterprise / private CAs installed in the OS trust store are honored automatically. The `rust:alpine` base image uses musl libc natively, so no cross-compilation target is needed.
 
 To use Docker instead of Podman, simply replace `podman` with `docker` in all commands above.
 
 ### Size Comparison
 
-Typical binary sizes (x86_64 Linux, gnu, with statically vendored OpenSSL 3.5.x):
+Typical binary sizes (x86_64 Linux, gnu, with rustls + aws-lc-rs):
 
 | Profile | Approximate Size |
 |---|---|
 | `debug` (default) | ~157 MB |
 | `release` (before tuning) | ~22 MB |
-| `release` (opt-level=z, LTO, strip, abort) | ~7 MB |
+| `release` (opt-level=z, LTO, strip, abort) | ~7.6 MB |
 
 </details>
 
