@@ -10,6 +10,12 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-06-04
+
+### Documentation
+
+- Added `CHANGELOG.md` (Keep a Changelog 1.1.0), backfilling 2.2.0–2.2.2.
+
 ### Tests
 
 - Integration smoke tests for `--generate-account-key-if-missing`: TC-22b
@@ -58,7 +64,8 @@ are documented only in git history and GitHub releases.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.2...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...HEAD
+[2.2.3]: https://github.com/andrico21/acme-client-rs/compare/2.2.2...2.2.3
 [2.2.2]: https://github.com/andrico21/acme-client-rs/compare/2.2.1...2.2.2
 [2.2.1]: https://github.com/andrico21/acme-client-rs/compare/2.2.0...2.2.1
 [2.2.0]: https://github.com/andrico21/acme-client-rs/compare/2.1.5...2.2.0
