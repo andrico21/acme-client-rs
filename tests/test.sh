@@ -694,6 +694,75 @@ else
   echo "  Output: ${OUTPUT}"
 fi
 
+# ── TC-22b: Full E2E - --generate-account-key-if-missing (auto-create) ──────
+#
+# Validates the single-command container UX shipped in 2.2.1: when the
+# account-key path does NOT exist and --generate-account-key-if-missing is
+# set, `run` auto-generates a fresh account key in place and proceeds with
+# the issuance flow in one invocation.
+
+log_test "22b" "run --generate-account-key-if-missing (auto-create then issue)"
+AUTOGEN_KEY="${WORK_DIR}/autogen-account.key"
+AUTOGEN_CERT="${WORK_DIR}/autogen-cert.pem"
+AUTOGEN_PRIVKEY="${WORK_DIR}/autogen-private.key"
+
+# Pre-condition: account-key file does NOT exist.
+if [[ -e "${AUTOGEN_KEY}" ]]; then
+  fail "22b" "Pre-condition violated: ${AUTOGEN_KEY} already exists"
+else
+  OUTPUT=$(acme --account-key "${AUTOGEN_KEY}" run \
+    --generate-account-key-if-missing \
+    --account-key-algorithm es256 \
+    --contact autogen@example.com \
+    --challenge-type http-01 \
+    --http-port 5002 \
+    --cert-output "${AUTOGEN_CERT}" \
+    --key-output "${AUTOGEN_PRIVKEY}" \
+    "${SINGLE_DOMAIN}" 2>&1)
+  RC=$?
+
+  if [[ ${RC} -eq 0 ]] && [[ -f "${AUTOGEN_KEY}" ]] && [[ -f "${AUTOGEN_CERT}" ]]; then
+    if grep -q "BEGIN" "${AUTOGEN_KEY}" && grep -q "BEGIN CERTIFICATE" "${AUTOGEN_CERT}"; then
+      pass "Account key auto-generated and certificate issued in one run"
+    else
+      fail "22b" "Files exist but content is not valid PEM"
+    fi
+  else
+    fail "22b" "Auto-generate run failed (exit code ${RC}, key=$([[ -f "${AUTOGEN_KEY}" ]] && echo yes || echo no), cert=$([[ -f "${AUTOGEN_CERT}" ]] && echo yes || echo no))"
+    echo "  Output: ${OUTPUT}"
+  fi
+fi
+
+# ── TC-22c: run WITHOUT the flag fails when account key is missing ──────────
+#
+# Control test: confirms default behavior is unchanged (errors out instead of
+# silently generating a key). Guards against accidental flip of the default.
+
+log_test "22c" "run without --generate-account-key-if-missing fails on missing key"
+NOFLAG_KEY="${WORK_DIR}/noflag-account.key"
+NOFLAG_CERT="${WORK_DIR}/noflag-cert.pem"
+NOFLAG_PRIVKEY="${WORK_DIR}/noflag-private.key"
+
+if [[ -e "${NOFLAG_KEY}" ]]; then
+  fail "22c" "Pre-condition violated: ${NOFLAG_KEY} already exists"
+else
+  OUTPUT=$(acme --account-key "${NOFLAG_KEY}" run \
+    --contact noflag@example.com \
+    --challenge-type http-01 \
+    --http-port 5002 \
+    --cert-output "${NOFLAG_CERT}" \
+    --key-output "${NOFLAG_PRIVKEY}" \
+    "${SINGLE_DOMAIN}" 2>&1 || true)
+  RC=$?
+
+  if [[ ${RC} -ne 0 ]] && [[ ! -f "${NOFLAG_KEY}" ]]; then
+    pass "Default behavior unchanged: missing account key still errors"
+  else
+    fail "22c" "Default behavior regressed (rc=${RC}, key created=$([[ -f "${NOFLAG_KEY}" ]] && echo yes || echo no))"
+    echo "  Output: ${OUTPUT}"
+  fi
+fi
+
 # ═════════════════════════════════════════════════════════════════════════════
 # SECTION 8: Private Key Encryption
 # ═════════════════════════════════════════════════════════════════════════════
