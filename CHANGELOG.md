@@ -10,6 +10,18 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.2.4] - 2026-06-04
+
+### Changed
+
+- Refactored `cmd_run` into per-phase modules (`preflight`,
+  `account_step`, `order_step`) plus a `RunContext::build` constructor.
+  `cmd_run` is now a thin dispatcher: preflight → context build →
+  renewal check → account → optional preauth → order → authorize →
+  finalize. Pure motion — no behavior change, no CLI/config/output
+  change. Removed a redundant wildcard-compatibility check that ran
+  twice on every invocation.
+
 ## [2.2.3] - 2026-06-04
 
 ### Documentation
@@ -64,7 +76,8 @@ are documented only in git history and GitHub releases.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...HEAD
+[2.2.4]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...2.2.4
 [2.2.3]: https://github.com/andrico21/acme-client-rs/compare/2.2.2...2.2.3
 [2.2.2]: https://github.com/andrico21/acme-client-rs/compare/2.2.1...2.2.2
 [2.2.1]: https://github.com/andrico21/acme-client-rs/compare/2.2.0...2.2.1
