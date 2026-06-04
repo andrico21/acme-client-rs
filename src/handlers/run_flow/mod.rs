@@ -5,25 +5,26 @@
 //! DNS-01, DNS-PERSIST-01, TLS-ALPN-01), CSR generation, finalization,
 //! and post-issuance hook invocation.
 //!
-//! The flow is split across four phase modules — see `CODE_REVIEW.md` item 5.
-//! Phase extraction is in progress; today `cmd_run` is still monolithic.
+//! `cmd_run` is a thin dispatcher: preflight → context build → renewal
+//! check → account → optional preauth → order → authorize → finalize.
+//! Each phase lives in a sibling module and borrows the shared `RunContext`.
 
+mod account_step;
 mod authorize;
 mod finalize;
+mod order_step;
 mod preauth;
+mod preflight;
 mod renewal;
 
 use anyhow::{Context, Result};
-use tracing::info;
 
 use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat, RunArgs};
 use crate::client::AcmeClient;
 use crate::dns_check::DnsChecker;
 use crate::types::{ChallengeType, Identifier};
-use crate::{build_client, outln};
 
-use super::account::cmd_generate_key;
-use super::{check_wildcard_compatible, parse_eab};
+use super::check_wildcard_compatible;
 
 /// Shared state for every phase of the run subcommand.
 ///
@@ -70,6 +71,85 @@ pub(super) struct RunContext<'a> {
     pub early_client: Option<AcmeClient>,
 }
 
+impl<'a> RunContext<'a> {
+    /// Build the shared run-flow context from CLI inputs.
+    ///
+    /// Sync (no I/O beyond DNS-resolver construction). The caller must have
+    /// already parsed `challenge_type` and run preflight validation /
+    /// auto-generate-key side effects.
+    pub(super) fn build(
+        cli: &'a Cli,
+        args: &'a RunArgs,
+        challenge_type: ChallengeType,
+        cleanup_registry: &'a crate::cleanup::CleanupRegistry,
+    ) -> Result<Self> {
+        let domains: Vec<String> = args
+            .domains
+            .iter()
+            .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
+            .collect::<Result<Vec<_>>>()?;
+
+        let dns_checker = std::sync::Arc::new(
+            DnsChecker::new(
+                cli.dns_check_mode,
+                if cli.dns_check_dnssec {
+                    crate::dns_check::Dnssec::On
+                } else {
+                    crate::dns_check::Dnssec::Off
+                },
+            )
+            .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
+        );
+
+        let json = cli.output_format == OutputFormat::Json;
+        let silent = cli.silent;
+
+        Ok(RunContext {
+            cli,
+            challenge_type,
+            http_port: args.http_port,
+            challenge_dir: args.challenge_dir.as_deref(),
+            dns_hook: args.dns_hook.as_deref(),
+            dns_wait: args.dns_wait,
+            dns_propagation_concurrency: args.dns_propagation_concurrency,
+            challenge_timeout: args.challenge_timeout,
+            cert_output: &args.cert_output,
+            key_output: &args.key_output,
+            reuse_key: args.reuse_key.as_deref(),
+            days: args.days,
+            key_password: args
+                .key_password
+                .as_ref()
+                .map(|s| secrecy::SecretString::from(s.clone())),
+            key_password_file: args.key_password_file.as_deref(),
+            on_challenge_ready: args.on_challenge_ready.as_deref(),
+            on_cert_issued: args.on_cert_issued.as_deref(),
+            eab_kid: args.eab_kid.as_deref(),
+            eab_hmac_key: args
+                .eab_hmac_key
+                .as_ref()
+                .map(|s| secrecy::SecretString::from(s.clone())),
+            pre_authorize: args.pre_authorize,
+            ari: args.ari,
+            reissue_on_mismatch: args.reissue_on_mismatch,
+            print_cert: args.print_cert,
+            persist_policy: args.persist_policy.as_deref(),
+            persist_until: args.persist_until,
+            cert_key_alg: args.cert_key_algorithm,
+            profile: args.profile.as_deref(),
+            force: args.force,
+            contact: args.contact.as_deref(),
+            cleanup_registry,
+            domains,
+            dns_checker,
+            json,
+            silent,
+            ari_cert_id: None,
+            early_client: None,
+        })
+    }
+}
+
 // ── Full automated flow ─────────────────────────────────────────────────────
 
 // NOT cancel-safe: top-level end-to-end flow. Inherits NOT-cancel-safe
@@ -82,189 +162,26 @@ pub(crate) async fn cmd_run(
     cleanup_registry: &crate::cleanup::CleanupRegistry,
 ) -> Result<()> {
     let challenge_type = ChallengeType::parse_strict(&args.challenge_type)?;
+    // Wildcard / challenge-type compatibility runs BEFORE preflight so that
+    // wildcard rejection happens before any side effect (account-key gen).
     check_wildcard_compatible(&args.domains, &challenge_type)?;
 
-    crate::hook_check::validate_all_hooks(
-        &[
-            ("dns_hook", args.dns_hook.as_deref()),
-            ("on_challenge_ready", args.on_challenge_ready.as_deref()),
-            ("on_cert_issued", args.on_cert_issued.as_deref()),
-        ],
-        cli.unsafe_hooks,
-    )?;
+    preflight::run(cli, args).await?;
 
-    if args.generate_account_key_if_missing && !cli.account_key.exists() {
-        info!(
-            "--generate-account-key-if-missing set and {} does not exist: generating {} account key",
-            cli.account_key.display(),
-            args.account_key_algorithm,
-        );
-        cmd_generate_key(
-            &cli.account_key,
-            args.account_key_algorithm,
-            false,
-            cli.output_format,
-            cli.silent,
-            cli.account_key_password.as_ref(),
-        )
-        .await
-        .context("failed to auto-generate account key")?;
-    }
-
-    // Pre-flight: on fresh issuance (no existing cert), refuse to start
-    // when --key-output already points at a file but neither --reuse-key
-    // nor --force is set. Catches the footgun where the CA issues a cert
-    // and then fs_secure rejects the key write, orphaning the cert.
-    // Renewal paths (cert_output exists) bypass this: renewal::check may
-    // decide Skip (no write), and Renew/Reissue inherently overwrite the
-    // existing keypair by user intent.
-    if !args.force
-        && args.reuse_key.is_none()
-        && !args.cert_output.exists()
-        && args.key_output.exists()
-    {
-        anyhow::bail!(
-            "private key already exists at {} but no certificate found at {}: \
-             pass --reuse-key {} to reuse the key, or --force to overwrite",
-            args.key_output.display(),
-            args.cert_output.display(),
-            args.key_output.display(),
-        );
-    }
-
-    let domains: Vec<String> = args
-        .domains
-        .iter()
-        .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
-        .collect::<Result<Vec<_>>>()?;
-
-    let dns_checker = std::sync::Arc::new(
-        DnsChecker::new(
-            cli.dns_check_mode,
-            if cli.dns_check_dnssec {
-                crate::dns_check::Dnssec::On
-            } else {
-                crate::dns_check::Dnssec::Off
-            },
-        )
-        .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
-    );
-
-    let json = cli.output_format == OutputFormat::Json;
-    let silent = cli.silent;
-
-    let mut ctx = RunContext {
-        cli,
-        challenge_type,
-        http_port: args.http_port,
-        challenge_dir: args.challenge_dir.as_deref(),
-        dns_hook: args.dns_hook.as_deref(),
-        dns_wait: args.dns_wait,
-        dns_propagation_concurrency: args.dns_propagation_concurrency,
-        challenge_timeout: args.challenge_timeout,
-        cert_output: &args.cert_output,
-        key_output: &args.key_output,
-        reuse_key: args.reuse_key.as_deref(),
-        days: args.days,
-        key_password: args
-            .key_password
-            .as_ref()
-            .map(|s| secrecy::SecretString::from(s.clone())),
-        key_password_file: args.key_password_file.as_deref(),
-        on_challenge_ready: args.on_challenge_ready.as_deref(),
-        on_cert_issued: args.on_cert_issued.as_deref(),
-        eab_kid: args.eab_kid.as_deref(),
-        eab_hmac_key: args
-            .eab_hmac_key
-            .as_ref()
-            .map(|s| secrecy::SecretString::from(s.clone())),
-        pre_authorize: args.pre_authorize,
-        ari: args.ari,
-        reissue_on_mismatch: args.reissue_on_mismatch,
-        print_cert: args.print_cert,
-        persist_policy: args.persist_policy.as_deref(),
-        persist_until: args.persist_until,
-        cert_key_alg: args.cert_key_algorithm,
-        profile: args.profile.as_deref(),
-        force: args.force,
-        contact: args.contact.as_deref(),
-        cleanup_registry,
-        domains,
-        dns_checker,
-        json,
-        silent,
-        ari_cert_id: None,
-        early_client: None,
-    };
+    let mut ctx = RunContext::build(cli, args, challenge_type, cleanup_registry)?;
 
     match renewal::check(&mut ctx).await? {
         renewal::RenewalDecision::Skip => return Ok(()),
         renewal::RenewalDecision::Reissue | renewal::RenewalDecision::Renew => {}
     }
 
-    // ── 1. Account ──────────────────────────────────────────────────────
-    info!("Step 1: Creating / looking up account");
-    let mut client = match ctx.early_client.take() {
-        Some(c) => c,
-        None => build_client(ctx.cli).await?,
-    };
-    let contact_list = ctx.contact.take().map(|c| vec![format!("mailto:{c}")]);
-    let eab = parse_eab(
-        ctx.eab_kid,
-        ctx.eab_hmac_key
-            .as_ref()
-            .map(<secrecy::SecretString as secrecy::ExposeSecret<str>>::expose_secret),
-    )?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| {
-        use secrecy::ExposeSecret;
-        (kid.as_str(), key.expose_secret().as_slice())
-    });
-    let account = client.create_account(contact_list, true, eab_ref).await?;
-    if !ctx.json && !ctx.silent {
-        outln!("Account status: {}", account.status);
-    }
+    let mut client = account_step::create_or_lookup(&mut ctx).await?;
 
     if ctx.pre_authorize {
         preauth::preauthorize(&mut ctx, &mut client).await?;
     }
 
-    // ── 2b. New order ───────────────────────────────────────────────────
-    info!(
-        "Step {}: Placing order",
-        if ctx.pre_authorize { 3 } else { 2 }
-    );
-    let profile_owned = ctx.profile.map(String::from);
-    // Validate profile against advertised list (draft-ietf-acme-profiles-01 §4)
-    if let Some(ref p) = profile_owned
-        && let Some(available) = client.available_profiles()
-        && !available.contains_key(p)
-    {
-        tracing::warn!(
-            "Profile \"{p}\" is not advertised by the server (available: {})",
-            available.keys().cloned().collect::<Vec<_>>().join(", ")
-        );
-    }
-    check_wildcard_compatible(&ctx.domains, &ctx.challenge_type)?;
-    let ids: Vec<Identifier> = ctx
-        .domains
-        .iter()
-        .map(|d| Identifier::from_str_auto(d))
-        .collect::<Result<Vec<_>>>()?;
-    let (order, order_url) = if let Some(cert_id) = ctx.ari_cert_id.take() {
-        info!("Using ARI replaces field (certID: {cert_id})");
-        client
-            .new_order_replacing(ids, cert_id, profile_owned)
-            .await?
-    } else {
-        client.new_order(ids, profile_owned).await?
-    };
-    if !ctx.json && !ctx.silent {
-        outln!("Order URL:  {order_url}");
-        if let Some(ref p) = order.profile {
-            outln!("Profile:    {p}");
-        }
-        outln!("Order status: {}", order.status);
-    }
+    let (order, order_url) = order_step::place(&mut ctx, &mut client).await?;
 
     authorize::authorize(&mut ctx, &mut client, &order).await?;
 
