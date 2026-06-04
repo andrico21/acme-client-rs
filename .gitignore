@@ -63,3 +63,6 @@ Thumbs.db
 certs/
 certificates/
 private_keys/
+
+# Local-only custom build/runtime overlays (Containerfile.custom, etc.)
+*.custom

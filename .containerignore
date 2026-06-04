@@ -1,0 +1,33 @@
+# Build artifacts
+target/
+**/*.rs.bk
+
+# VCS
+.git/
+.gitignore
+.github/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# Local-only
+certs/
+acme-data/
+*.log
+.env
+.env.*
+
+# Container files themselves (not needed inside the build)
+Containerfile*
+Dockerfile*
+.containerignore
+.dockerignore
+
+# Docs / CI noise
+README.md
+CHANGELOG.md
+LICENSE
+AGENTS.md
+.opencode/

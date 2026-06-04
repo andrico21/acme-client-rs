@@ -105,6 +105,11 @@ pub struct RunConfig {
     pub cert_key_algorithm: Option<String>,
     /// Certificate profile (draft-ietf-acme-profiles-01).
     pub profile: Option<String>,
+    /// Auto-generate account key at --account-key path if it does not exist.
+    pub generate_account_key_if_missing: Option<bool>,
+    /// Account key algorithm used when auto-generating: "es256", "es384",
+    /// "es512", "rsa2048", "rsa4096", "ed25519".
+    pub account_key_algorithm: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]

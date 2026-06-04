@@ -22,6 +22,7 @@ use crate::dns_check::DnsChecker;
 use crate::types::{ChallengeType, Identifier};
 use crate::{build_client, outln};
 
+use super::account::cmd_generate_key;
 use super::{check_wildcard_compatible, parse_eab};
 
 /// Shared state for every phase of the run subcommand.
@@ -91,6 +92,24 @@ pub(crate) async fn cmd_run(
         ],
         cli.unsafe_hooks,
     )?;
+
+    if args.generate_account_key_if_missing && !cli.account_key.exists() {
+        info!(
+            "--generate-account-key-if-missing set and {} does not exist: generating {} account key",
+            cli.account_key.display(),
+            args.account_key_algorithm,
+        );
+        cmd_generate_key(
+            &cli.account_key,
+            args.account_key_algorithm,
+            false,
+            cli.output_format,
+            cli.silent,
+            cli.account_key_password.as_ref(),
+        )
+        .await
+        .context("failed to auto-generate account key")?;
+    }
 
     // Pre-flight: on fresh issuance (no existing cert), refuse to start
     // when --key-output already points at a file but neither --reuse-key

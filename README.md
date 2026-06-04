@@ -452,6 +452,28 @@ podman run --rm acme-client-rs --help
 podman run --rm -v ./certs:/certs:Z acme-client-rs --directory https://acme-server/directory --account-key /certs/account.key run --contact you@example.com your.domain.com
 ```
 
+#### Single-command container usage (auto-generate account key)
+
+For one-shot container/CI/automation use, pass `--generate-account-key-if-missing`
+(or set `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING=1`) to fold the `generate-key`
+bootstrap step into `run`. If the file at `--account-key` does not exist, a
+fresh ES256 key is created at that path, then issuance proceeds. If the key
+already exists it is reused unchanged.
+
+```sh
+mkdir -p ./acme-data && sudo chown 65532:65532 ./acme-data
+podman run --rm -v ./acme-data:/data:Z acme-client-rs \
+  --directory https://acme-staging-v02.api.letsencrypt.org/directory \
+  run \
+    --contact you@example.com \
+    --generate-account-key-if-missing \
+    your.domain.com
+```
+
+Override the auto-generated key algorithm with `--account-key-algorithm`
+(`es256` | `es384` | `es512` | `rsa2048` | `rsa4096` | `ed25519`) or
+`ACME_ACCOUNT_KEY_ALGORITHM`.
+
 > **Note:** TLS is handled by `rustls` with the `aws-lc-rs` crypto provider and the `rustls-platform-verifier` crate, which delegates certificate-chain validation to the host OS — Windows CryptoAPI, macOS Security framework, or `/etc/ssl/certs` on Linux. Enterprise / private CAs installed in the OS trust store are honored automatically. The `rust:alpine` base image uses musl libc natively, so no cross-compilation target is needed.
 
 To use Docker instead of Podman, simply replace `podman` with `docker` in all commands above.

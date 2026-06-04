@@ -368,6 +368,22 @@ fn apply_run(
     if !args.print_cert && cfg_run.print_cert == Some(true) {
         args.print_cert = true;
     }
+    if !args.generate_account_key_if_missing
+        && cfg_run.generate_account_key_if_missing == Some(true)
+    {
+        args.generate_account_key_if_missing = true;
+    }
+    if let Some((_, sub_matches)) = matches.subcommand()
+        && should_apply_config(sub_matches.value_source("account_key_algorithm"))
+        && let Some(ref v) = cfg_run.account_key_algorithm
+    {
+        args.account_key_algorithm = <crate::jws::KeyAlgorithm as clap::ValueEnum>::from_str(v, true)
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "config: account_key_algorithm must be one of: es256, es384, es512, rsa2048, rsa4096, ed25519 (got {v:?})"
+                )
+            })?;
+    }
     if args.persist_policy.is_none() {
         args.persist_policy.clone_from(&cfg_run.persist_policy);
     }

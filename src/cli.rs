@@ -659,6 +659,25 @@ pub(crate) struct RunArgs {
     /// Overwrite the private key file if it already exists.
     #[arg(long)]
     pub(crate) force: bool,
+    /// If the account key file (--account-key) does not exist, generate a
+    /// fresh ES256 account key at that path before issuance instead of
+    /// erroring out. Intended for single-command container/automation usage
+    /// where bootstrap and renewal share one entry-point.
+    #[arg(
+        long,
+        env = "ACME_GENERATE_ACCOUNT_KEY_IF_MISSING",
+        default_value_t = false
+    )]
+    pub(crate) generate_account_key_if_missing: bool,
+    /// Key algorithm used when --generate-account-key-if-missing creates a new
+    /// account key. Ignored when the key already exists.
+    #[arg(
+        long,
+        value_enum,
+        env = "ACME_ACCOUNT_KEY_ALGORITHM",
+        default_value_t = KeyAlgorithm::Es256
+    )]
+    pub(crate) account_key_algorithm: KeyAlgorithm,
 }
 
 /// clap value parser that wraps a password argument in [`secrecy::SecretString`]
@@ -724,6 +743,8 @@ impl std::fmt::Debug for RunArgs {
             cert_key_algorithm,
             profile,
             force,
+            generate_account_key_if_missing,
+            account_key_algorithm,
         } = self;
         f.debug_struct("RunArgs")
             .field("domains", domains)
@@ -754,6 +775,11 @@ impl std::fmt::Debug for RunArgs {
             .field("cert_key_algorithm", cert_key_algorithm)
             .field("profile", profile)
             .field("force", force)
+            .field(
+                "generate_account_key_if_missing",
+                generate_account_key_if_missing,
+            )
+            .field("account_key_algorithm", account_key_algorithm)
             .finish()
     }
 }

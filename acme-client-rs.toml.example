@@ -250,6 +250,23 @@
 # Env: ACME_PROFILE
 # profile = "tlsserver"
 
+# Auto-generate the account key at the configured `account_key` path if it
+# does not already exist, instead of erroring out. Intended for single-command
+# container/automation usage where bootstrap and renewal share one entry-point.
+# Existing keys are never touched.
+# CLI: --generate-account-key-if-missing
+# Env: ACME_GENERATE_ACCOUNT_KEY_IF_MISSING
+# Default: false
+# generate_account_key_if_missing = true
+
+# Key algorithm used when generate_account_key_if_missing creates a new
+# account key. Ignored when the key already exists.
+# Allowed: "es256", "es384", "es512", "rsa2048", "rsa4096", "ed25519"
+# CLI: --account-key-algorithm
+# Env: ACME_ACCOUNT_KEY_ALGORITHM
+# Default: "es256"
+# account_key_algorithm = "es256"
+
 # ── Account subcommand options ───────────────────────────────────────────────
 # These apply when using `acme-client-rs account`.
 
