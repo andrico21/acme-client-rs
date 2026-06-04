@@ -746,14 +746,16 @@ NOFLAG_PRIVKEY="${WORK_DIR}/noflag-private.key"
 if [[ -e "${NOFLAG_KEY}" ]]; then
   fail "22c" "Pre-condition violated: ${NOFLAG_KEY} already exists"
 else
+  set +e
   OUTPUT=$(acme --account-key "${NOFLAG_KEY}" run \
     --contact noflag@example.com \
     --challenge-type http-01 \
     --http-port 5002 \
     --cert-output "${NOFLAG_CERT}" \
     --key-output "${NOFLAG_PRIVKEY}" \
-    "${SINGLE_DOMAIN}" 2>&1 || true)
+    "${SINGLE_DOMAIN}" 2>&1)
   RC=$?
+  set -e
 
   if [[ ${RC} -ne 0 ]] && [[ ! -f "${NOFLAG_KEY}" ]]; then
     pass "Default behavior unchanged: missing account key still errors"
