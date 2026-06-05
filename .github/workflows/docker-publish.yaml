@@ -1,8 +1,24 @@
 name: Docker Publish
 
-# Build and push the canonical distroless container image to Docker Hub on
-# every release tag (matching `.github/workflows/release.yaml`'s tag trigger),
-# and on manual `workflow_dispatch` runs for testing.
+# Build, scan and push the canonical distroless container image to Docker Hub.
+#
+# Trigger model: chained off the `Release` workflow via `workflow_run`. The
+# image is published ONLY when Release succeeds, never in parallel. This
+# guarantees the binaries inside the image have already passed every
+# platform's build + the integration test before we publish them under a
+# stable tag.
+#
+# Pre-release tags matching `*-dev*` / `*-test*` are skipped: they do not
+# need an image. Trigger-level tag globs (e.g. `tags: ['*', '!*-dev*']`)
+# are NOT supported on `workflow_run`, so the exclusion is enforced via
+# the job-level `if:` guard against `workflow_run.head_branch`.
+#
+# IMPORTANT: workflow_run uses the workflow file from the **default branch**,
+# not from the triggering ref. This file MUST be merged to master before it
+# starts firing, and `github.ref` / `GITHUB_SHA` in a workflow_run-triggered
+# run point at master HEAD — NOT the release tag. We use the explicit
+# `workflow_run.head_branch` / `head_sha` fields throughout to recover the
+# original tag and commit.
 #
 # First-iteration scope: linux/amd64 only. Multi-arch (linux/arm64) can be
 # added later by enabling QEMU + buildx --platform linux/amd64,linux/arm64;
@@ -13,25 +29,68 @@ name: Docker Publish
 #   DOCKERHUB_TOKEN    — Docker Hub Personal Access Token with Read+Write
 
 on:
-  push:
-    tags:
-      - "*"
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read              # required for SARIF upload from private repos
+  security-events: write     # required for SARIF → Code scanning tab
 
 env:
   REGISTRY: docker.io
   IMAGE_NAME: acme-client-rs
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # In a `workflow_run`-triggered run, `github.ref` / `github.sha` point at
+  # the default branch HEAD. Recover the triggering tag + commit from the
+  # `workflow_run` event payload. For `workflow_dispatch` runs (testing on
+  # master / a branch), fall back to the standard `github.ref_name` / `github.sha`.
+  SOURCE_TAG: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+  SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   publish:
-    name: Build & push container image
+    name: Build, scan & push container image
     runs-on: ubuntu-latest
+    # Gate:
+    #   - workflow_dispatch  → always allowed (manual override for testing)
+    #   - workflow_run       → only when Release succeeded on a tag push from
+    #                          this same repo, and the tag is NOT a `-dev` /
+    #                          `-test` pre-release variant.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        !contains(github.event.workflow_run.head_branch, '-dev') &&
+        !contains(github.event.workflow_run.head_branch, '-test')
+      )
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout source at triggering commit
+        uses: actions/checkout@v6
+        with:
+          # Pin to the SHA that triggered the upstream Release run, NOT the
+          # default branch HEAD. Required for reproducible builds — master
+          # may have moved between tag push and image build.
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify SOURCE_TAG resolves to SOURCE_SHA
+        if: github.event_name == 'workflow_run'
+        shell: bash
+        run: |
+          # Defensive: ensure the tag still points at the SHA we're building.
+          # Catches edge cases where a tag was force-moved between the Release
+          # run starting and this image run starting.
+          git fetch --force --tags
+          actual="$(git rev-parse "${SOURCE_TAG}^{commit}")"
+          if [ "$actual" != "${SOURCE_SHA}" ]; then
+            echo "::error::Tag ${SOURCE_TAG} points at ${actual}, expected ${SOURCE_SHA}" >&2
+            exit 1
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -47,21 +106,27 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          # `context: git` plus explicit `value=` overrides on each semver
+          # pattern are required because `github.ref` won't be the tag in a
+          # workflow_run-triggered run (it'll be the default branch ref).
+          context: git
           images: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
           # Tag generation strategy:
           #   semver tag "2.2.4" → :2.2.4, :2.2, :2, :latest
           #   workflow_dispatch on master → :master, :sha-abcdef
-          # `flavor: latest=auto` adds :latest only for non-prerelease semver tags.
+          # `flavor: latest=auto` adds :latest only for non-prerelease semver
+          # tags (which is fine — we already exclude -dev/-test at the if:).
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{version}},value=${{ env.SOURCE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SOURCE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.SOURCE_TAG }}
             type=ref,event=branch
             type=sha,format=short,prefix=sha-
           flavor: |
             latest=auto
 
       - name: Build and push image
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -81,3 +146,67 @@ jobs:
           # GitHub Actions cache speeds up rebuilds across workflow runs.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # ── Trivy: post-push informational scan ──────────────────────────────
+      #
+      # The image is already published; Trivy reads it back from the registry
+      # by digest (deterministic — no race with metadata tag fan-out).
+      # Findings are uploaded as SARIF → Security tab → Code scanning, AND
+      # as JSON/SARIF artifacts retained for 90 days. The scan is informational
+      # (`exit-code: '0'`) — it does NOT fail the publish.
+
+      - name: Compute scan target image reference
+        id: scan-image
+        shell: bash
+        run: |
+          # Digest-pinned ref guarantees Trivy scans the exact image we
+          # published, regardless of which tag race won.
+          echo "ref=${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Trivy image scan (SARIF for GitHub Code Scanning)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.scan-image.outputs.ref }}
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '0'
+          limit-severities-for-sarif: true
+
+      - name: Run Trivy image scan (full JSON report)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.scan-image.outputs.ref }}
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          format: json
+          output: trivy-results.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          # Trivy binary already installed by the previous step.
+          skip-setup-trivy: true
+
+      - name: Upload Trivy SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+
+      - name: Upload full Trivy reports as workflow artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-image-scan-${{ github.run_id }}
+          path: |
+            trivy-results.sarif
+            trivy-results.json
+          if-no-files-found: error
+          retention-days: 90
