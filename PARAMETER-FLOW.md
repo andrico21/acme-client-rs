@@ -44,7 +44,7 @@ graph TD
     CMD -- deactivate-account --> DEACT["Deactivate account"]
     CMD -- key-rollover --> ROLL["Rollover account key"]
     CMD -- pre-authorize --> PRE_CMD["Pre-authorize domain"]
-    CMD -- revoke --> REVOKE["Revoke certificate"]
+    CMD -- revoke-cert --> REVOKE["Revoke certificate"]
     CMD -- renewal-info --> REN_INFO["Get ARI renewal info"]
     CMD -- list-profiles --> LIST_PROF["Fetch directory<br/>display profiles"]
     CMD -- run --> RUN["cmd_run()<br/>Full automated flow"]
@@ -69,7 +69,16 @@ graph TD
 graph TD
     RUN["run"] --> VALIDATE_DOMAINS{"domains<br/>provided?"}
     VALIDATE_DOMAINS -- No --> BAIL_DOMAIN["ERROR: at least one<br/>domain required"]
-    VALIDATE_DOMAINS -- Yes --> CERT_EXISTS{"cert file<br/>exists?"}
+    VALIDATE_DOMAINS -- Yes --> ACCT_KEY_EXISTS{"--account-key<br/>file exists?"}
+
+    %% Account key bootstrap (preflight)
+    ACCT_KEY_EXISTS -- No --> GEN_AK{"--generate-account-key-<br/>if-missing?"}
+    GEN_AK -- Yes --> BOOTSTRAP_AK["Bootstrap account key<br/>(--account-key-algorithm)"]
+    GEN_AK -- No --> BAIL_AK["ERROR: account key<br/>file not found"]
+    BOOTSTRAP_AK --> KEY_CONFLICT
+    ACCT_KEY_EXISTS -- Yes --> KEY_CONFLICT{"--key-output exists<br/>+ no --reuse-key<br/>+ no --force<br/>+ cert missing?"}
+    KEY_CONFLICT -- Yes --> BAIL_KEY_CONFLICT["ERROR: would overwrite<br/>private key<br/>(use --force or --reuse-key)"]
+    KEY_CONFLICT -- No --> CERT_EXISTS{"cert file<br/>exists?"}
 
     %% Renewal checks (only if cert exists)
     CERT_EXISTS -- No --> ACCT_STEP
@@ -103,21 +112,39 @@ graph TD
     DAYS_CHECK -- No --> ACCT_STEP
 
     %% Account + Pre-authorization
-    ACCT_STEP["Step 1: Create/find<br/>account"] --> PROF_VAL{"--profile?"}
-    PROF_VAL -- Yes --> PROF_WARN["Validate against<br/>server profiles<br/>(warn if unknown)"]
-    PROF_WARN --> PREAUTH_CHECK
-    PROF_VAL -- No --> PREAUTH_CHECK{"--pre-authorize?"}
-    PREAUTH_CHECK -- Yes --> PRE_AUTH["Step 2: Pre-authorize<br/>each domain (sequential)"]
-    PRE_AUTH --> PRE_CH_TYPE{"challenge<br/>type?"}
-    PRE_CH_TYPE -- http-01 --> PRE_HTTP["Setup HTTP-01<br/>(server or dir)"]
-    PRE_CH_TYPE -- dns-01 --> PRE_DNS["Setup DNS-01<br/>(hook or manual)"]
-    PRE_CH_TYPE -- dns-persist-01 --> PRE_DNSP["Setup DNS-PERSIST-01"]
-    PRE_CH_TYPE -- tls-alpn-01 --> PRE_TLS["Setup TLS-ALPN-01<br/>(manual)"]
-    PRE_HTTP --> NEW_ORDER
-    PRE_DNS --> NEW_ORDER
-    PRE_DNSP --> NEW_ORDER
-    PRE_TLS --> NEW_ORDER
-    PREAUTH_CHECK -- No --> NEW_ORDER
+    ACCT_STEP["Step 1: Create/find<br/>account"] --> PREAUTH_CHECK{"--pre-authorize?"}
+    PREAUTH_CHECK -- Yes --> PRE_AUTH["Step 2: Pre-authorize<br/>each domain (sequential loop)"]
+    PRE_AUTH --> PRE_NEW_AUTHZ["new_authorization(id)<br/>per domain"]
+    PRE_NEW_AUTHZ --> PRE_VALID_CHECK{"authz.status<br/>== Valid?"}
+    PRE_VALID_CHECK -- Yes --> PRE_LOOP_NEXT["Skip provisioning<br/>(already valid)"]
+    PRE_VALID_CHECK -- No --> PRE_CH_TYPE{"challenge<br/>type?"}
+    PRE_CH_TYPE -- http-01 --> PRE_HTTP["Provision HTTP-01<br/>(--challenge-dir OR<br/>--http-port server)"]
+    PRE_CH_TYPE -- dns-01 --> PRE_DNS["Provision DNS-01<br/>(dns-hook create OR manual)<br/>+ --dns-wait OR Press Enter"]
+    PRE_CH_TYPE -- dns-persist-01 --> PRE_DNSP_VAL{"issuer-domain-names<br/>1-10 entries +<br/>account_url known?"}
+    PRE_DNSP_VAL -- No --> BAIL_PRE_DNSP["ERROR: malformed<br/>dns-persist-01"]
+    PRE_DNSP_VAL -- Yes --> PRE_DNSP["Provision DNS-PERSIST-01<br/>(hook OR manual)<br/>+ --dns-wait OR Press Enter"]
+    PRE_CH_TYPE -- tls-alpn-01 --> PRE_TLS["Print instructions +<br/>Press Enter (unless --silent)"]
+    PRE_HTTP --> PRE_RESPOND
+    PRE_DNS --> PRE_HOOK
+    PRE_DNSP --> PRE_HOOK
+    PRE_TLS --> PRE_HOOK
+    PRE_HOOK{"--on-challenge-ready<br/>hook?"}
+    PRE_HOOK -- Yes --> PRE_RUN_HOOK["Run hook<br/>(env vars per type)"]
+    PRE_HOOK -- No --> PRE_RESPOND
+    PRE_RUN_HOOK --> PRE_RESPOND
+    PRE_RESPOND["respond_to_challenge()"] --> PRE_POLL["Poll get_authorization()<br/>until Valid<br/>(--challenge-timeout)"]
+    PRE_POLL --> PRE_POLL_RES{"poll result?"}
+    PRE_POLL_RES -- "Invalid<br/>(is_challenge_failed)" --> PRE_CLEANUP_FAIL["Cleanup +<br/>ERROR (challenge failed)"]
+    PRE_POLL_RES -- "timeout" --> PRE_CLEANUP_TO["Cleanup +<br/>ERROR (timeout)"]
+    PRE_POLL_RES -- "Valid" --> PRE_CLEANUP_OK["Cleanup<br/>(dns hook + file + server)"]
+    PRE_CLEANUP_OK --> PRE_LOOP_NEXT
+    PRE_LOOP_NEXT --> PRE_LOOP_DONE{"more domains?"}
+    PRE_LOOP_DONE -- Yes --> PRE_NEW_AUTHZ
+    PRE_LOOP_DONE -- No --> PROF_VAL
+    PREAUTH_CHECK -- No --> PROF_VAL{"--profile?"}
+    PROF_VAL -- Yes --> PROF_WARN["Validate against<br/>server profiles<br/>(warn if unknown)<br/>[in order_step::place]"]
+    PROF_WARN --> NEW_ORDER
+    PROF_VAL -- No --> NEW_ORDER
 
     %% Create order
     NEW_ORDER{"ari_cert_id<br/>available?"}
@@ -132,7 +159,7 @@ graph TD
     AUTHZ_MODE -- No --> SEQUENTIAL["SEQUENTIAL<br/>Authorization"]
 
     %% ===== PARALLEL DNS PATH =====
-    PARALLEL --> P1["Phase 1: Fetch all authz<br/>+ create ALL TXT records<br/>(dns-hook create)"]
+    PARALLEL --> P1["Phase 1: Fetch all authz<br/>(skip if status==Valid) +<br/>create TXT records for pending<br/>(dns-hook create)"]
     P1 --> P2_CHECK{"--dns-wait?"}
     P2_CHECK -- Yes --> P2["Phase 2: Parallel DNS<br/>propagation wait<br/>(semaphore, concurrency=5)"]
     P2 --> P3
@@ -144,7 +171,10 @@ graph TD
 
     %% ===== SEQUENTIAL PATH =====
     SEQUENTIAL --> SEQ_LOOP["For each authorization"]
-    SEQ_LOOP --> CH_TYPE{"challenge<br/>type?"}
+    SEQ_LOOP --> SEQ_VALID{"authz.status<br/>== Valid?"}
+    SEQ_VALID -- Yes --> SEQ_SKIP["Skip<br/>(already valid)"]
+    SEQ_SKIP --> SEQ_LOOP
+    SEQ_VALID -- No --> CH_TYPE{"challenge<br/>type?"}
 
     %% HTTP-01 (no on_challenge_ready hook, goes straight to respond)
     CH_TYPE -- http-01 --> HTTP_MODE{"--challenge-dir?"}
@@ -179,7 +209,7 @@ graph TD
     CH_TYPE -- tls-alpn-01 --> TLS_PRINT["Print instructions"]
     TLS_PRINT --> ENTER_TLS["Press Enter<br/>to continue"]
     ENTER_TLS --> ON_CH_READY_TLS{"--on-challenge-ready<br/>hook?"}
-    ON_CH_READY_TLS -- Yes --> RUN_HOOK_TLS["Run hook<br/>(ACME_DOMAIN, ACME_TOKEN,<br/>ACME_KEY_AUTH)"]
+    ON_CH_READY_TLS -- Yes --> RUN_HOOK_TLS["Run hook<br/>(ACME_DOMAIN, ACME_CHALLENGE_TYPE,<br/>ACME_TOKEN, ACME_KEY_AUTH)"]
     ON_CH_READY_TLS -- No --> RESPOND
     RUN_HOOK_TLS --> RESPOND
 
@@ -240,10 +270,10 @@ graph TD
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
 
-    class BAIL_DOMAIN,BAIL_IP,BAIL_IP2,BAIL_IDN,FAIL_AUTH error
-    class SKIP_ARI,SKIP_DAYS,SKIP_MISMATCH skip
+    class BAIL_DOMAIN,BAIL_AK,BAIL_KEY_CONFLICT,BAIL_IP,BAIL_IP2,BAIL_IDN,BAIL_PRE_DNSP,PRE_CLEANUP_FAIL,PRE_CLEANUP_TO,FAIL_AUTH error
+    class SKIP_ARI,SKIP_DAYS,SKIP_MISMATCH,SEQ_SKIP,PRE_LOOP_NEXT skip
     class DONE success
-    class VALIDATE_DOMAINS,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PROF_VAL,PREAUTH_CHECK,NEW_ORDER,AUTHZ_MODE,CH_TYPE,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,REUSE_KEY,CSR_ALG,SAME_PATH,PRE_CH_TYPE,P2_CHECK,PRINT_CERT decision
+    class VALIDATE_DOMAINS,ACCT_KEY_EXISTS,GEN_AK,KEY_CONFLICT,CERT_EXISTS,SAN_CHECK,REISSUE_FLAG,ARI_CHECK,ARI_RESULT,ARI_COMPUTE,DAYS_CHECK,DAYS_LEFT,PROF_VAL,PREAUTH_CHECK,PRE_VALID_CHECK,PRE_CH_TYPE,PRE_DNSP_VAL,PRE_HOOK,PRE_POLL_RES,PRE_LOOP_DONE,NEW_ORDER,AUTHZ_MODE,CH_TYPE,SEQ_VALID,HTTP_MODE,DNS_IP,DNS_WAIT_SEQ,DNSP_IP,DNSP_VALID,DNSP_WAIT_SEQ,ON_CH_READY,ON_CH_READY_TLS,TERM_CHECK,KEY_ENC,CERT_HOOK,REUSE_KEY,CSR_ALG,SAME_PATH,P2_CHECK,PRINT_CERT decision
 ```
 
 ### Configuration Commands
@@ -262,32 +292,43 @@ graph TD
     GK_ALG -- ed25519 --> GK_GENED["Generate Ed25519 key"]
     GK_ALG -- rsa2048 --> GK_GENR2["Generate RSA-2048 key"]
     GK_ALG -- rsa4096 --> GK_GENR4["Generate RSA-4096 key"]
-    GK_GEN --> GK_WRITE["Write PEM to<br/>--account-key"]
-    GK_GEN384 --> GK_WRITE
-    GK_GEN512 --> GK_WRITE
-    GK_GENED --> GK_WRITE
-    GK_GENR2 --> GK_WRITE
-    GK_GENR4 --> GK_WRITE
+    GK_GEN --> GK_PWD{"--account-key-password<br/>or password-file?"}
+    GK_GEN384 --> GK_PWD
+    GK_GEN512 --> GK_PWD
+    GK_GENED --> GK_PWD
+    GK_GENR2 --> GK_PWD
+    GK_GENR4 --> GK_PWD
+    GK_PWD -- Yes --> GK_ENC["Encrypt PEM<br/>(scrypt + AES-256-CBC)"]
+    GK_PWD -- No --> GK_FORCE
+    GK_ENC --> GK_FORCE{"--force?"}
+    GK_FORCE -- Yes --> GK_WRITE["Write PEM to<br/>--account-key (overwrite)"]
+    GK_FORCE -- No --> GK_EXISTS{"--account-key<br/>file exists?"}
+    GK_EXISTS -- Yes --> GK_BAIL["ERROR: refuse to<br/>overwrite (use --force)"]
+    GK_EXISTS -- No --> GK_WRITE
     GK_WRITE --> GK_FMT{"--output-format?"}
-    GK_FMT -- json --> GK_JSON["JSON: algorithm, path"]
-    GK_FMT -- text --> GK_TEXT["Text: confirmation"]
+    GK_FMT -- json --> GK_JSON["JSON: command='generate-key',<br/>algorithm, path, encrypted"]
+    GK_FMT -- text --> GK_TEXT["Text: 'saved to &lt;path&gt;'<br/>or '... (encrypted)'"]
     GK_JSON --> GK_DONE["DONE"]
     GK_TEXT --> GK_DONE
 
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
+    classDef error fill:#f44,color:white,stroke:#d32f2f
     class GC_DONE,GK_DONE success
-    class GK_ALG,GK_FMT decision
+    class GK_BAIL error
+    class GK_ALG,GK_PWD,GK_FORCE,GK_EXISTS,GK_FMT decision
 ```
 
 ### show-config
 
 ```mermaid
 graph TD
-    SC["show-config"] --> SC_FMT{"--output-format?"}
+    SC["show-config"] --> SC_SILENT{"--silent?"}
+    SC_SILENT -- Yes --> SC_DONE["DONE"]
+    SC_SILENT -- No --> SC_FMT{"--output-format?"}
 
     %% JSON path
-    SC_FMT -- json --> SC_J_HDR["Build JSON: header +<br/>[global] section"]
+    SC_FMT -- json --> SC_J_HDR["Build JSON: header +<br/>[global] section<br/>(redact secrets unless<br/>--show-secrets)"]
     SC_J_HDR --> SC_J_V1{"--verbose?"}
     SC_J_V1 -- Yes --> SC_J_SRC1["Add source annotation<br/>per global field<br/>(cli|env|config|default)"]
     SC_J_V1 -- No --> SC_J_RUN
@@ -303,7 +344,7 @@ graph TD
     SC_J_ACCT_ADD --> SC_PRINT["Print JSON"]
 
     %% Text path
-    SC_FMT -- text --> SC_T_HDR["Print header"]
+    SC_FMT -- text --> SC_T_HDR["Print header<br/>(redact secrets unless<br/>--show-secrets)"]
     SC_T_HDR --> SC_T_CM{"config_mode?"}
     SC_T_CM -- Yes --> SC_T_MODE["Print config-mode note"]
     SC_T_CM -- No --> SC_T_V
@@ -326,7 +367,7 @@ graph TD
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
     class SC_DONE success
-    class SC_FMT,SC_J_V1,SC_J_V2,SC_J_RUN,SC_J_ACCT,SC_T_CM,SC_T_V,SC_T_RUN,SC_T_NORUN,SC_T_ACCT decision
+    class SC_SILENT,SC_FMT,SC_J_V1,SC_J_V2,SC_J_RUN,SC_J_ACCT,SC_T_CM,SC_T_V,SC_T_RUN,SC_T_NORUN,SC_T_ACCT decision
 ```
 
 ### Account & Key Management
@@ -411,15 +452,19 @@ graph TD
 
     %% === finalize ===
     FIN["finalize"] --> FIN_ALG{"--cert-key-algorithm?"}
-    FIN_ALG -- ec-p256 --> FIN_CSR["CSR (P-256)"]
-    FIN_ALG -- ec-p384 --> FIN_CSR2["CSR (P-384)"]
-    FIN_ALG -- ed25519 --> FIN_CSR3["CSR (Ed25519)"]
+    FIN_ALG -- ec-p256 --> FIN_CSR["Generate P-256 key + CSR"]
+    FIN_ALG -- ec-p384 --> FIN_CSR2["Generate P-384 key + CSR"]
+    FIN_ALG -- ed25519 --> FIN_CSR3["Generate Ed25519 key + CSR"]
     FIN_CSR --> FIN_CALL
     FIN_CSR2 --> FIN_CALL
-    FIN_CSR3 --> FIN_CALL["finalize_order()"]
-    FIN_CALL --> FIN_FMT{"--output-format?"}
-    FIN_FMT -- json --> FIN_JSON["JSON: status,<br/>certificate_url"]
-    FIN_FMT -- text --> FIN_TEXT["Text: status,<br/>certificate_url"]
+    FIN_CSR3 --> FIN_CALL["finalize_order()<br/>+ poll until ready<br/>+ download cert"]
+    FIN_CALL --> FIN_PWD{"--key-password OR<br/>--key-password-file?"}
+    FIN_PWD -- Yes --> FIN_ENC["Encrypt PEM<br/>(scrypt + AES-256-CBC)"]
+    FIN_PWD -- No --> FIN_KEY_WRITE
+    FIN_ENC --> FIN_KEY_WRITE["Write private key<br/>to --key-output<br/>(force-aware)"]
+    FIN_KEY_WRITE --> FIN_FMT{"--output-format?"}
+    FIN_FMT -- json --> FIN_JSON["JSON: status,<br/>certificate_url,<br/>key_path,<br/>key_encrypted"]
+    FIN_FMT -- text --> FIN_TEXT["Text: status,<br/>certificate_url,<br/>'Private key saved to<br/>&lt;path&gt;' (or '... (encrypted)')"]
     FIN_JSON --> FIN_DONE["DONE"]
     FIN_TEXT --> FIN_DONE
 
@@ -443,7 +488,7 @@ graph TD
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
     class ORD_DONE,GAZ_DONE,RC_DONE,FIN_DONE,PO_DONE,DC_DONE success
-    class ORD_FMT,ORD_PROF,GAZ_FMT,RC_FMT,FIN_ALG,FIN_FMT,PO_FMT,DC_FMT decision
+    class ORD_FMT,ORD_PROF,GAZ_FMT,RC_FMT,FIN_ALG,FIN_PWD,FIN_FMT,PO_FMT,DC_FMT decision
 ```
 
 ### Challenge Helper Commands
@@ -458,8 +503,11 @@ graph TD
     SH_FILE --> SH_FILE_FMT{"--output-format?"}
     SH_FILE_FMT -- json --> SH_FILE_JSON["JSON: mode, path"]
     SH_FILE_FMT -- text --> SH_FILE_TEXT["Text: path"]
-    SH_FILE_JSON --> SH_ENTER["Press Enter<br/>to clean up (stdin)"]
-    SH_FILE_TEXT --> SH_ENTER
+    SH_FILE_JSON --> SH_SILENT{"--silent?"}
+    SH_FILE_TEXT --> SH_SILENT
+    SH_SILENT -- Yes --> SH_CTRLC["Wait for ctrl_c<br/>(non-interactive)"]
+    SH_SILENT -- No --> SH_ENTER["Press Enter<br/>to clean up (stdin)"]
+    SH_CTRLC --> SH_CLEANUP
     SH_ENTER --> SH_CLEANUP["Cleanup<br/>challenge file"]
     SH_CLEANUP --> SH_DONE["DONE"]
 
@@ -481,7 +529,7 @@ graph TD
     SDP_URL -- Yes --> SDP_COMPUTE
     SDP_LOOKUP --> SDP_COMPUTE["Compute TXT value<br/>(issuer, account_uri,<br/>--persist-policy,<br/>--persist-until)"]
     SDP_COMPUTE --> SDP_FMT{"--output-format?"}
-    SDP_FMT -- json --> SDP_JSON["JSON: domain,<br/>record_name, value,<br/>issuer, policy, until"]
+    SDP_FMT -- json --> SDP_JSON["JSON: domain,<br/>record_name,<br/>record_type='TXT',<br/>record_value,<br/>issuer_domain_name,<br/>account_uri,<br/>persist_policy,<br/>persist_until"]
     SDP_FMT -- text --> SDP_TEXT["print_instructions()"]
     SDP_JSON --> SDP_DONE["DONE"]
     SDP_TEXT --> SDP_DONE
@@ -489,21 +537,21 @@ graph TD
     classDef success fill:#4caf50,color:white,stroke:#2e7d32
     classDef decision fill:#42a5f5,color:white,stroke:#1565c0
     class SH_DONE,SD_DONE,SDP_DONE success
-    class SH_MODE,SH_FILE_FMT,SD_FMT,SDP_URL,SDP_FMT decision
+    class SH_MODE,SH_FILE_FMT,SH_SILENT,SD_FMT,SDP_URL,SDP_FMT decision
 ```
 
 ### Certificate Operations
 
 ```mermaid
 graph TD
-    %% === revoke ===
-    RV["revoke"] --> RV_URL{"account_url<br/>known?"}
+    %% === revoke-cert ===
+    RV["revoke-cert"] --> RV_URL{"account_url<br/>known?"}
     RV_URL -- No --> RV_LOOKUP["Auto-lookup account<br/>(KID signing required<br/>per RFC 8555 §7.6)"]
     RV_URL -- Yes --> RV_READ
     RV_LOOKUP --> RV_READ["Read cert PEM → DER"]
     RV_READ --> RV_CALL["revoke_certificate()<br/>(optional --reason code)"]
     RV_CALL --> RV_FMT{"--output-format?"}
-    RV_FMT -- json --> RV_JSON["JSON: cert_path,<br/>reason"]
+    RV_FMT -- json --> RV_JSON["JSON: command='revoke-cert',<br/>path, reason"]
     RV_FMT -- text --> RV_TEXT["Text: revoked"]
     RV_JSON --> RV_DONE["DONE"]
     RV_TEXT --> RV_DONE
@@ -525,15 +573,12 @@ graph TD
     PA_SKIP --> PA_LOOP
 
     %% === renewal-info ===
-    RI["renewal-info"] --> RI_URL{"account_url<br/>known?"}
-    RI_URL -- No --> RI_LOOKUP["Auto-lookup account<br/>(POST-as-GET needs KID)"]
-    RI_URL -- Yes --> RI_READ
-    RI_LOOKUP --> RI_READ["Read cert PEM → DER"]
+    RI["renewal-info"] --> RI_READ["Read cert PEM → DER"]
     RI_READ --> RI_CID["compute_cert_id()"]
-    RI_CID --> RI_CALL["get_renewal_info()<br/>(RFC 9773)"]
+    RI_CID --> RI_CALL["get_renewal_info()<br/>(unauthenticated GET<br/>per RFC 9773 §4.1)"]
     RI_CALL --> RI_FMT{"--output-format?"}
 
-    RI_FMT -- json --> RI_JSON["JSON: cert_id,<br/>window.start/end,<br/>retry_after"]
+    RI_FMT -- json --> RI_JSON["JSON: command='renewal-info',<br/>cert_id,<br/>window.start/end,<br/>explanation_url,<br/>retry_after"]
     RI_JSON --> RI_DONE["DONE"]
 
     RI_FMT -- text --> RI_PRINT["Print cert_id +<br/>window start/end"]
@@ -558,7 +603,7 @@ graph TD
     class RV_DONE,PA_DONE,RI_DONE success
     class RI_OVERDUE error
     class RI_WAIT skip
-    class RV_URL,RV_FMT,PA_URL,PA_FMT,PA_MATCH,RI_URL,RI_FMT,RI_PARSE_END,RI_PARSE_START,RI_RETRY decision
+    class RV_URL,RV_FMT,PA_URL,PA_FMT,PA_MATCH,RI_FMT,RI_PARSE_END,RI_PARSE_START,RI_RETRY decision
 ```
 
 ## Legend
@@ -573,14 +618,15 @@ graph TD
 ### Common Patterns
 
 - **Output format branching**: Every command except `generate-config` checks `--output-format` (json/text) and formats output accordingly. JSON mode prints machine-readable objects; text mode prints human-friendly messages.
-- **Account auto-lookup**: Five commands (`show-dns-persist-01`, `key-rollover`, `revoke`, `renewal-info`, `pre-authorize`) need an account URL for KID-based JWS signing. If `--account-url` is not provided, they automatically call `create_account(None, true, None)` to look up/register the account.
+- **Account auto-lookup**: Four commands (`show-dns-persist-01`, `key-rollover`, `revoke-cert`, `pre-authorize`) need an account URL for KID-based JWS signing. If `--account-url` is not provided, they automatically call `create_account(None, true, None)` to look up/register the account. (`renewal-info` does **not** auto-lookup — RFC 9773 ARI is an unauthenticated GET that does not require an account.)
 - **Silent mode**: The global `--silent` flag suppresses all stdout output across every command handler. Two patterns are used: **early-return** (`show-config` and `generate-config` skip entirely) and **output gating** (all other commands perform their work but skip print statements). Side effects (file writes, ACME API calls, hooks) still execute normally.
 
 ### Run Flow Details
 
 1. **Config precedence**:
    - **Without `--config` / `ACME_CONFIG`** (legacy mode): CLI > env > defaults.
-   - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_CONNECT_TIMEOUT`) are actively stripped so the config file is the single source of truth. Secret/safety env vars (`ACME_INSECURE`, `ACME_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
+   - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_CONNECT_TIMEOUT`, `ACME_ALLOW_PRIVATE_NETWORK`, `ACME_UNSAFE_HOOKS`, `ACME_DNS_CHECK_MODE`, `ACME_DNS_CHECK_DNSSEC`, `ACME_PROFILE`) are actively stripped so the config file is the single source of truth. Secret/safety env vars (`ACME_INSECURE`, `ACME_KEY_PASSWORD_FILE`, `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
+   - **CWD detection**: When `acme-client-rs.toml` exists in the current directory but neither `--config` nor `ACME_CONFIG` is set, the tool emits an info-level log suggesting the user pass `--config acme-client-rs.toml`. The file is **not** auto-loaded — config mode is explicit.
 2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9773) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
 3. **Authorization path split**: `--dns-hook` + DNS challenge type triggers **phased parallel** (5 phases with concurrent propagation checks); everything else goes **sequential**. Sequential DNS paths are always manual (no hook) — hook-based DNS always takes the parallel path.
 4. **Parallel phase 2 is conditional**: DNS propagation wait (phase 2) only runs if `--dns-wait` is set. Without it, phase 1 goes directly to phase 3.
@@ -591,6 +637,11 @@ graph TD
 
 ## Secrets Allowed from Env in Config Mode
 
+- `--insecure` (`ACME_INSECURE`)
 - `--key-password-file` (`ACME_KEY_PASSWORD_FILE`)
+- `--account-key-password` (`ACME_ACCOUNT_KEY_PASSWORD`)
+- `--account-key-password-file` (`ACME_ACCOUNT_KEY_PASSWORD_FILE`)
+- `--new-key-password` (`ACME_NEW_KEY_PASSWORD`)
+- `--new-key-password-file` (`ACME_NEW_KEY_PASSWORD_FILE`)
 - `--eab-kid` (`ACME_EAB_KID`)
 - `--eab-hmac-key` (`ACME_EAB_HMAC_KEY`)
