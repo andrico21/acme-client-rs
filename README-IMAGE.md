@@ -105,7 +105,7 @@ docker run --rm \
 
 > **Tip:** There is no separate `renew` command. `run --days N` is idempotent — it checks the existing certificate and only contacts the CA when renewal is actually needed. Safe to schedule daily (see [Automation](#automation)).
 >
-> **Why no `--cap-add NET_BIND_SERVICE`?** The app binds port 80 *inside* the container, but a dropped-all-caps **non-root** process can still do that on modern Docker (20.03+) because the engine sets `net.ipv4.ip_unprivileged_port_start=0` in every container network namespace by default — port 80 needs **no capability at all**. Adding `NET_BIND_SERVICE` for a non-root user is a no-op anyway (the kernel clears it on the UID transition). See [Hardened / production run](#hardened--production-run) for the one runtime where you need a sysctl instead.
+> **Binding port 80 as a non-root container user.** The app binds port 80 *inside* the container as UID 65532. On **modern Docker (20.03+)** this works with `--cap-drop ALL` and **no** added capability, because the engine sets `net.ipv4.ip_unprivileged_port_start=0` in every container netns by default. On **Podman** (which does *not* set that sysctl) you must enable it explicitly — either add `--cap-add CAP_NET_BIND_SERVICE` (Podman places it in the process's *ambient* set, so a non-root user really gets it) **or** set `--sysctl net.ipv4.ip_unprivileged_port_start=80`. See [Hardened / production run](#hardened--production-run) for the full per-engine breakdown.
 
 ### One-shot bootstrap (auto-generate the account key)
 
@@ -200,37 +200,50 @@ docker run --rm \
 |------|--------|
 | `--read-only` | Mounts the container root filesystem read-only. Safe here: the binary never writes to the rootfs at runtime — the cert and key are written atomically (temp file + `rename` + `fsync`) **inside the `/data` volume**, which stays writable. |
 | `--security-opt no-new-privileges` | Blocks the process (and any child) from gaining privileges via setuid/setgid/file capabilities. The binary never escalates, so this is free. |
-| `--cap-drop ALL` | Drops every Linux capability. The binary needs none — **including for binding port 80** (see below). |
+| `--cap-drop ALL` | Drops every Linux capability. On Docker the binary needs none at all; on **Podman** binding port 80 needs either `--cap-add CAP_NET_BIND_SERVICE` or a sysctl — see [below](#binding-port-80-as-a-non-root-user-docker-vs-podman). |
 | `-v ./acme-data:/data` | The one writable surface. Holds the account key, certificate, and private key. Must be owned by UID 65532. |
 
 > **Note:** `--no-new-privileges` (single dash form) and `no-new-privileges` are both accepted by `--security-opt`; this document uses the canonical `no-new-privileges`.
 
-#### Port 80 with no capabilities (the important part)
+#### Binding port 80 as a non-root user (Docker vs Podman)
 
-The app **binds and listens on port 80 itself** — `--cap-drop ALL` does **not** prevent that, and you do **not** need `--cap-add NET_BIND_SERVICE`. Here is why:
+The HTTP-01 server binds `0.0.0.0:80` **inside the container's network namespace**, as UID 65532. `--cap-drop ALL` does not, by itself, decide whether that succeeds — it depends on the engine:
 
-- The HTTP-01 server binds `0.0.0.0:80` **inside the container's network namespace**.
-- On modern Docker (20.03+), the engine sets `net.ipv4.ip_unprivileged_port_start=0` in every container netns **by default**, so even a **non-root** process with **zero capabilities** may bind low ports. Port 80 is therefore available with `--cap-drop ALL`.
-- Adding `--cap-add NET_BIND_SERVICE` for the non-root user would be a **no-op**: the kernel clears effective/permitted capabilities across the root→non-root UID transition, so the capability never reaches the process. Relying on it *together with* `--no-new-privileges` is a well-known broken combination — which is exactly why the capability is unnecessary here in the first place.
+- **Docker (20.03+):** works with `--cap-drop ALL` and **no** added capability. The engine sets `net.ipv4.ip_unprivileged_port_start=0` in every container netns by default, so even a non-root, zero-capability process may bind low ports.
+- **Podman:** does **not** set that sysctl (its built-in sysctl defaults are empty), so a non-root `--cap-drop ALL` process gets `Permission denied` on `:80` **unless you enable it explicitly**. Two independent, both-valid mechanisms:
 
-**Fallback** — if your runtime does **not** ship the `ip_unprivileged_port_start=0` default (some plain `containerd` setups, or a host that overrode the sysctl), a non-root bind of 80 fails with `Permission denied`. Fix it without granting capabilities:
+| Mechanism | How | Notes |
+|---|---|---|
+| **Add the capability** | `--cap-drop ALL --cap-add CAP_NET_BIND_SERVICE` | Podman puts an explicitly-added cap into the process's **ambient** set for a non-root user, so it survives `execve` and is effective at runtime. **This is the empirically confirmed path for rootless Podman.** Coexists with `--security-opt no-new-privileges` (ambient caps are not "new privileges" in the `execve` sense). |
+| **Lower the port floor** | `--cap-drop ALL --sysctl net.ipv4.ip_unprivileged_port_start=80` | No capability granted at all. Allowed for any container with its own netns (i.e. not `--network=host`). |
+
+> Earlier guidance here wrongly called `--cap-add NET_BIND_SERVICE` a "no-op" for non-root. That is **incorrect on Podman**: because Podman/crun place the added capability in the *ambient* set (not merely the bounding set), a non-root, non-setuid process genuinely receives it. The "caps cleared across the UID transition" rule applies to a traditional setuid drop, not to ambient capabilities.
+
+Combining both mechanisms is redundant — pick one. Neither one solves **rootless host publishing** of `-p 80:80`:
 
 ```sh
-# Option A: lower the unprivileged-port floor for this container only
-docker run --rm \
-  --read-only --security-opt no-new-privileges --cap-drop ALL \
+# Podman rootless — add the capability for the in-container bind:
+podman run --rm \
+  --user 65532:65532 --read-only --security-opt no-new-privileges \
+  --cap-drop ALL --cap-add CAP_NET_BIND_SERVICE \
+  -p 80:80 -v ./acme-data:/data \
+  docker.io/andrico21/acme-client-rs ... run --challenge-type http-01 --http-port 80 ...
+
+# Alternative — no capability, lower the port floor instead:
+podman run --rm \
+  --user 65532:65532 --read-only --security-opt no-new-privileges --cap-drop ALL \
   --sysctl net.ipv4.ip_unprivileged_port_start=80 \
   -p 80:80 -v ./acme-data:/data \
-  andrico21/acme-client-rs ...
+  docker.io/andrico21/acme-client-rs ... run --challenge-type http-01 --http-port 80 ...
 
-# Option B: bind a high port inside the container, reverse-proxy :80 → it on the host
+# Or sidestep low ports entirely — bind high inside, reverse-proxy :80 → it on the host:
 docker run --rm \
   --read-only --security-opt no-new-privileges --cap-drop ALL \
   -p 8080:8080 -v ./acme-data:/data \
   andrico21/acme-client-rs ... run --challenge-type http-01 --http-port 8080 ...
 ```
 
-> Publishing the port to the host (`-p 80:80`) is a separate concern from the in-container bind. Under **rootless** Docker/Podman, exposing host port 80 itself may require `sysctl net.ipv4.ip_unprivileged_port_start=80` on the host (or mapping to a high host port such as `-p 8080:80`).
+> **Two separate port-80 layers — don't conflate them.** (1) The **in-container bind** is fixed by the capability or sysctl above. (2) Publishing to the host (`-p 80:80`) is independent: under **rootless** Docker/Podman the host-side forwarder also needs `sudo sysctl net.ipv4.ip_unprivileged_port_start=80` **on the host** (the container `--sysctl` does not affect the host bind), or run rootful, or map a high host port such as `-p 8080:80`.
 
 ### Key Algorithms
 
@@ -722,7 +735,9 @@ services:
       TZ: Europe/Berlin
       RUST_LOG: info
     # Hardening — see "Hardened / production run". The /data volume stays
-    # writable; port 80 needs no capability (ip_unprivileged_port_start=0).
+    # writable. On Docker, port 80 binds with no capability (default
+    # ip_unprivileged_port_start=0). Under podman-compose, add
+    # cap_add: [CAP_NET_BIND_SERVICE] (or a sysctl) for the in-container bind.
     read_only: true
     cap_drop:
       - ALL
