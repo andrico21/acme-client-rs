@@ -13,19 +13,33 @@
 # attack surface beyond the binary itself.
 
 # -- Stage 1: Build --
-FROM docker.io/library/rust:alpine AS builder
+#
+# Pin to a specific Rust + Alpine pair for reproducibility. Bump in lockstep
+# with `.github/workflows/release.yaml` (rust:X.Y.Z-alpine) and verify Alpine
+# tag at https://hub.docker.com/_/rust .
+FROM docker.io/library/rust:1.96-alpine3.23 AS builder
 
 RUN apk add --no-cache musl-dev pkgconf
 
 WORKDIR /src
 COPY . .
 
-ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
+# Scope hardening flags to the *target* triple only. A bare `RUSTFLAGS` would
+# also apply to host-built proc-macro crates (e.g. asn1-rs-derive), and
+# `+crt-static` makes them un-buildable as dylibs:
+#   "cannot produce proc-macro for ... as the target ... does not support these crate types"
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
 
-RUN cargo build --release && strip target/release/acme-client-rs
+RUN cargo build --release --target x86_64-unknown-linux-musl \
+ && strip target/x86_64-unknown-linux-musl/release/acme-client-rs
 
 # -- Stage 2: Distroless runtime --
 FROM gcr.io/distroless/static-debian13:nonroot
+
+# Image version, stamped into the OCI `image.version` label. CI passes the
+# release tag via `--build-arg VERSION=$tag`; manual local builds default to
+# "dev" unless the operator overrides.
+ARG VERSION=dev
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="acme-client-rs" \
@@ -35,11 +49,11 @@ LABEL org.opencontainers.image.title="acme-client-rs" \
       org.opencontainers.image.url="https://github.com/andrico21/acme-client-rs" \
       org.opencontainers.image.documentation="https://github.com/andrico21/acme-client-rs#readme" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="2.2.0" \
+      org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.vendor="andrico21" \
       org.opencontainers.image.base.name="gcr.io/distroless/static-debian13:nonroot"
 
-COPY --from=builder /src/target/release/acme-client-rs /usr/local/bin/acme-client-rs
+COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/acme-client-rs /usr/local/bin/acme-client-rs
 
 # ── Runtime environment ──────────────────────────────────────────────────────
 # Timezone (used for log timestamps and certificate-expiry date formatting).
