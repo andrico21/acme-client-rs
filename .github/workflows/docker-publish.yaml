@@ -200,6 +200,44 @@ jobs:
           sarif_file: trivy-results.sarif
           category: trivy-image
 
+      - name: Render Trivy summary on run page
+        if: always() && hashFiles('trivy-results.json') != ''
+        shell: bash
+        run: |
+          # Aggregate vulnerability counts across all Results[] in Trivy's JSON
+          # report and surface them on the workflow run summary page so the
+          # verdict is visible without artifact download or Code Scanning click.
+          counts="$(jq -r '
+            [.Results[]?.Vulnerabilities[]? // empty] as $vs
+            | {
+                CRITICAL: ([$vs[] | select(.Severity=="CRITICAL")] | length),
+                HIGH:     ([$vs[] | select(.Severity=="HIGH")]     | length),
+                MEDIUM:   ([$vs[] | select(.Severity=="MEDIUM")]   | length),
+                LOW:      ([$vs[] | select(.Severity=="LOW")]      | length),
+                UNKNOWN:  ([$vs[] | select(.Severity=="UNKNOWN")]  | length),
+                TOTAL:    ($vs | length)
+              }
+            | "\(.CRITICAL)\t\(.HIGH)\t\(.MEDIUM)\t\(.LOW)\t\(.UNKNOWN)\t\(.TOTAL)"
+          ' trivy-results.json)"
+          IFS=$'\t' read -r crit high med low unk total <<< "$counts"
+          {
+            echo "## Image scan (Trivy)"
+            echo ""
+            echo "Scan target: \`${{ steps.scan-image.outputs.ref }}\`"
+            echo ""
+            echo "| Severity | Count |"
+            echo "|---|---:|"
+            echo "| CRITICAL | ${crit} |"
+            echo "| HIGH | ${high} |"
+            echo "| MEDIUM | ${med} |"
+            echo "| LOW | ${low} |"
+            echo "| UNKNOWN | ${unk} |"
+            echo "| **Total** | **${total}** |"
+            echo ""
+            echo "Full JSON + SARIF reports retained 90 days as workflow artifact \`trivy-image-scan-${{ github.run_id }}\`."
+            echo "CRITICAL/HIGH findings (fixed-only) also published to the **Security → Code scanning** tab."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload full Trivy reports as workflow artifact
         if: always()
         uses: actions/upload-artifact@v7
@@ -210,3 +248,39 @@ jobs:
             trivy-results.json
           if-no-files-found: error
           retention-days: 90
+
+      - name: Render image identity on run page
+        if: always() && steps.build.outputs.digest != ''
+        shell: bash
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          # Surface what was just published — digest, tags, source provenance —
+          # so the run page answers "what image did this produce?" without log
+          # spelunking. Renders even if Trivy steps failed (build succeeded).
+          {
+            echo "## Image identity"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Image | \`${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}\` |"
+            echo "| Digest | \`${IMAGE_DIGEST}\` |"
+            echo "| Version (OCI label) | \`${IMAGE_VERSION}\` |"
+            echo "| Source tag | \`${SOURCE_TAG}\` |"
+            echo "| Source commit | \`${SOURCE_SHA}\` |"
+            echo "| Trigger | \`${{ github.event_name }}\` |"
+            echo ""
+            echo "### Pushed tags"
+            echo ""
+            echo '```'
+            printf '%s\n' "${IMAGE_TAGS}"
+            echo '```'
+            echo ""
+            echo "### Pull by digest (recommended — immutable)"
+            echo ""
+            echo '```bash'
+            echo "docker pull ${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
