@@ -236,6 +236,14 @@ jobs:
 
       - name: Run Trivy image scan (SARIF for GitHub Code Scanning)
         uses: aquasecurity/trivy-action@master
+        # With provenance attestations each leg pushes an OCI *index* (image +
+        # attestation manifest). Trivy resolves indexes via go-containerregistry,
+        # whose default platform is linux/amd64 — the arm64 index has no amd64
+        # child, so the scan dies with "no child with platform linux/amd64"
+        # unless we pin the platform explicitly (trivy-action has no input for
+        # it; the TRIVY_PLATFORM env var maps to trivy's --platform flag).
+        env:
+          TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
           image-ref: ${{ steps.scan-image.outputs.ref }}
           scan-type: image
@@ -251,6 +259,9 @@ jobs:
       - name: Run Trivy image scan (full JSON report)
         if: always()
         uses: aquasecurity/trivy-action@master
+        env:
+          # Same platform pin as the SARIF scan above.
+          TRIVY_PLATFORM: ${{ matrix.platform }}
         with:
           image-ref: ${{ steps.scan-image.outputs.ref }}
           scan-type: image
