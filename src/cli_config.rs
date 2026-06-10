@@ -14,7 +14,9 @@
 //! 3. Built-in default
 //!
 //! (Environment variables are ignored in config mode for most fields,
-//! except for secrets such as `ACME_ACCOUNT_KEY_PASSWORD` / EAB.)
+//! except for secret-bearing vars such as `ACME_ACCOUNT_KEY_PASSWORD` /
+//! `ACME_EAB_HMAC_KEY`. Safety toggles like `ACME_INSECURE` are
+//! fail-closed in config mode: env is dropped, config or default(false) wins.)
 //!
 //! Precedence WITHOUT a config file (legacy mode):
 //!
@@ -105,6 +107,7 @@ fn apply_global(
             ("account_key", "ACME_ACCOUNT_KEY_FILE"),
             ("account_url", "ACME_ACCOUNT_URL"),
             ("output_format", "ACME_OUTPUT_FORMAT"),
+            ("insecure", "ACME_INSECURE"),
             ("connect_timeout", "ACME_CONNECT_TIMEOUT"),
             ("allow_private_network", "ACME_ALLOW_PRIVATE_NETWORK"),
             ("unsafe_hooks", "ACME_UNSAFE_HOOKS"),
@@ -161,17 +164,18 @@ fn apply_global(
         }
     }
 
-    // Global: insecure — ALLOWED from env even in config mode (secret/safety toggle)
-    if matches!(
+    // Global: insecure — fail-closed in config mode (H1/E2). When a config
+    // file is loaded, env `ACME_INSECURE` is dropped so it cannot silently
+    // disable TLS verification. Explicit `--insecure` on the CLI always wins,
+    // and an explicit `insecure = true` in the config file is honored.
+    if let Some(v) = config_or_env_reset(
         matches.value_source("insecure"),
-        Some(ValueSource::DefaultValue) | None
-    ) && let Some(v) = cfg.insecure
-    {
+        cfg.insecure,
+        config_mode,
+        false,
+    ) {
         cli.insecure = v;
     }
-    // In config mode, if env has ACME_INSECURE but config also sets it, config wins
-    // (already handled above: config is applied for DefaultValue).
-    // If env has it and config doesn't, env is allowed to survive for insecure.
 
     // Global: connect_timeout
     if should_apply_config(matches.value_source("connect_timeout")) {
@@ -502,6 +506,36 @@ mod tests {
         assert_eq!(
             config_or_env_reset::<bool>(Some(ValueSource::EnvVariable), None, true, false),
             Some(false),
+        );
+    }
+
+    // E2: ACME_INSECURE must fail-closed in config mode — env is dropped,
+    // explicit `--insecure` on the CLI always wins, and `insecure = true`
+    // in the config file is honored.
+    #[test]
+    fn h1_insecure_is_failclosed() {
+        // (a) env ACME_INSECURE=true + config file WITHOUT `insecure` → false
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::EnvVariable), None, true, false),
+            Some(false),
+        );
+        // (b) config `insecure = true` (any source on CLI other than CommandLine) → true
+        assert_eq!(
+            config_or_env_reset(Some(ValueSource::EnvVariable), Some(true), true, false),
+            Some(true),
+        );
+        assert_eq!(
+            config_or_env_reset(Some(ValueSource::DefaultValue), Some(true), true, false),
+            Some(true),
+        );
+        // (c) explicit `--insecure` CLI flag + config file → CLI wins (leave current value)
+        assert_eq!(
+            config_or_env_reset(Some(ValueSource::CommandLine), Some(false), true, false),
+            None,
+        );
+        assert_eq!(
+            config_or_env_reset::<bool>(Some(ValueSource::CommandLine), None, true, false),
+            None,
         );
     }
 

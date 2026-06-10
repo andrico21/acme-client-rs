@@ -908,7 +908,7 @@ days = 30
 **Priority without config file:** CLI flags > environment variables > built-in defaults.
 **Priority with config file:** CLI flags > config file > built-in defaults.
 
-When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exceptions still read from the environment: the safety toggle `ACME_INSECURE` and secret-bearing variables (`ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`).
+When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exception: secret-bearing variables (`ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still read from the environment as a fallback. The safety toggle `ACME_INSECURE` is **dropped** in config mode (fail-closed): set `insecure = true` in the config file or pass `--insecure` on the CLI explicitly.
 
 Inspect the effective merged config and where each value comes from:
 
@@ -1004,7 +1004,7 @@ docker run --rm --network <compose-network> -v ./acme-data:/data andrico21/acme-
     test.example.com
 ```
 
-> **TLS note:** `--insecure` (or `ACME_INSECURE=true`) is **required** against Pebble or any self-signed CA, and implies `--allow-private-network`. Never use it against a production CA.
+> **TLS note:** `--insecure` (or `ACME_INSECURE=true`) is **required** against Pebble or any self-signed CA, and implies `--allow-private-network`. Never use it against a production CA. **Config-mode caveat:** when a config file is loaded (`--config` / `ACME_CONFIG`), the `ACME_INSECURE` env var is dropped (fail-closed); set `insecure = true` in the config file or pass `--insecure` on the CLI explicitly.
 >
 > **Networking note:** for the Pebble VA to reach the client's challenge server you typically run the client as its own compose service on the same network, or use `PEBBLE_VA_ALWAYS_VALID=1` (shown above) so validation succeeds without a reachable challenge endpoint.
 

@@ -506,7 +506,7 @@ The config file is optional. Load it with `--config <PATH>` or `ACME_CONFIG` env
 **Priority without config file:** CLI flags > environment variables > built-in defaults.
 **Priority with config file:** CLI flags > config file > built-in defaults.
 
-When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exceptions: the safety toggle `ACME_INSECURE` and secret-bearing variables that should never be stored in a config file are still read from the environment as a fallback. Those secret exceptions are: `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, and `ACME_EAB_HMAC_KEY`.
+When a config file is loaded, environment variables are **ignored** — the config file is the single source of truth. Exception: secret-bearing variables that should never be stored in a config file are still read from the environment as a fallback. Those secret exceptions are: `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, and `ACME_EAB_HMAC_KEY`. The safety toggle `ACME_INSECURE` is **dropped** in config mode (fail-closed): set `insecure = true` in the config file or pass `--insecure` on the CLI explicitly.
 
 Loading behavior:
 - `--config <PATH>` (or `ACME_CONFIG` env var): load from the specified path (env vars ignored)
@@ -1193,7 +1193,7 @@ The default `--directory` points to `https://localhost:14000/dir` (Pebble's defa
 acme-client-rs run --contact test@example.com --challenge-type http-01 --http-port 5002 --insecure test.example.com
 ```
 
-> **TLS note:** `--insecure` (or `ACME_INSECURE=true`) is **required** when targeting Pebble or any ACME server with a self-signed certificate. Never use this flag against a production CA.
+> **TLS note:** `--insecure` (or `ACME_INSECURE=true`) is **required** when targeting Pebble or any ACME server with a self-signed certificate. Never use this flag against a production CA. **Config-mode caveat:** when a config file is loaded (`--config` / `ACME_CONFIG`), the `ACME_INSECURE` env var is dropped (fail-closed); set `insecure = true` in the config file or pass `--insecure` on the CLI explicitly.
 
 ### 4. Test Step-by-Step (manual flow)
 

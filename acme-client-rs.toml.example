@@ -2,7 +2,9 @@
 # All fields are optional. CLI flags always override config file values.
 #
 # When a config file is loaded (--config or ACME_CONFIG), environment variables
-# are IGNORED except for secrets: key passwords, EAB credentials, and --insecure.
+# are IGNORED except for secrets: key passwords and EAB credentials. The
+# safety toggle ACME_INSECURE is also dropped (fail-closed) — set
+# `insecure = true` here or pass `--insecure` on the CLI explicitly.
 # Priority with config: CLI flags > config file > built-in defaults.
 # Priority without config: CLI flags > environment variables > built-in defaults.
 #
@@ -39,7 +41,7 @@
 # Disable TLS certificate verification. Only use for testing with self-signed
 # CAs like Pebble - never in production.
 # CLI: --insecure
-# Env: ACME_INSECURE
+# Env: ACME_INSECURE (DROPPED in config mode; set this key or pass --insecure)
 # Default: false
 # insecure = true
 

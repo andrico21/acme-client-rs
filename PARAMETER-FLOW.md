@@ -625,7 +625,7 @@ graph TD
 
 1. **Config precedence**:
    - **Without `--config` / `ACME_CONFIG`** (legacy mode): CLI > env > defaults.
-   - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_CONNECT_TIMEOUT`, `ACME_ALLOW_PRIVATE_NETWORK`, `ACME_UNSAFE_HOOKS`, `ACME_DNS_CHECK_MODE`, `ACME_DNS_CHECK_DNSSEC`, `ACME_PROFILE`) are actively stripped so the config file is the single source of truth. Secret/safety env vars (`ACME_INSECURE`, `ACME_KEY_PASSWORD_FILE`, `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
+   - **With `--config` / `ACME_CONFIG`** (config mode): CLI > config file > defaults. Non-secret env vars (`ACME_DIRECTORY_URL`, `ACME_ACCOUNT_KEY_FILE`, `ACME_ACCOUNT_URL`, `ACME_OUTPUT_FORMAT`, `ACME_INSECURE`, `ACME_CONNECT_TIMEOUT`, `ACME_ALLOW_PRIVATE_NETWORK`, `ACME_UNSAFE_HOOKS`, `ACME_DNS_CHECK_MODE`, `ACME_DNS_CHECK_DNSSEC`, `ACME_PROFILE`) are actively stripped so the config file is the single source of truth. `ACME_INSECURE` is included in this strip set (fail-closed): set `insecure = true` in the config file or pass `--insecure` on the CLI explicitly. Secret env vars (`ACME_KEY_PASSWORD_FILE`, `ACME_ACCOUNT_KEY_PASSWORD`, `ACME_ACCOUNT_KEY_PASSWORD_FILE`, `ACME_NEW_KEY_PASSWORD`, `ACME_NEW_KEY_PASSWORD_FILE`, `ACME_EAB_KID`, `ACME_EAB_HMAC_KEY`) are still honored as a fallback when not set in the config file.
    - **CWD detection**: When `acme-client-rs.toml` exists in the current directory but neither `--config` nor `ACME_CONFIG` is set, the tool emits an info-level log suggesting the user pass `--config acme-client-rs.toml`. The file is **not** auto-loaded — config mode is explicit.
 2. **Renewal gate**: Both ARI and days checks are gated by `cert_output.exists()`. Before ARI/days, a **domain mismatch check** compares the existing cert's SANs against the requested domains. If they differ and `--reissue-on-mismatch` is set, ARI/days are bypassed entirely (reissuance, no `ari_cert_id`). If they differ without the flag, the tool skips with a warning. ARI (RFC 9773) checked first; if ARI succeeds and sets `ari_cert_id`, the days check is **skipped entirely**. Days check is a fallback when ARI is not used, fails, or is unsupported.
 3. **Authorization path split**: `--dns-hook` + DNS challenge type triggers **phased parallel** (5 phases with concurrent propagation checks); everything else goes **sequential**. Sequential DNS paths are always manual (no hook) — hook-based DNS always takes the parallel path.
@@ -637,7 +637,6 @@ graph TD
 
 ## Secrets Allowed from Env in Config Mode
 
-- `--insecure` (`ACME_INSECURE`)
 - `--key-password-file` (`ACME_KEY_PASSWORD_FILE`)
 - `--account-key-password` (`ACME_ACCOUNT_KEY_PASSWORD`)
 - `--account-key-password-file` (`ACME_ACCOUNT_KEY_PASSWORD_FILE`)
@@ -645,3 +644,7 @@ graph TD
 - `--new-key-password-file` (`ACME_NEW_KEY_PASSWORD_FILE`)
 - `--eab-kid` (`ACME_EAB_KID`)
 - `--eab-hmac-key` (`ACME_EAB_HMAC_KEY`)
+
+`--insecure` (`ACME_INSECURE`) is NOT in this list: it is fail-closed in
+config mode. Set `insecure = true` in the config file or pass `--insecure`
+on the CLI explicitly.
