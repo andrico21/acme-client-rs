@@ -84,43 +84,28 @@ jobs:
 
   build-linux-aarch64-musl:
     name: Build Linux (aarch64, musl, static)
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: rust:1.96.0-alpine
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
-        with:
-          platforms: arm64
+      - name: Install build dependencies
+        run: apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
 
-      - name: Build in Alpine aarch64 container
+      - name: Build
+        env:
+          OPENSSL_STATIC: "1"
+        run: cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
+
+      - name: Strip binary
+        run: strip target/release/acme-client-rs
+
+      - name: Verify static linking
         run: |
-          docker run --rm --platform linux/arm64 \
-            -v "$PWD":/work -w /work \
-            rust:1.96.0-alpine sh -c '
-              set -e
-              apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
-              # QEMU user-mode aarch64 emulation intermittently segfaults rustc
-              # mid-build. cargo is incremental, so retry resumes from the cached
-              # target/ dir and converges within a couple of attempts.
-              attempt=1
-              max=3
-              while :; do
-                if OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack; then
-                  break
-                fi
-                if [ "$attempt" -ge "$max" ]; then
-                  echo "aarch64 build failed after $max attempts" >&2
-                  exit 1
-                fi
-                echo "build attempt $attempt failed (likely QEMU emulation segfault); retrying..." >&2
-                attempt=$((attempt + 1))
-                sleep 5
-              done
-              strip target/release/acme-client-rs
-              file target/release/acme-client-rs
-              file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
-            '
+          file target/release/acme-client-rs
+          # Must be statically linked (output varies: "statically linked" or "static-pie linked")
+          file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
 
       - name: Package
         run: |
