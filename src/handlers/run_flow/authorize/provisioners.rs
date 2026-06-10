@@ -288,7 +288,8 @@ async fn wait_for_dns_propagation(
     info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     while std::time::Instant::now() < deadline {
-        if super::super::super::dns_txt_check(&ctx.dns_checker, txt_name, txt_value).await? {
+        if super::super::super::dns_txt_check(ctx.dns_checker().await?, txt_name, txt_value).await?
+        {
             info!("DNS TXT record found");
             return Ok(());
         }

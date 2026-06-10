@@ -200,19 +200,10 @@ fn build_public_resolver(dnssec: Dnssec) -> Result<TokioResolver> {
 }
 
 fn build_system_resolver(dnssec: Dnssec) -> Result<TokioResolver> {
-    let mut builder = match TokioResolver::builder_tokio() {
-        Ok(b) => b,
-        Err(err) => {
-            tracing::warn!("could not read system DNS config ({err}); falling back to Cloudflare");
-            let name_servers: Vec<NameServerConfig> = CLOUDFLARE
-                .ips
-                .iter()
-                .map(|ip| NameServerConfig::udp_and_tcp(*ip))
-                .collect();
-            let config = ResolverConfig::from_parts(None, vec![], name_servers);
-            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default())
-        }
-    };
+    let mut builder = TokioResolver::builder_tokio().context(
+        "could not read the system DNS configuration (resolv.conf); \
+         fix it or use --dns-check-mode cached|authoritative",
+    )?;
     builder.options_mut().ip_strategy = LookupIpStrategy::Ipv4AndIpv6;
     builder.options_mut().validate = dnssec.validate();
     builder

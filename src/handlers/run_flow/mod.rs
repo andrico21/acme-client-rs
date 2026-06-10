@@ -23,6 +23,7 @@ use crate::cli::{CertKeyAlgorithm, Cli, OutputFormat, RunArgs};
 use crate::client::AcmeClient;
 use crate::dns_check::DnsChecker;
 use crate::types::{ChallengeType, Identifier};
+use tokio::sync::OnceCell;
 
 use super::check_wildcard_compatible;
 
@@ -63,7 +64,7 @@ pub(super) struct RunContext<'a> {
     pub cleanup_registry: &'a crate::cleanup::CleanupRegistry,
 
     pub domains: Vec<String>,
-    pub dns_checker: std::sync::Arc<DnsChecker>,
+    pub dns_checker_cell: OnceCell<std::sync::Arc<DnsChecker>>,
     pub json: bool,
     pub silent: bool,
 
@@ -74,7 +75,9 @@ pub(super) struct RunContext<'a> {
 impl<'a> RunContext<'a> {
     /// Build the shared run-flow context from CLI inputs.
     ///
-    /// Sync (no I/O beyond DNS-resolver construction). The caller must have
+    /// Sync (no I/O). The DNS resolver is constructed lazily on first
+    /// propagation check via [`Self::dns_checker`], so HTTP-01-only runs
+    /// never pay the resolver-construction cost. The caller must have
     /// already parsed `challenge_type` and run preflight validation /
     /// auto-generate-key side effects.
     pub(super) fn build(
@@ -88,18 +91,6 @@ impl<'a> RunContext<'a> {
             .iter()
             .map(|d| Identifier::from_str_auto(d).map(|id| id.value_str().into_owned()))
             .collect::<Result<Vec<_>>>()?;
-
-        let dns_checker = std::sync::Arc::new(
-            DnsChecker::new(
-                cli.dns_check_mode,
-                if cli.dns_check_dnssec {
-                    crate::dns_check::Dnssec::On
-                } else {
-                    crate::dns_check::Dnssec::Off
-                },
-            )
-            .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
-        );
 
         let json = cli.output_format == OutputFormat::Json;
         let silent = cli.silent;
@@ -135,12 +126,37 @@ impl<'a> RunContext<'a> {
             contact: args.contact.as_deref(),
             cleanup_registry,
             domains,
-            dns_checker,
+            dns_checker_cell: OnceCell::new(),
             json,
             silent,
             ari_cert_id: None,
             early_client: None,
         })
+    }
+
+    /// Lazily construct (or return the cached) DNS resolver used by dns-01
+    /// and dns-persist-01 propagation checks. HTTP-01-only runs never call
+    /// this and therefore never pay the resolver-construction cost — and,
+    /// more importantly, never fail at startup over a misconfigured
+    /// `resolv.conf` they would not have read.
+    // cancel-safe: init closure is synchronous resolver construction (no I/O
+    // awaits); once initialized, returns the cached Arc immediately.
+    pub(super) async fn dns_checker(&self) -> Result<&std::sync::Arc<DnsChecker>> {
+        self.dns_checker_cell
+            .get_or_try_init(|| async {
+                Ok(std::sync::Arc::new(
+                    DnsChecker::new(
+                        self.cli.dns_check_mode,
+                        if self.cli.dns_check_dnssec {
+                            crate::dns_check::Dnssec::On
+                        } else {
+                            crate::dns_check::Dnssec::Off
+                        },
+                    )
+                    .context("failed to initialize DNS resolver for dns-01 propagation checks")?,
+                ))
+            })
+            .await
     }
 }
 

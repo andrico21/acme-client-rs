@@ -32,7 +32,7 @@ mod url_validation;
 
 pub use acme::{AcmeClient, compute_cert_id};
 pub use http_transport::build_http_client;
-pub use net_policy::policies_from_cli_flags;
+pub use net_policy::{NetFlags, policies_from_cli_flags};
 pub use url_validation::{
     validate_account_uri, validate_acme_url, validate_caa_parameter_value, validate_directory_url,
     validate_issuer_domain_name,

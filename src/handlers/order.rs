@@ -62,8 +62,10 @@ pub(crate) async fn cmd_order(
 
 // cancel-safe: single HTTP GET to list profiles; pure read.
 pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_directory_url(&cli.directory, tls, net)?;
     let http = crate::client::build_http_client(tls, cli.connect_timeout, net)?;
@@ -101,8 +103,10 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
 
 // cancel-safe: single signed POST-as-GET to authz URL.
 pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_acme_url(url, tls, net)?;
     let url: url::Url = url
@@ -147,8 +151,10 @@ pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
 // NOT cancel-safe: signals CA to validate. Drop after POST cannot recall
 // the request — CA may proceed with validation regardless.
 pub(crate) async fn cmd_respond_challenge(cli: &Cli, url: &str) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_acme_url(url, tls, net)?;
     let url: url::Url = url
@@ -178,8 +184,10 @@ pub(crate) async fn cmd_finalize(
     key_password_file: Option<&std::path::Path>,
     force: bool,
 ) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_acme_url(finalize_url, tls, net)?;
     let finalize_url: url::Url = finalize_url
@@ -274,8 +282,10 @@ pub(crate) async fn cmd_finalize(
 
 // cancel-safe: single POST-as-GET; pure read of order state.
 pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_acme_url(url, tls, net)?;
     let url: url::Url = url
@@ -306,8 +316,10 @@ pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
 // download and write loses the issued cert (re-download possible only if
 // the URL is preserved externally).
 pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &Path) -> Result<()> {
-    let (tls, net) =
-        crate::client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     crate::client::validate_acme_url(url, tls, net)?;
     let url: url::Url = url

@@ -35,7 +35,7 @@ use crate::types::{
 };
 
 use super::http_transport::{AcmeResponse, build_http_client, truncate_for_log};
-use super::net_policy::{NetworkPolicy, TlsPolicy, policies_from_cli_flags};
+use super::net_policy::{NetFlags, NetworkPolicy, TlsPolicy, policies_from_cli_flags};
 use super::url_validation::validate_acme_url;
 
 /// Parse RFC 9110 `Retry-After` delta-seconds into a `Duration`.
@@ -84,7 +84,10 @@ struct Transport {
 
 impl Transport {
     fn url_policies(&self) -> (TlsPolicy, NetworkPolicy) {
-        policies_from_cli_flags(self.insecure, self.allow_private)
+        policies_from_cli_flags(NetFlags {
+            insecure: self.insecure,
+            allow_private_network: self.allow_private,
+        })
     }
 
     // ── Nonce management (RFC 8555 §7.2) ────────────────────────────────
@@ -980,7 +983,11 @@ mod regression_tests {
     }
 
     async fn build_client(port: u16) -> Result<AcmeClient> {
-        let (tls, net) = super::super::net_policy::policies_from_cli_flags(true, true);
+        let (tls, net) =
+            super::super::net_policy::policies_from_cli_flags(super::super::net_policy::NetFlags {
+                insecure: true,
+                allow_private_network: true,
+            });
         let key = AccountKey::generate(KeyAlgorithm::Es256)?;
         let url = format!("http://127.0.0.1:{port}/directory");
         AcmeClient::new(&url, key, tls, 5, net).await

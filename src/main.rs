@@ -248,7 +248,10 @@ async fn run(
 // cancel-safe: reads account key from disk + constructs AcmeClient. Drop
 // leaves no external state — the directory has not yet been fetched.
 pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
-    let (tls, net) = client::policies_from_cli_flags(cli.insecure, cli.allow_private_network);
+    let (tls, net) = client::policies_from_cli_flags(client::NetFlags {
+        insecure: cli.insecure,
+        allow_private_network: cli.allow_private_network,
+    });
 
     client::validate_directory_url(&cli.directory, tls, net)?;
     let pw = resolve_account_key_password(

@@ -142,15 +142,22 @@ impl NetworkPolicy {
     }
 }
 
+/// CLI network-safety flags, named to make call sites swap-proof.
+#[derive(Clone, Copy, Debug)]
+pub struct NetFlags {
+    pub insecure: bool,
+    pub allow_private_network: bool,
+}
+
 /// Build (tls, network) policy pair from the CLI flags as a single call. The
 /// canonical conversion used by every handler — keeps the bool→enum hop in one
 /// place so call sites read `let (tls, net) = policies_from_cli_flags(...)`.
-pub fn policies_from_cli_flags(insecure: bool, allow_private: bool) -> (TlsPolicy, NetworkPolicy) {
-    let tls = TlsPolicy::from_insecure(insecure);
+pub fn policies_from_cli_flags(flags: NetFlags) -> (TlsPolicy, NetworkPolicy) {
+    let tls = TlsPolicy::from_insecure(flags.insecure);
     // --insecure implies private/loopback access: validate_acme_url and the
     // CLI docs both promise this, but the connect-time SsrfSafeResolver only
     // sees NetworkPolicy, so we must fold the implication in here.
-    let net = NetworkPolicy::from_allow_private(allow_private || insecure);
+    let net = NetworkPolicy::from_allow_private(flags.allow_private_network || flags.insecure);
     (tls, net)
 }
 
@@ -192,5 +199,33 @@ mod tests {
         assert!(is_private_or_special_ip("::a00:1".parse()?)); // ::10.0.0.1
         assert!(!is_private_or_special_ip("::808:808".parse()?)); // ::8.8.8.8
         Ok(())
+    }
+
+    #[test]
+    fn net_flags_insecure_forces_allow_private_even_when_flag_off() {
+        // The implication --insecure ⇒ allow private is contractual (see the
+        // comment in policies_from_cli_flags). Lock it with a round-trip test
+        // so a future refactor cannot silently break the SSRF-on-loopback path
+        // that --insecure callers depend on.
+        let (tls, net) = policies_from_cli_flags(NetFlags {
+            insecure: true,
+            allow_private_network: false,
+        });
+        assert_eq!(tls, TlsPolicy::AllowHttpLoopback);
+        assert_eq!(net, NetworkPolicy::AllowPrivate);
+
+        let (tls, net) = policies_from_cli_flags(NetFlags {
+            insecure: false,
+            allow_private_network: false,
+        });
+        assert_eq!(tls, TlsPolicy::RequireHttps);
+        assert_eq!(net, NetworkPolicy::PublicOnly);
+
+        let (tls, net) = policies_from_cli_flags(NetFlags {
+            insecure: false,
+            allow_private_network: true,
+        });
+        assert_eq!(tls, TlsPolicy::RequireHttps);
+        assert_eq!(net, NetworkPolicy::AllowPrivate);
     }
 }

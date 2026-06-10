@@ -71,6 +71,9 @@ pub fn build_http_client(
         .connect_timeout(std::time::Duration::from_secs(connect_timeout_secs))
         .timeout(std::time::Duration::from_mins(2))
         .redirect(reqwest::redirect::Policy::none())
+        // README security posture promises a TLS 1.2 minimum; make the floor
+        // explicit instead of relying on the backend default.
+        .min_tls_version(reqwest::tls::Version::TLS_1_2)
         .danger_accept_invalid_certs(tls.accepts_invalid_certs())
         .dns_resolver(SsrfSafeResolver::new(network))
         .build()
@@ -213,7 +216,11 @@ mod tests {
     // under the production policy, but accepted for a public host.
     #[test]
     fn m1_validated_location_rejects_private_targets() {
-        let (tls, net) = super::super::net_policy::policies_from_cli_flags(false, false);
+        let (tls, net) =
+            super::super::net_policy::policies_from_cli_flags(super::super::net_policy::NetFlags {
+                insecure: false,
+                allow_private_network: false,
+            });
 
         assert!(
             response_with_location("https://acme.example.com/acct/1")
@@ -240,7 +247,11 @@ mod tests {
 
     #[test]
     fn m1_validated_location_allows_private_with_override() {
-        let (tls, net) = super::super::net_policy::policies_from_cli_flags(true, true);
+        let (tls, net) =
+            super::super::net_policy::policies_from_cli_flags(super::super::net_policy::NetFlags {
+                insecure: true,
+                allow_private_network: true,
+            });
         assert!(
             response_with_location("https://127.0.0.1/acct/1")
                 .validated_location(tls, net)
