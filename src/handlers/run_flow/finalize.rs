@@ -22,6 +22,9 @@ use super::RunContext;
 // ready, downloads cert, writes cert + private key to disk, and invokes
 // on_cert_issued hook. Drop between finalize POST and disk write would
 // orphan the issued certificate (not retrievable without polling order).
+// cognitive_complexity: CSR→submit→poll→download→write sequence must stay one
+// body for the cancel-safety contract documented above.
+#[allow(clippy::cognitive_complexity)]
 pub(super) async fn finalize(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,

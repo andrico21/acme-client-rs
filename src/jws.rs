@@ -23,7 +23,7 @@ use p521::ecdsa::SigningKey as P521SigningKey;
 
 /// Supported account key algorithms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
-pub enum KeyAlgorithm {
+pub(crate) enum KeyAlgorithm {
     /// ECDSA P-256 + SHA-256 (default, RFC 8555 §6.2 mandatory)
     Es256,
     /// ECDSA P-384 + SHA-384
@@ -62,7 +62,7 @@ enum KeyInner {
 }
 
 /// ACME account key pair - supports ES256, ES384, ES512, RS256, Ed25519.
-pub struct AccountKey {
+pub(crate) struct AccountKey {
     inner: KeyInner,
 }
 
@@ -124,7 +124,7 @@ struct FlattenedJws {
 
 impl AccountKey {
     /// Generate a new random key pair for the given algorithm.
-    pub fn generate(alg: KeyAlgorithm) -> Result<Self> {
+    pub(crate) fn generate(alg: KeyAlgorithm) -> Result<Self> {
         use rand_core::OsRng;
         let inner = match alg {
             KeyAlgorithm::Es256 => KeyInner::Es256(P256SigningKey::random(&mut OsRng)),
@@ -154,7 +154,10 @@ impl AccountKey {
     /// SEC-08: account-key-at-rest encryption. Opt-in via password; absence
     /// of password against an encrypted key returns a directive error
     /// pointing at the relevant CLI flag.
-    pub fn from_pkcs8_pem_with_password(pem_data: &str, password: Option<&str>) -> Result<Self> {
+    pub(crate) fn from_pkcs8_pem_with_password(
+        pem_data: &str,
+        password: Option<&str>,
+    ) -> Result<Self> {
         let parsed = pem::parse(pem_data).context("failed to parse PKCS#8 PEM data")?;
         let is_encrypted = parsed.tag() == "ENCRYPTED PRIVATE KEY";
 
@@ -251,7 +254,7 @@ impl AccountKey {
     }
 
     /// Export the account key as a PKCS#8 PEM string.
-    pub fn to_pkcs8_pem(&self) -> Result<String> {
+    pub(crate) fn to_pkcs8_pem(&self) -> Result<String> {
         use p256::pkcs8::{EncodePrivateKey, LineEnding};
 
         match &self.inner {
@@ -295,7 +298,7 @@ impl AccountKey {
     }
 
     /// JWS algorithm identifier (RFC 7518).
-    pub fn alg(&self) -> &'static str {
+    pub(crate) fn alg(&self) -> &'static str {
         match &self.inner {
             KeyInner::Es256(_) => "ES256",
             KeyInner::Es384(_) => "ES384",
@@ -306,7 +309,7 @@ impl AccountKey {
     }
 
     /// Build the JWK (public-key only) as a JSON value (RFC 7517).
-    pub fn jwk(&self) -> Result<serde_json::Value> {
+    pub(crate) fn jwk(&self) -> Result<serde_json::Value> {
         Ok(match &self.inner {
             KeyInner::Es256(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
@@ -368,7 +371,7 @@ impl AccountKey {
     ///
     /// Used in key authorizations: `token || '.' || thumbprint`.
     /// Required members in lexicographic order per key type.
-    pub fn thumbprint(&self) -> Result<String> {
+    pub(crate) fn thumbprint(&self) -> Result<String> {
         let input = match &self.inner {
             KeyInner::Es256(sk) => {
                 let pt = sk.verifying_key().to_encoded_point(false);
@@ -417,7 +420,7 @@ impl AccountKey {
     /// Per RFC 8555 §6.2 this is used for `newAccount` and for `revokeCert`
     /// when signing with the certificate key.
     // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
-    pub fn sign_with_jwk(&self, payload: &str, nonce: &str, url: &str) -> Result<String> {
+    pub(crate) fn sign_with_jwk(&self, payload: &str, nonce: &str, url: &str) -> Result<String> {
         let header = ProtectedHeader {
             alg: self.alg(),
             auth: HeaderAuth::Jwk(self.jwk()?),
@@ -432,7 +435,7 @@ impl AccountKey {
     /// Per RFC 8555 §6.2 this is used for all requests *after* account
     /// creation.
     // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
-    pub fn sign_with_kid(
+    pub(crate) fn sign_with_kid(
         &self,
         payload: &str,
         nonce: &str,
@@ -489,7 +492,7 @@ impl AccountKey {
     /// The inner JWS uses a protected header with `alg`, `jwk` (the NEW
     /// key's public JWK), and `url` (the key-change URL).  No `nonce` or `kid`.
     // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
-    pub fn sign_key_change_inner(&self, payload: &str, url: &str) -> Result<String> {
+    pub(crate) fn sign_key_change_inner(&self, payload: &str, url: &str) -> Result<String> {
         let header = serde_json::json!({
             "alg": self.alg(),
             "jwk": self.jwk()?,
@@ -517,7 +520,7 @@ impl AccountKey {
     /// this function (right before being fed to `HmacSha256::new_from_slice`)
     /// and are zeroized on drop.
     // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
-    pub fn sign_eab(
+    pub(crate) fn sign_eab(
         &self,
         eab_kid: &str,
         hmac_key: &secrecy::SecretSlice<u8>,

@@ -96,7 +96,7 @@ fn embedded_ipv4(s: [u16; 8]) -> Ipv4Addr {
 /// TLS policy for ACME URL validation. Distinct enum (not `bool`) so it cannot
 /// be positionally swapped with `NetworkPolicy` at call sites.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TlsPolicy {
+pub(crate) enum TlsPolicy {
     /// `https://` only (RFC 8555 §6.1 default).
     RequireHttps,
     /// Permit `http://` for loopback hosts only — `--insecure`.
@@ -106,7 +106,7 @@ pub enum TlsPolicy {
 /// Network reachability policy for ACME URL validation. Distinct enum so it
 /// cannot be positionally swapped with `TlsPolicy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NetworkPolicy {
+pub(crate) enum NetworkPolicy {
     /// Reject private / loopback / link-local / special-purpose IP literals.
     PublicOnly,
     /// Permit private/special IPs — `--allow-private-network` (also implied by
@@ -144,7 +144,7 @@ impl NetworkPolicy {
 
 /// CLI network-safety flags, named to make call sites swap-proof.
 #[derive(Clone, Copy, Debug)]
-pub struct NetFlags {
+pub(crate) struct NetFlags {
     pub insecure: bool,
     pub allow_private_network: bool,
 }
@@ -152,7 +152,7 @@ pub struct NetFlags {
 /// Build (tls, network) policy pair from the CLI flags as a single call. The
 /// canonical conversion used by every handler — keeps the bool→enum hop in one
 /// place so call sites read `let (tls, net) = policies_from_cli_flags(...)`.
-pub fn policies_from_cli_flags(flags: NetFlags) -> (TlsPolicy, NetworkPolicy) {
+pub(crate) fn policies_from_cli_flags(flags: NetFlags) -> (TlsPolicy, NetworkPolicy) {
     let tls = TlsPolicy::from_insecure(flags.insecure);
     // --insecure implies private/loopback access: validate_acme_url and the
     // CLI docs both promise this, but the connect-time SsrfSafeResolver only

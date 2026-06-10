@@ -15,12 +15,12 @@ const USER_AGENT_VALUE: &str = concat!("acme-client-rs/", env!("CARGO_PKG_VERSIO
 /// loopback, link-local, multicast or other special-purpose addresses.
 /// This is the connect-time half of SSRF defense and closes the
 /// DNS-rebinding race that a synchronous pre-check cannot.
-pub struct SsrfSafeResolver {
+pub(super) struct SsrfSafeResolver {
     network: super::net_policy::NetworkPolicy,
 }
 
 impl SsrfSafeResolver {
-    pub fn new(network: super::net_policy::NetworkPolicy) -> Arc<Self> {
+    pub(super) fn new(network: super::net_policy::NetworkPolicy) -> Arc<Self> {
         Arc::new(Self { network })
     }
 }
@@ -61,7 +61,7 @@ impl reqwest::dns::Resolve for SsrfSafeResolver {
 /// drives its own resource navigation via `Location` headers on
 /// non-redirect responses (newAccount, newOrder); transparent 30x
 /// following would corrupt nonce handling and hide CA misconfiguration.
-pub fn build_http_client(
+pub(crate) fn build_http_client(
     tls: super::net_policy::TlsPolicy,
     connect_timeout_secs: u64,
     network: super::net_policy::NetworkPolicy,

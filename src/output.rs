@@ -27,18 +27,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static SILENT: AtomicBool = AtomicBool::new(false);
 
 /// Enable/disable global stdout suppression. Call once after merging config.
-pub fn set_silent(silent: bool) {
+pub(crate) fn set_silent(silent: bool) {
     SILENT.store(silent, Ordering::Relaxed);
 }
 
 #[must_use]
-pub fn is_silent() -> bool {
+pub(crate) fn is_silent() -> bool {
     SILENT.load(Ordering::Relaxed)
 }
 
 /// Internal helper: write to stdout, exit(0) on broken pipe, ignore other errors.
 #[doc(hidden)]
-pub fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
+pub(crate) fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
     use std::io::Write as _;
     if is_silent() {
         return;
@@ -57,6 +57,8 @@ pub fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
     }
 }
 
+/// Writes a line to stdout unless `--silent` is active; exits 0 when stdout
+/// is a closed pipe (e.g. piped to `head`).
 #[macro_export]
 macro_rules! outln {
     () => {{
@@ -67,6 +69,7 @@ macro_rules! outln {
     }};
 }
 
+/// Same as [`outln!`] without the trailing newline.
 #[macro_export]
 macro_rules! out {
     ($($arg:tt)*) => {{

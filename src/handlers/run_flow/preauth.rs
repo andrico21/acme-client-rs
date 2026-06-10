@@ -18,6 +18,9 @@ use super::super::{
 use super::RunContext;
 
 // NOT cancel-safe: same hook + CA-signal contract as the authorize pipeline.
+// cognitive_complexity: per-challenge-type provisioning loop mirrors the
+// authorize pipeline; one body keeps the hook/CA-signal ordering auditable.
+#[allow(clippy::cognitive_complexity)]
 pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClient) -> Result<()> {
     info!("Step 2: Pre-authorizing identifiers via newAuthz");
     let ids: Vec<Identifier> = ctx

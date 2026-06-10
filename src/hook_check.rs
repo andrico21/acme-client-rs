@@ -46,7 +46,7 @@ use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// Outcome of validating a hook path. Callers decide how to act (fail vs warn).
-pub enum HookCheck {
+pub(crate) enum HookCheck {
     Ok,
     Violations(Vec<String>),
 }
@@ -55,7 +55,7 @@ pub enum HookCheck {
 ///
 /// On non-Unix targets, returns [`HookCheck::Ok`] after emitting a one-shot
 /// stderr advisory.
-pub fn check_hook_path(path: &Path) -> Result<HookCheck> {
+pub(crate) fn check_hook_path(path: &Path) -> Result<HookCheck> {
     #[cfg(unix)]
     {
         check_hook_path_unix(path)
@@ -168,7 +168,10 @@ fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
 
 /// Validate every configured hook. In strict mode (the default) any violation
 /// is a hard error; with `--unsafe-hooks` violations become stderr warnings.
-pub fn validate_all_hooks(hooks: &[(&str, Option<&Path>)], unsafe_hooks: bool) -> Result<()> {
+pub(crate) fn validate_all_hooks(
+    hooks: &[(&str, Option<&Path>)],
+    unsafe_hooks: bool,
+) -> Result<()> {
     let mut all_violations: Vec<String> = Vec::new();
     for (label, maybe_path) in hooks {
         let Some(path) = maybe_path else { continue };

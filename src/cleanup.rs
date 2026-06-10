@@ -29,7 +29,7 @@ use crate::defaults;
 use crate::types::DnsName;
 
 /// One unit of work the SIGINT handler will run before exit.
-pub enum CleanupAction {
+pub(crate) enum CleanupAction {
     HttpChallengeFile(PathBuf),
     DnsRecord {
         hook: PathBuf,
@@ -47,7 +47,7 @@ struct Inner {
 }
 
 #[derive(Clone, Default)]
-pub struct CleanupRegistry {
+pub(crate) struct CleanupRegistry {
     inner: Arc<Mutex<Inner>>,
 }
 
@@ -56,7 +56,7 @@ pub struct CleanupRegistry {
 /// Dropping it without calling [`complete`](CleanupHandle::complete) keeps the
 /// action registered so an early SIGINT still cleans up.
 #[must_use = "hold the handle until cleanup is done, then call complete()"]
-pub struct CleanupHandle {
+pub(crate) struct CleanupHandle {
     registry: CleanupRegistry,
     id: u64,
 }
@@ -66,7 +66,7 @@ impl CleanupHandle {
     /// a later SIGINT must not re-run the hook. Consuming `self` makes
     /// double-complete a compile error and prevents `let _ = register(...)`
     /// misuse from silently dropping the handle without firing cleanup.
-    pub fn complete(self) {
+    pub(crate) fn complete(self) {
         let mut guard = self.registry.lock_recover();
         guard.actions.retain(|(id, _)| *id != self.id);
     }
@@ -76,7 +76,7 @@ impl CleanupRegistry {
     /// Create an empty registry. Equivalent to [`Default::default`]; provided
     /// for API-guideline conformance (C-COMMON-TRAITS).
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -94,7 +94,7 @@ impl CleanupRegistry {
         }
     }
 
-    pub fn register(&self, action: CleanupAction) -> CleanupHandle {
+    pub(crate) fn register(&self, action: CleanupAction) -> CleanupHandle {
         let id = {
             let mut guard = self.lock_recover();
             let id = guard.next_id;
@@ -111,7 +111,7 @@ impl CleanupRegistry {
     /// Synchronously execute every registered action. Errors are swallowed —
     /// cleanup is best-effort by design (the original record may already be
     /// gone, the hook may exit non-zero, etc.).
-    pub fn run_all_sync(&self) {
+    pub(crate) fn run_all_sync(&self) {
         let actions = {
             let mut guard = self.lock_recover();
             std::mem::take(&mut guard.actions)

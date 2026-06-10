@@ -37,6 +37,8 @@ url = { version = "2", features = ["serde"] }
 x509-parser = "0.18"
 [lints.rust]
 unsafe_code = "forbid"
+unreachable_pub = "warn"
+missing_docs = "warn"
 
 [lints.clippy]
 # ── Correctness / safety (deny) ──────────────────────────────────────────────
@@ -46,6 +48,7 @@ indexing_slicing = "deny"
 wildcard_enum_match_arm = "deny"
 fn_params_excessive_bools = "deny"
 match_wild_err_arm = "deny"
+fallible_impl_from = "deny"
 mem_forget = "deny"
 lossy_float_literal = "deny"
 float_cmp = "deny"
@@ -77,6 +80,8 @@ inefficient_to_string = "warn"
 large_stack_arrays = "warn"
 large_stack_frames = "warn"
 mutex_atomic = "warn"
+# Not covered by the nursery group opt-in on 1.96 — enabled explicitly.
+cognitive_complexity = "warn"
 # ── Broad opt-in groups (warn) ───────────────────────────────────────────────
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }

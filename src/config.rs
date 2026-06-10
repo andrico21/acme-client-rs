@@ -5,13 +5,13 @@ use secrecy::SecretString;
 use serde::Deserialize;
 
 /// Default config file name (auto-loaded from current directory if present).
-pub const DEFAULT_CONFIG_FILE: &str = "acme-client-rs.toml";
+pub(crate) const DEFAULT_CONFIG_FILE: &str = "acme-client-rs.toml";
 
 // ── Config structs (all fields optional - CLI/env override) ─────────────────
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Config {
+pub(crate) struct Config {
     /// Global options (directory, account key, etc.)
     #[serde(default)]
     pub global: GlobalConfig,
@@ -27,7 +27,7 @@ pub struct Config {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct GlobalConfig {
+pub(crate) struct GlobalConfig {
     /// ACME server directory URL.
     pub directory: Option<String>,
     /// Path to the account key (PKCS#8 PEM).
@@ -52,7 +52,7 @@ pub struct GlobalConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RunConfig {
+pub(crate) struct RunConfig {
     /// Contact email address.
     pub contact: Option<String>,
     /// Challenge type: "http-01", "dns-01", "dns-persist-01", or "tls-alpn-01".
@@ -114,7 +114,7 @@ pub struct RunConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AccountConfig {
+pub(crate) struct AccountConfig {
     /// Contact email addresses.
     pub contact: Option<Vec<String>>,
     /// EAB Key ID from the CA.
@@ -128,7 +128,7 @@ pub struct AccountConfig {
 impl Config {
     /// Load a config file from the given path. Returns an error if the file
     /// cannot be read or parsed.
-    pub fn load(path: &Path) -> Result<Self> {
+    pub(crate) fn load(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         let config: Self = toml::from_str(&content)
@@ -137,7 +137,7 @@ impl Config {
     }
 
     /// Check whether the default config file exists in the current directory.
-    pub fn default_exists() -> bool {
+    pub(crate) fn default_exists() -> bool {
         Path::new(DEFAULT_CONFIG_FILE).exists()
     }
 }
@@ -145,7 +145,7 @@ impl Config {
 // ── Self-documented template ────────────────────────────────────────────────
 
 /// Return a fully commented TOML config template.
-pub fn generate_template() -> &'static str {
+pub(crate) fn generate_template() -> &'static str {
     include_str!("../acme-client-rs.toml.example")
 }
 

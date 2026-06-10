@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// variants), we deserialize it intact and let the standard "match my preferred
 /// type" filter skip it, rather than failing the whole order parse.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChallengeType {
+pub(crate) enum ChallengeType {
     Http01,
     Dns01,
     TlsAlpn01,
@@ -24,7 +24,7 @@ pub enum ChallengeType {
 }
 
 impl ChallengeType {
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         match self {
             Self::Http01 => "http-01",
             Self::Dns01 => "dns-01",
@@ -34,7 +34,7 @@ impl ChallengeType {
         }
     }
 
-    pub fn parse_strict(s: &str) -> Result<Self> {
+    pub(crate) fn parse_strict(s: &str) -> Result<Self> {
         match s {
             "http-01" => Ok(Self::Http01),
             "dns-01" => Ok(Self::Dns01),
@@ -84,7 +84,7 @@ impl<'de> Deserialize<'de> for ChallengeType {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct Directory {
+pub(crate) struct Directory {
     pub new_nonce: url::Url,
     pub new_account: url::Url,
     pub new_order: url::Url,
@@ -98,7 +98,7 @@ pub struct Directory {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct DirectoryMeta {
+pub(crate) struct DirectoryMeta {
     pub terms_of_service: Option<String>,
     pub website: Option<String>,
     pub caa_identities: Option<Vec<String>>,
@@ -196,20 +196,20 @@ impl TryFrom<String> for DnsName {
 /// shell-metacharacter-injected name is rejected at the parse boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
-pub enum Identifier {
+pub(crate) enum Identifier {
     Dns(DnsName),
     Ip(std::net::IpAddr),
 }
 
 impl Identifier {
     /// Construct a DNS identifier from raw input, validating + normalizing.
-    pub fn dns(value: &str) -> Result<Self> {
+    pub(crate) fn dns(value: &str) -> Result<Self> {
         Ok(Self::Dns(DnsName::parse(value)?))
     }
 
     /// Construct an IP identifier per RFC 8738. IPv6 is normalized to
     /// RFC 5952 form by the `IpAddr` round-trip.
-    pub fn ip(value: &str) -> Result<Self> {
+    pub(crate) fn ip(value: &str) -> Result<Self> {
         let addr: std::net::IpAddr = value
             .parse()
             .with_context(|| format!("not a valid IP address: {value}"))?;
@@ -223,7 +223,7 @@ impl Identifier {
     /// - Bare IPv6 (`::1`, `2001:db8::1`) → [`Identifier::Ip`]
     /// - Bracketed IPv6 (`[::1]`) → [`Identifier::Ip`] (brackets stripped)
     /// - Anything else → [`Identifier::Dns`] via [`DnsName::parse`]
-    pub fn from_str_auto(value: &str) -> Result<Self> {
+    pub(crate) fn from_str_auto(value: &str) -> Result<Self> {
         // Strip brackets for IPv6 literals like [::1].
         let candidate = value
             .strip_prefix('[')
@@ -238,13 +238,13 @@ impl Identifier {
 
     /// `true` if this identifier is an IP literal.
     #[allow(dead_code)]
-    pub fn is_ip(&self) -> bool {
+    pub(crate) fn is_ip(&self) -> bool {
         matches!(self, Self::Ip(_))
     }
 
     /// Wire-format `type` tag (`"dns"` or `"ip"`), for JSON output, logs,
     /// and human-readable formatting.
-    pub fn type_str(&self) -> &'static str {
+    pub(crate) fn type_str(&self) -> &'static str {
         match self {
             Self::Dns(_) => "dns",
             Self::Ip(_) => "ip",
@@ -254,7 +254,7 @@ impl Identifier {
     /// Canonical wire-format `value` string. Allocates only for IP.
     /// Use [`Identifier::as_dns`] + [`DnsName::as_str`] for zero-alloc
     /// DNS-only access.
-    pub fn value_str(&self) -> std::borrow::Cow<'_, str> {
+    pub(crate) fn value_str(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::Dns(n) => std::borrow::Cow::Borrowed(n.as_str()),
             Self::Ip(a) => std::borrow::Cow::Owned(a.to_string()),
@@ -265,7 +265,7 @@ impl Identifier {
     /// returning `None` for IP identifiers. Used by DNS-only call paths
     /// that take `&DnsName` directly instead of going through
     /// [`Identifier::value_str`].
-    pub fn as_dns(&self) -> Option<&DnsName> {
+    pub(crate) fn as_dns(&self) -> Option<&DnsName> {
         match self {
             Self::Dns(n) => Some(n),
             Self::Ip(_) => None,
@@ -300,7 +300,7 @@ enum UnderscorePolicy {
 /// RFC 8555 §7.1.3 / §9.7.5 and RFC 5280 §7 (RFC 1034 preferred name
 /// syntax). Rejects `_`; use [`validate_and_normalize_record_name`] for
 /// ACME challenge record names that need a leading `_` service label.
-pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
+pub(crate) fn validate_and_normalize_dns(input: &str) -> Result<String> {
     validate_and_normalize_dns_with(input, UnderscorePolicy::Reject)
 }
 
@@ -309,7 +309,7 @@ pub fn validate_and_normalize_dns(input: &str) -> Result<String> {
 /// `_validation-persist.<host>`). Same label/length/IDN rules as
 /// [`validate_and_normalize_dns`]; only the underscore is additionally
 /// allowed. NOT for certificate identifiers.
-pub fn validate_and_normalize_record_name(input: &str) -> Result<String> {
+pub(crate) fn validate_and_normalize_record_name(input: &str) -> Result<String> {
     validate_and_normalize_dns_with(input, UnderscorePolicy::AllowServiceLabel)
 }
 
@@ -390,7 +390,7 @@ fn validate_and_normalize_dns_with(input: &str, underscore: UnderscorePolicy) ->
 /// `IpAddr`'s own `FromStr`. This function remains as a no-op marker
 /// for callers that want to assert "yes, I validated this", and as the
 /// extension point for any future post-parse identifier checks.
-pub fn validate_server_identifier(_id: &Identifier) -> Result<()> {
+pub(crate) fn validate_server_identifier(_id: &Identifier) -> Result<()> {
     Ok(())
 }
 
@@ -398,7 +398,7 @@ pub fn validate_server_identifier(_id: &Identifier) -> Result<()> {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NewAccountRequest {
+pub(crate) struct NewAccountRequest {
     pub terms_of_service_agreed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact: Option<Vec<String>>,
@@ -409,7 +409,7 @@ pub struct NewAccountRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct Account {
+pub(crate) struct Account {
     pub status: AccountStatus,
     pub contact: Option<Vec<String>>,
     pub terms_of_service_agreed: Option<bool>,
@@ -418,7 +418,7 @@ pub struct Account {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AccountStatus {
+pub(crate) enum AccountStatus {
     Valid,
     Deactivated,
     Revoked,
@@ -435,7 +435,7 @@ impl std::fmt::Display for AccountStatus {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DeactivateAccountRequest {
+pub(crate) struct DeactivateAccountRequest {
     pub status: String,
 }
 
@@ -443,7 +443,7 @@ pub struct DeactivateAccountRequest {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NewOrderRequest {
+pub(crate) struct NewOrderRequest {
     pub identifiers: Vec<Identifier>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_before: Option<String>,
@@ -460,7 +460,7 @@ pub struct NewOrderRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct Order {
+pub(crate) struct Order {
     pub status: OrderStatus,
     pub expires: Option<String>,
     pub identifiers: Vec<Identifier>,
@@ -475,7 +475,7 @@ pub struct Order {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum OrderStatus {
+pub(crate) enum OrderStatus {
     Pending,
     Ready,
     Processing,
@@ -500,7 +500,7 @@ impl std::fmt::Display for OrderStatus {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
-pub struct Authorization {
+pub(crate) struct Authorization {
     pub identifier: Identifier,
     pub status: AuthorizationStatus,
     pub expires: Option<String>,
@@ -510,7 +510,7 @@ pub struct Authorization {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum AuthorizationStatus {
+pub(crate) enum AuthorizationStatus {
     Pending,
     Valid,
     Invalid,
@@ -604,7 +604,7 @@ impl From<ChallengeToken> for String {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code, clippy::struct_field_names)]
-pub struct Challenge {
+pub(crate) struct Challenge {
     #[serde(rename = "type")]
     pub challenge_type: ChallengeType,
     pub url: url::Url,
@@ -619,7 +619,7 @@ pub struct Challenge {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ChallengeStatus {
+pub(crate) enum ChallengeStatus {
     Pending,
     Processing,
     Valid,
@@ -640,14 +640,14 @@ impl std::fmt::Display for ChallengeStatus {
 // ── Pre-Authorization (RFC 8555 §7.4.1) ─────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct NewAuthorizationRequest {
+pub(crate) struct NewAuthorizationRequest {
     pub identifier: Identifier,
 }
 
 // ── Finalize (RFC 8555 §7.4) ────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
-pub struct FinalizeRequest {
+pub(crate) struct FinalizeRequest {
     pub csr: String,
 }
 
@@ -777,7 +777,7 @@ impl From<String> for AcmeErrorType {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-pub struct AcmeError {
+pub(crate) struct AcmeError {
     #[serde(rename = "type")]
     pub error_type: Option<AcmeErrorType>,
     pub detail: Option<String>,
@@ -817,7 +817,7 @@ impl std::fmt::Display for AcmeError {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
-pub struct Subproblem {
+pub(crate) struct Subproblem {
     #[serde(rename = "type")]
     pub error_type: AcmeErrorType,
     pub detail: Option<String>,
@@ -831,7 +831,7 @@ pub struct Subproblem {
 /// ARI renewal info response (RFC 9773 §4.2).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RenewalInfo {
+pub(crate) struct RenewalInfo {
     pub suggested_window: RenewalInfoWindow,
     #[serde(
         default,
@@ -844,7 +844,7 @@ pub struct RenewalInfo {
 impl RenewalInfo {
     /// Validate the suggested window per RFC 9773 §4.2: both endpoints MUST
     /// be RFC 3339 timestamps and `end` MUST be strictly after `start`.
-    pub fn validate_window(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate_window(&self) -> anyhow::Result<()> {
         use anyhow::Context as _;
         let start = time::OffsetDateTime::parse(
             &self.suggested_window.start,
@@ -879,7 +879,7 @@ impl RenewalInfo {
 
 /// Time window within which the client should attempt renewal.
 #[derive(Debug, Deserialize)]
-pub struct RenewalInfoWindow {
+pub(crate) struct RenewalInfoWindow {
     pub start: String,
     pub end: String,
 }
@@ -888,7 +888,7 @@ pub struct RenewalInfoWindow {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct RevokeCertRequest {
+pub(crate) struct RevokeCertRequest {
     pub certificate: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<u8>,

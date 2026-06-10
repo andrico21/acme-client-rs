@@ -93,6 +93,9 @@ fn config_or_env_reset<T>(
     None
 }
 
+// cognitive_complexity: one branch per merged flag; splitting per-field would
+// scatter the documented precedence algorithm across helpers.
+#[allow(clippy::cognitive_complexity)]
 fn apply_global(
     cli: &mut Cli,
     matches: &clap::ArgMatches,
@@ -248,6 +251,8 @@ fn parse_output_format(value: &str) -> Result<OutputFormat> {
     }
 }
 
+// cognitive_complexity: same per-field precedence merge shape as apply_global.
+#[allow(clippy::cognitive_complexity)]
 fn apply_run(
     cli: &mut Cli,
     matches: &clap::ArgMatches,

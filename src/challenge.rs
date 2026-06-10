@@ -11,7 +11,7 @@ use crate::types::ChallengeToken;
 
 /// Key authorization string (RFC 8555 §8.1):
 ///   `keyAuthorization = token || '.' || base64url(Thumbprint(accountKey))`
-pub fn key_authorization(
+pub(crate) fn key_authorization(
     token: &ChallengeToken,
     account_key: &AccountKey,
 ) -> anyhow::Result<String> {
@@ -20,7 +20,7 @@ pub fn key_authorization(
 
 // ── HTTP-01 (RFC 8555 §8.3) ────────────────────────────────────────────────
 
-pub mod http01 {
+pub(crate) mod http01 {
     use super::{AccountKey, ChallengeToken, key_authorization};
     use anyhow::{Context, Result, bail};
     use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ pub mod http01 {
     use tracing::info;
 
     /// The key authorization value to serve as the response body.
-    pub fn response_body(
+    pub(crate) fn response_body(
         token: &ChallengeToken,
         account_key: &AccountKey,
     ) -> anyhow::Result<String> {
@@ -36,7 +36,7 @@ pub mod http01 {
     }
 
     /// The well-known path the ACME server will request.
-    pub fn challenge_path(token: &ChallengeToken) -> String {
+    pub(crate) fn challenge_path(token: &ChallengeToken) -> String {
         format!("/.well-known/acme-challenge/{token}")
     }
 
@@ -49,7 +49,7 @@ pub mod http01 {
     /// separator bytes can appear in `file_path`. The file itself is created
     /// with `O_NOFOLLOW` where supported to avoid following an
     /// attacker-planted symlink in a shared webroot.
-    pub fn write_challenge_file(
+    pub(crate) fn write_challenge_file(
         challenge_dir: &Path,
         token: &ChallengeToken,
         account_key: &AccountKey,
@@ -90,7 +90,7 @@ pub mod http01 {
     }
 
     /// Remove a previously written challenge file (best-effort).
-    pub fn cleanup_challenge_file(path: &Path) {
+    pub(crate) fn cleanup_challenge_file(path: &Path) {
         if path.exists() {
             if let Err(e) = std::fs::remove_file(path) {
                 tracing::warn!("failed to clean up challenge file {}: {e}", path.display());
@@ -106,7 +106,7 @@ pub mod http01 {
     /// for a privileged port (<1024), suggests root/`CAP_NET_BIND_SERVICE`/
     /// reverse-proxy alternatives. Other errors propagate with context.
     // cancel-safe: TCP bind only. Drop releases the listener cleanly.
-    pub async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
+    pub(crate) async fn bind_or_suggest(port: u16) -> Result<tokio::net::TcpListener> {
         match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => Ok(listener),
             Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
@@ -152,7 +152,7 @@ pub mod http01 {
     // NOT cancel-safe: reads HTTP request and writes response. Drop mid-write
     // leaves CA with a partial response; validation will fail. Intended to run
     // inside a spawned task with abort_handle managed by CleanupRegistry.
-    pub async fn serve_one_connection(
+    pub(crate) async fn serve_one_connection(
         mut stream: tokio::net::TcpStream,
         addr: std::net::SocketAddr,
         auth: &str,
@@ -229,7 +229,7 @@ pub mod http01 {
     /// listener error); per-connection errors are logged and swallowed.
     // NOT cancel-safe: infinite accept loop. Drop closes listener and aborts
     // any in-flight serve_one_connection. Designed for spawn + abort_handle.
-    pub async fn run_accept_loop(
+    pub(crate) async fn run_accept_loop(
         listener: tokio::net::TcpListener,
         auth: String,
         path: String,
@@ -261,7 +261,11 @@ pub mod http01 {
     /// requests until aborted. Multiple concurrent probes from a CA's
     /// multi-perspective validation are served in parallel.
     // NOT cancel-safe: top-level serve helper; binds + accepts indefinitely.
-    pub async fn serve(token: &ChallengeToken, account_key: &AccountKey, port: u16) -> Result<()> {
+    pub(crate) async fn serve(
+        token: &ChallengeToken,
+        account_key: &AccountKey,
+        port: u16,
+    ) -> Result<()> {
         let auth = response_body(token, account_key)?;
         let path = challenge_path(token);
         let listener = bind_or_suggest(port).await?;
@@ -272,7 +276,7 @@ pub mod http01 {
 
 // ── DNS-01 (RFC 8555 §8.4) ─────────────────────────────────────────────────
 
-pub mod dns01 {
+pub(crate) mod dns01 {
     use super::{
         AccountKey, ChallengeToken, Digest, Engine, Sha256, URL_SAFE_NO_PAD, key_authorization,
     };
@@ -280,7 +284,7 @@ pub mod dns01 {
 
     /// The value for the `_acme-challenge.<domain>` TXT record:
     ///   `base64url(SHA-256(keyAuthorization))`
-    pub fn txt_record_value(
+    pub(crate) fn txt_record_value(
         token: &ChallengeToken,
         account_key: &AccountKey,
     ) -> anyhow::Result<String> {
@@ -294,7 +298,9 @@ pub mod dns01 {
     /// For wildcard identifiers (`*.example.com`), the leading `*.` is
     /// stripped per RFC 8555 §8.4 — the validation record is published
     /// at the base zone, not under a literal `*` label.
-    pub fn record_name(domain: &crate::types::DnsName) -> anyhow::Result<crate::types::DnsName> {
+    pub(crate) fn record_name(
+        domain: &crate::types::DnsName,
+    ) -> anyhow::Result<crate::types::DnsName> {
         let base = domain
             .as_str()
             .strip_prefix("*.")
@@ -303,7 +309,7 @@ pub mod dns01 {
     }
 
     /// Print human-readable instructions for manual DNS record setup.
-    pub fn print_instructions(
+    pub(crate) fn print_instructions(
         domain: &crate::types::DnsName,
         token: &ChallengeToken,
         account_key: &AccountKey,
@@ -323,7 +329,7 @@ pub mod dns01 {
 
 // ── DNS-PERSIST-01 (draft-ietf-acme-dns-persist) ────────────────────────────
 
-pub mod dns_persist01 {
+pub(crate) mod dns_persist01 {
     use crate::outln;
 
     const MAX_ISSUER_DOMAIN_NAMES: usize = 10;
@@ -332,7 +338,9 @@ pub mod dns_persist01 {
     ///
     /// For wildcard identifiers (`*.example.com`), the leading `*.` is
     /// stripped — the persistent validation record lives at the base zone.
-    pub fn record_name(domain: &crate::types::DnsName) -> anyhow::Result<crate::types::DnsName> {
+    pub(crate) fn record_name(
+        domain: &crate::types::DnsName,
+    ) -> anyhow::Result<crate::types::DnsName> {
         let base = domain
             .as_str()
             .strip_prefix("*.")
@@ -343,7 +351,7 @@ pub mod dns_persist01 {
     /// Construct the TXT record value (RFC 8659 issue-value syntax).
     ///
     ///   `<issuer-domain-name>; accounturi=<uri>[; policy=<p>][; persistUntil=<ts>]`
-    pub fn txt_record_value(
+    pub(crate) fn txt_record_value(
         issuer_domain_name: &str,
         account_uri: &str,
         policy: Option<&str>,
@@ -364,7 +372,7 @@ pub mod dns_persist01 {
         Ok(value)
     }
 
-    pub fn print_instructions(
+    pub(crate) fn print_instructions(
         domain: &crate::types::DnsName,
         issuer_domain_names: &[String],
         account_uri: &str,
@@ -410,23 +418,23 @@ pub mod dns_persist01 {
 
 // ── TLS-ALPN-01 (RFC 8737) ─────────────────────────────────────────────────
 
-pub mod tlsalpn01 {
+pub(crate) mod tlsalpn01 {
     use super::{AccountKey, ChallengeToken, Digest, Sha256, key_authorization};
     use crate::outln;
 
     /// ALPN protocol identifier.
     #[allow(dead_code)]
-    pub const ACME_TLS_ALPN_PROTOCOL: &[u8] = b"acme-tls/1";
+    pub(crate) const ACME_TLS_ALPN_PROTOCOL: &[u8] = b"acme-tls/1";
 
     /// OID for the `acmeIdentifier` certificate extension (1.3.6.1.5.5.7.1.31).
     #[allow(dead_code)]
-    pub const ACME_IDENTIFIER_OID: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 1, 31];
+    pub(crate) const ACME_IDENTIFIER_OID: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 1, 31];
 
     /// Compute the DER-encoded `acmeIdentifier` extension value.
     ///
     /// This is the SHA-256 hash of the key authorization wrapped in an ASN.1
     /// OCTET STRING (tag 0x04, length 0x20, 32 bytes of hash).
-    pub fn acme_identifier_value(
+    pub(crate) fn acme_identifier_value(
         token: &ChallengeToken,
         account_key: &AccountKey,
     ) -> anyhow::Result<Vec<u8>> {
@@ -440,7 +448,7 @@ pub mod tlsalpn01 {
     }
 
     /// Print human-readable instructions for manual TLS-ALPN-01 setup.
-    pub fn print_instructions(
+    pub(crate) fn print_instructions(
         domain: &str,
         token: &ChallengeToken,
         account_key: &AccountKey,

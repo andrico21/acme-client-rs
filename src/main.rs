@@ -1,3 +1,6 @@
+//! ACME client (RFC 8555) with ARI renewal (RFC 9773), IP identifiers
+//! (RFC 8738), and the DNS-PERSIST-01 / profiles drafts. Single hardened
+//! binary; see README.md for the full security posture.
 #![forbid(unsafe_code)]
 
 mod account_key;

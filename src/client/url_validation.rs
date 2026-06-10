@@ -16,7 +16,7 @@ use super::net_policy::{NetworkPolicy, TlsPolicy, is_private_or_special_ip};
 /// recipients support URIs of at least 8000 octets in protocol elements.
 /// We refuse anything beyond that as both an SSRF/log-spam guard and a
 /// protocol-sanity check.
-pub const MAX_ACME_URL_LEN: usize = 8000;
+pub(super) const MAX_ACME_URL_LEN: usize = 8000;
 
 /// Validate any URL the client is about to contact.
 ///
@@ -28,7 +28,7 @@ pub const MAX_ACME_URL_LEN: usize = 8000;
 /// Hostnames (non-literal) are NOT resolved here — that check happens
 /// connect-time inside `SsrfSafeResolver`, which closes the DNS-rebinding
 /// race that synchronous resolution would leave open.
-pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
+pub(crate) fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
     if url.len() > MAX_ACME_URL_LEN {
         bail!(
             "URL exceeds {MAX_ACME_URL_LEN} octets ({} bytes); refusing",
@@ -91,7 +91,7 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
 /// Validate an ACME directory URL against RFC 8555 §6.1 ("Use of HTTPS is
 /// REQUIRED"). Thin wrapper over `validate_acme_url` that also emits the
 /// loopback-testing warning when `http://` is permitted via `--insecure`.
-pub fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
+pub(crate) fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Result<()> {
     validate_acme_url(url, tls, net).with_context(|| format!("invalid directory URL {url:?}"))?;
     if reqwest::Url::parse(url).is_ok_and(|u| u.scheme() == "http") {
         warn!("Using plain http:// for ACME directory (loopback only) — TESTING USE ONLY");
@@ -106,7 +106,7 @@ pub fn validate_directory_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> 
 /// LDH labels only, no wildcard (`*`), no underscore (`_`),
 /// no trailing dot, A-label (Punycode) form if non-ASCII source,
 /// ASCII-lowercase, total length ≤ 253 octets, ≥ 1 label.
-pub fn validate_issuer_domain_name(s: &str) -> Result<String> {
+pub(crate) fn validate_issuer_domain_name(s: &str) -> Result<String> {
     if s.is_empty() {
         bail!("issuer-domain-name is empty");
     }
@@ -154,7 +154,7 @@ pub fn validate_issuer_domain_name(s: &str) -> Result<String> {
 /// value grammar forbids literal `;` (TXT structural separator), control
 /// chars, space, DEL. RFC 9110 §4.2.4 forbids userinfo. Fragments are
 /// stripped from a URI's identity, so we reject them too.
-pub fn validate_account_uri(s: &str) -> Result<String> {
+pub(crate) fn validate_account_uri(s: &str) -> Result<String> {
     if s.is_empty() {
         bail!("accounturi is empty");
     }
@@ -189,7 +189,7 @@ pub fn validate_account_uri(s: &str) -> Result<String> {
 ///
 /// Priority-1 (RFC contract): `value = *(%x21-3A / %x3C-7E)` —
 /// printable ASCII excluding space (`%x20`), semicolon (`%x3B`), and DEL (`%x7F`).
-pub fn validate_caa_parameter_value(s: &str) -> Result<&str> {
+pub(crate) fn validate_caa_parameter_value(s: &str) -> Result<&str> {
     if s.is_empty() {
         bail!("CAA parameter value is empty");
     }

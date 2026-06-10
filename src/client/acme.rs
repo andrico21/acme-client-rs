@@ -50,7 +50,7 @@ fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
 
-pub struct AcmeClient {
+pub(crate) struct AcmeClient {
     /// Immutable after construction (RFC 8555 §7.1.1).
     directory: Directory,
     /// Mutable: nonce cache, account URL, HTTP client, signing key.
@@ -252,7 +252,7 @@ impl AcmeClient {
     /// verification is disabled.  **Only use for testing** (e.g. Pebble).
     /// `connect_timeout_secs` is forwarded to the HTTP client.
     // cancel-safe: GET /directory is idempotent and read-only.
-    pub async fn new(
+    pub(crate) async fn new(
         directory_url: &str,
         account_key: AccountKey,
         tls: TlsPolicy,
@@ -316,20 +316,20 @@ impl AcmeClient {
 
     // ── Accessors ───────────────────────────────────────────────────────
 
-    pub fn set_account_url(&mut self, url: Url) {
+    pub(crate) fn set_account_url(&mut self, url: Url) {
         self.transport.account_url = Some(url);
     }
 
-    pub fn account_url(&self) -> Option<&str> {
+    pub(crate) fn account_url(&self) -> Option<&str> {
         self.transport.account_url.as_ref().map(Url::as_str)
     }
 
-    pub fn account_key(&self) -> &AccountKey {
+    pub(crate) fn account_key(&self) -> &AccountKey {
         &self.transport.account_key
     }
 
     #[allow(dead_code)]
-    pub fn directory(&self) -> &Directory {
+    pub(crate) fn directory(&self) -> &Directory {
         &self.directory
     }
 
@@ -342,7 +342,7 @@ impl AcmeClient {
     // NOT cancel-safe: POST newAccount creates/looks-up account on CA. Drop
     // mid-flight may leave a half-registered account; caller must re-issue with
     // onlyReturnExisting=true to recover.
-    pub async fn create_account(
+    pub(crate) async fn create_account(
         &mut self,
         contact: Option<Vec<String>>,
         terms_of_service_agreed: bool,
@@ -399,7 +399,7 @@ impl AcmeClient {
 
     /// Deactivate the current account (RFC 8555 §7.3.6).
     // NOT cancel-safe: irreversibly deactivates the account on the CA.
-    pub async fn deactivate_account(&mut self) -> Result<Account> {
+    pub(crate) async fn deactivate_account(&mut self) -> Result<Account> {
         let url: Url = self
             .transport
             .account_url
@@ -422,7 +422,7 @@ impl AcmeClient {
 
     /// Submit a new order.  Returns `(order, order_url)`.
     // NOT cancel-safe: creates a new order on the CA (rate-limit consuming).
-    pub async fn new_order(
+    pub(crate) async fn new_order(
         &mut self,
         identifiers: Vec<Identifier>,
         profile: Option<impl Into<String>>,
@@ -435,7 +435,7 @@ impl AcmeClient {
     ///
     /// `replaces` is the ARI certID of the certificate being replaced.
     // NOT cancel-safe: creates a new (replaces) order on the CA per RFC 9773.
-    pub async fn new_order_replacing(
+    pub(crate) async fn new_order_replacing(
         &mut self,
         identifiers: Vec<Identifier>,
         replaces: impl Into<String>,
@@ -486,7 +486,11 @@ impl AcmeClient {
     /// Finalize an order by submitting a CSR (RFC 8555 §7.4).
     // NOT cancel-safe: submits CSR; CA begins issuance. Drop mid-flight may
     // still produce a certificate on the CA side that the client never sees.
-    pub async fn finalize_order(&mut self, finalize_url: &Url, csr_der: &[u8]) -> Result<Order> {
+    pub(crate) async fn finalize_order(
+        &mut self,
+        finalize_url: &Url,
+        csr_der: &[u8],
+    ) -> Result<Order> {
         info!("Finalizing order");
         let payload = serde_json::to_string(&FinalizeRequest {
             csr: URL_SAFE_NO_PAD.encode(csr_der),
@@ -502,7 +506,7 @@ impl AcmeClient {
     /// Poll an order's current status (POST-as-GET).
     // NOT cancel-safe: POST-as-GET still consumes a nonce, but order state is
     // unaffected; safe to retry.
-    pub async fn poll_order(&mut self, order_url: &Url) -> Result<Order> {
+    pub(crate) async fn poll_order(&mut self, order_url: &Url) -> Result<Order> {
         Ok(self.poll_order_with_retry_after(order_url).await?.0)
     }
 
@@ -510,7 +514,7 @@ impl AcmeClient {
     /// `Retry-After` delay (RFC 8555 §7.4 / RFC 9110 §10.2.3) if present.
     // NOT cancel-safe: consumes a nonce per poll; order state read-only but
     // nonce leakage on cancel.
-    pub async fn poll_order_with_retry_after(
+    pub(crate) async fn poll_order_with_retry_after(
         &mut self,
         order_url: &Url,
     ) -> Result<(Order, Option<std::time::Duration>)> {
@@ -529,7 +533,7 @@ impl AcmeClient {
 
     /// Fetch an authorization object (POST-as-GET).
     // NOT cancel-safe: nonce-consuming POST-as-GET; authz state read-only.
-    pub async fn get_authorization(&mut self, authz_url: &Url) -> Result<Authorization> {
+    pub(crate) async fn get_authorization(&mut self, authz_url: &Url) -> Result<Authorization> {
         debug!("Fetching authorization: {authz_url}");
         let resp = self
             .transport
@@ -546,7 +550,7 @@ impl AcmeClient {
     /// The payload is an empty JSON object `{}`.
     // NOT cancel-safe: triggers CA-side validation attempt; drop mid-flight
     // may still cause the CA to attempt validation against the deployed token.
-    pub async fn respond_to_challenge(&mut self, challenge_url: &Url) -> Result<Challenge> {
+    pub(crate) async fn respond_to_challenge(&mut self, challenge_url: &Url) -> Result<Challenge> {
         info!("Responding to challenge: {challenge_url}");
         let resp = self
             .transport
@@ -561,7 +565,7 @@ impl AcmeClient {
     /// Download the issued certificate chain (POST-as-GET).
     // NOT cancel-safe: nonce-consuming POST-as-GET; cert payload itself is
     // immutable, so retry is safe.
-    pub async fn download_certificate(&mut self, cert_url: &Url) -> Result<String> {
+    pub(crate) async fn download_certificate(&mut self, cert_url: &Url) -> Result<String> {
         info!("Downloading certificate from {cert_url}");
         let resp = self
             .transport
@@ -579,7 +583,7 @@ impl AcmeClient {
     // NOT cancel-safe: rotates the account key on the CA. Drop mid-flight may
     // leave the CA with the new key active while the client still believes it
     // holds the old one - manual reconciliation required.
-    pub async fn key_change(&mut self, new_key: &AccountKey) -> Result<()> {
+    pub(crate) async fn key_change(&mut self, new_key: &AccountKey) -> Result<()> {
         let account_url = self
             .transport
             .account_url
@@ -619,7 +623,7 @@ impl AcmeClient {
     /// Sends a POST to the `newAuthz` endpoint before creating an order.
     /// Returns `(authorization, authz_url)`.
     // NOT cancel-safe: creates a new authz on the CA (pre-authorization flow).
-    pub async fn new_authorization(
+    pub(crate) async fn new_authorization(
         &mut self,
         identifier: Identifier,
     ) -> Result<(Authorization, Url)> {
@@ -651,7 +655,11 @@ impl AcmeClient {
     /// Revoke a certificate (RFC 8555 §7.6).
     // NOT cancel-safe: irreversibly revokes the certificate. CA may complete
     // revocation even if the client drops mid-flight.
-    pub async fn revoke_certificate(&mut self, cert_der: &[u8], reason: Option<u8>) -> Result<()> {
+    pub(crate) async fn revoke_certificate(
+        &mut self,
+        cert_der: &[u8],
+        reason: Option<u8>,
+    ) -> Result<()> {
         info!("Revoking certificate");
         let payload = serde_json::to_string(&RevokeCertRequest {
             certificate: URL_SAFE_NO_PAD.encode(cert_der),
@@ -682,7 +690,7 @@ impl AcmeClient {
     /// before `create_account`.
     // cancel-safe: unauthenticated GET; no nonce consumption, no server-side
     // state mutation.
-    pub async fn get_renewal_info(
+    pub(crate) async fn get_renewal_info(
         &mut self,
         cert_der: &[u8],
     ) -> Result<(RenewalInfo, Option<u64>)> {
@@ -738,13 +746,13 @@ impl AcmeClient {
 
     /// Check whether the server supports ARI (has `renewalInfo` in directory).
     #[must_use]
-    pub fn supports_ari(&self) -> bool {
+    pub(crate) fn supports_ari(&self) -> bool {
         self.directory.renewal_info.is_some()
     }
 
     /// Return the advertised profiles (name → description), if any
     /// (draft-ietf-acme-profiles-01 §3).
-    pub fn available_profiles(&self) -> Option<&HashMap<String, String>> {
+    pub(crate) fn available_profiles(&self) -> Option<&HashMap<String, String>> {
         self.directory
             .meta
             .as_ref()
@@ -759,7 +767,7 @@ impl AcmeClient {
 /// - AKI = raw bytes of the keyIdentifier from the Authority Key Identifier extension
 /// - Serial = DER encoding of the certificate's serial number (as a signed INTEGER)
 #[allow(clippy::wildcard_enum_match_arm)]
-pub fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
+pub(crate) fn compute_cert_id(cert_der: &[u8]) -> Result<String> {
     use x509_parser::prelude::*;
 
     let (_, cert) = X509Certificate::from_der(cert_der)

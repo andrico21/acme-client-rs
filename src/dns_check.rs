@@ -32,7 +32,7 @@ use std::time::Duration;
 
 /// Resolver strategy for DNS-01 propagation checks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
-pub enum DnsCheckMode {
+pub(crate) enum DnsCheckMode {
     /// Query the zone's authoritative nameservers directly (bypasses caches; matches what the CA's resolvers will see). Default.
     Authoritative,
     /// Query well-known public resolvers (1.1.1.1, 8.8.8.8, 9.9.9.9). Useful when authoritative-NS lookups are blocked.
@@ -43,7 +43,7 @@ pub enum DnsCheckMode {
 
 /// Whether the DNS resolver should perform DNSSEC validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Dnssec {
+pub(crate) enum Dnssec {
     On,
     Off,
 }
@@ -57,7 +57,7 @@ impl Dnssec {
 /// Configured DNS resolver for ACME propagation checks.
 ///
 /// Build once per command and reuse across all `txt_matches` calls.
-pub struct DnsChecker {
+pub(crate) struct DnsChecker {
     mode: DnsCheckMode,
     dnssec: Dnssec,
     bootstrap: Arc<TokioResolver>,
@@ -65,7 +65,7 @@ pub struct DnsChecker {
 
 impl DnsChecker {
     /// Build a checker for the given mode. DNSSEC validation is opt-in.
-    pub fn new(mode: DnsCheckMode, dnssec: Dnssec) -> Result<Self> {
+    pub(crate) fn new(mode: DnsCheckMode, dnssec: Dnssec) -> Result<Self> {
         let bootstrap = match mode {
             DnsCheckMode::System => build_system_resolver(dnssec)?,
             DnsCheckMode::Cached | DnsCheckMode::Authoritative => build_public_resolver(dnssec)?,
@@ -80,7 +80,11 @@ impl DnsChecker {
 
     /// Return true iff any TXT record at `name` exactly matches `expected`.
     // cancel-safe: single DNS TXT lookup, byte-exact comparison. Pure read.
-    pub async fn txt_matches(&self, name: &crate::types::DnsName, expected: &str) -> Result<bool> {
+    pub(crate) async fn txt_matches(
+        &self,
+        name: &crate::types::DnsName,
+        expected: &str,
+    ) -> Result<bool> {
         let fqdn =
             Name::from_str(name.as_str()).with_context(|| format!("invalid DNS name: {name}"))?;
 

@@ -13,7 +13,7 @@ use std::path::Path;
 
 /// Whether `write_secret_file` may overwrite an existing file at `path`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Overwrite {
+pub(crate) enum Overwrite {
     Forbid,
     Allow,
 }
@@ -23,7 +23,7 @@ pub enum Overwrite {
 /// On non-Unix platforms permissions are not enforced (Windows ACLs are
 /// out of scope for this client; the atomic-rename + no-overwrite checks
 /// still apply).
-pub fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> Result<()> {
+pub(crate) fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> Result<()> {
     if overwrite == Overwrite::Forbid {
         match std::fs::symlink_metadata(path) {
             Ok(_) => bail!(
@@ -168,7 +168,7 @@ fn write_temp_file(tmp_path: &Path, contents: &[u8]) -> std::io::Result<()> {
 /// cannot refuse to read — the user may have intentionally relaxed perms —
 /// but where lax modes likely indicate a misconfiguration. No-op on non-Unix
 /// and silently ignores stat failures (the caller will surface read errors).
-pub fn warn_if_world_readable(path: &Path, kind: &str) {
+pub(crate) fn warn_if_world_readable(path: &Path, kind: &str) {
     #[cfg(unix)]
     {
         if let Some(mode) = permissive_mode(path) {
@@ -218,7 +218,7 @@ fn fsync_dir(_dir: &Path) -> std::io::Result<()> {
 ///
 /// On non-Unix platforms this is a documented no-op (Windows ACLs are
 /// out of scope for this client, mirroring `write_secret_file`).
-pub fn ensure_secret_perms(path: &Path) -> Result<()> {
+pub(crate) fn ensure_secret_perms(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

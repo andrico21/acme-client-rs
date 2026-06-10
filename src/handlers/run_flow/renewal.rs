@@ -28,6 +28,9 @@ pub(super) enum RenewalDecision {
 
 // cancel-safe: read-only — inspects existing cert + optional ARI HTTP GET.
 // No external mutation; drop has no side effects.
+// cognitive_complexity: ARI window + --days + mismatch checks form one
+// decision tree; splitting would hide the precedence between them.
+#[allow(clippy::cognitive_complexity)]
 pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
     if !ctx.cert_output.exists() {
         return Ok(RenewalDecision::Renew);
