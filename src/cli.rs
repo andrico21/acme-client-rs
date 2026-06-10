@@ -46,10 +46,11 @@ impl std::fmt::Display for CertKeyAlgorithm {
 }
 
 /// Production-ready ACME client for issuing and renewing X.509 certificates (RFC 8555)
-///
-/// Deliberately does NOT implement `Debug`: this struct carries secret-bearing
-/// fields (`account_key_password`), and keeping `{cli:?}` impossible to write is
-/// stronger than a redacting formatter. Do not add `#[derive(Debug)]`.
+//
+// NOTE (not a doc comment - clap renders struct doc comments as --help long_about):
+// Deliberately does NOT implement `Debug`: this struct carries secret-bearing
+// fields (`account_key_password`), and keeping `{cli:?}` impossible to write is
+// stronger than a redacting formatter. Do not add `#[derive(Debug)]`.
 #[derive(Parser)]
 #[command(
     name = "acme-client-rs",
