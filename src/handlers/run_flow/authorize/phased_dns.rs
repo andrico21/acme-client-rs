@@ -114,10 +114,25 @@ pub(super) async fn run_phased_dns(
             hook.display(),
             dns_for_pending.as_str()
         );
-        if let Err(e) = run_dns_hook_create(hook, &dns_for_pending, &txt_name, &txt_value).await {
+        if let Err(e) = run_dns_hook_create(
+            hook,
+            &dns_for_pending,
+            &txt_name,
+            &txt_value,
+            ctx.cli.unsafe_hooks,
+        )
+        .await
+        {
             // Clean up any records we already created
             for p in &pending {
-                run_dns_hook_cleanup_silent(hook, &p.domain, &p.txt_name, &p.txt_value).await;
+                run_dns_hook_cleanup_silent(
+                    hook,
+                    &p.domain,
+                    &p.txt_name,
+                    &p.txt_value,
+                    ctx.cli.unsafe_hooks,
+                )
+                .await;
             }
             return Err(e);
         }
@@ -201,7 +216,14 @@ pub(super) async fn run_phased_dns(
             if !failed.is_empty() {
                 // Clean up ALL created records before bailing
                 for p in &pending {
-                    run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value).await;
+                    run_dns_hook_cleanup_logged(
+                        hook,
+                        &p.domain,
+                        &p.txt_name,
+                        &p.txt_value,
+                        ctx.cli.unsafe_hooks,
+                    )
+                    .await;
                 }
                 anyhow::bail!(
                     "DNS TXT records not found within {timeout_secs}s for: {}",
@@ -234,6 +256,7 @@ pub(super) async fn run_phased_dns(
                             ("ACME_TXT_NAME", p.txt_name.as_str()),
                             ("ACME_TXT_VALUE", &p.txt_value),
                         ],
+                        ctx.cli.unsafe_hooks,
                     )
                     .await?;
                 } else {
@@ -245,6 +268,7 @@ pub(super) async fn run_phased_dns(
                             ("ACME_TXT_NAME", p.txt_name.as_str()),
                             ("ACME_TXT_VALUE", &p.txt_value),
                         ],
+                        ctx.cli.unsafe_hooks,
                     )
                     .await?;
                 }
@@ -263,8 +287,14 @@ pub(super) async fn run_phased_dns(
                 if std::time::Instant::now() > poll_deadline {
                     // Clean up remaining records
                     for q in &pending {
-                        run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
-                            .await;
+                        run_dns_hook_cleanup_silent(
+                            hook,
+                            &q.domain,
+                            &q.txt_name,
+                            &q.txt_value,
+                            ctx.cli.unsafe_hooks,
+                        )
+                        .await;
                     }
                     anyhow::bail!(
                         "authorization for {} did not complete within {}s",
@@ -285,8 +315,14 @@ pub(super) async fn run_phased_dns(
                 {
                     if is_challenge_failed(ch) {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
-                                .await;
+                            run_dns_hook_cleanup_silent(
+                                hook,
+                                &q.domain,
+                                &q.txt_name,
+                                &q.txt_value,
+                                ctx.cli.unsafe_hooks,
+                            )
+                            .await;
                         }
                         let detail = ch
                             .error
@@ -310,8 +346,14 @@ pub(super) async fn run_phased_dns(
                     | AuthorizationStatus::Expired
                     | AuthorizationStatus::Revoked => {
                         for q in &pending {
-                            run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value)
-                                .await;
+                            run_dns_hook_cleanup_silent(
+                                hook,
+                                &q.domain,
+                                &q.txt_name,
+                                &q.txt_value,
+                                ctx.cli.unsafe_hooks,
+                            )
+                            .await;
                         }
                         let detail = a
                             .challenges
@@ -337,7 +379,14 @@ pub(super) async fn run_phased_dns(
                 hook.display(),
                 p.domain
             );
-            run_dns_hook_cleanup_logged(hook, &p.domain, &p.txt_name, &p.txt_value).await;
+            run_dns_hook_cleanup_logged(
+                hook,
+                &p.domain,
+                &p.txt_name,
+                &p.txt_value,
+                ctx.cli.unsafe_hooks,
+            )
+            .await;
             p.cleanup_handle.complete();
         }
     }

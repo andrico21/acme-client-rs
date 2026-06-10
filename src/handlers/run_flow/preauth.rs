@@ -115,7 +115,8 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 let txt_value =
                     crate::challenge::dns01::txt_record_value(token, client.account_key())?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value, ctx.cli.unsafe_hooks)
+                        .await?;
                     dns_cleanup_handle = Some(ctx.cleanup_registry.register(
                         crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
@@ -140,7 +141,14 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value).await;
+                            run_dns_hook_cleanup_logged(
+                                hook,
+                                dns,
+                                &txt_name,
+                                &txt_value,
+                                ctx.cli.unsafe_hooks,
+                            )
+                            .await;
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -166,6 +174,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             ("ACME_TXT_NAME", txt_name.as_str()),
                             ("ACME_TXT_VALUE", &txt_value),
                         ],
+                        ctx.cli.unsafe_hooks,
                     )
                     .await?;
                 }
@@ -202,7 +211,8 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     ctx.persist_until,
                 )?;
                 if let Some(hook) = ctx.dns_hook {
-                    run_dns_hook_create(hook, dns, &txt_name, &txt_value).await?;
+                    run_dns_hook_create(hook, dns, &txt_name, &txt_value, ctx.cli.unsafe_hooks)
+                        .await?;
                     dns_cleanup_handle = Some(ctx.cleanup_registry.register(
                         crate::cleanup::CleanupAction::DnsRecord {
                             hook: hook.to_path_buf(),
@@ -233,7 +243,14 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                     }
                     if !found {
                         if let Some(hook) = ctx.dns_hook {
-                            run_dns_hook_cleanup_logged(hook, dns, &txt_name, &txt_value).await;
+                            run_dns_hook_cleanup_logged(
+                                hook,
+                                dns,
+                                &txt_name,
+                                &txt_value,
+                                ctx.cli.unsafe_hooks,
+                            )
+                            .await;
                         }
                         anyhow::bail!(
                             "DNS TXT record for {txt_name} not found within {timeout_secs}s"
@@ -255,6 +272,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             ("ACME_TXT_NAME", txt_name.as_str()),
                             ("ACME_TXT_VALUE", &txt_value),
                         ],
+                        ctx.cli.unsafe_hooks,
                     )
                     .await?;
                 }
@@ -286,6 +304,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                             ("ACME_TOKEN", token.as_str()),
                             ("ACME_KEY_AUTH", &key_auth),
                         ],
+                        ctx.cli.unsafe_hooks,
                     )
                     .await?;
                 }
@@ -377,7 +396,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             && let Some(hook) = ctx.dns_hook
             && let Some(ref dns) = dns_for_hook
         {
-            run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value).await;
+            run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value, ctx.cli.unsafe_hooks).await;
             if let Some(handle) = &dns_cleanup_handle {
                 handle.complete();
             }

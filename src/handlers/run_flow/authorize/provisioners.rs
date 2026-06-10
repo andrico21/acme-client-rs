@@ -155,6 +155,7 @@ pub(super) async fn provision_dns01(
                 ("ACME_TXT_NAME", txt_name.as_str()),
                 ("ACME_TXT_VALUE", &txt_value),
             ],
+            ctx.cli.unsafe_hooks,
         )
         .await?;
     }
@@ -228,6 +229,7 @@ pub(super) async fn provision_dns_persist01(
                 ("ACME_TXT_NAME", txt_name.as_str()),
                 ("ACME_TXT_VALUE", &txt_value),
             ],
+            ctx.cli.unsafe_hooks,
         )
         .await?;
     }
@@ -266,6 +268,7 @@ pub(super) async fn provision_tlsalpn01(
                 ("ACME_TOKEN", token.as_str()),
                 ("ACME_KEY_AUTH", &key_auth),
             ],
+            ctx.cli.unsafe_hooks,
         )
         .await?;
     }

@@ -212,6 +212,7 @@ pub(super) async fn finalize(
                     if key_encrypted { "true" } else { "false" },
                 ),
             ],
+            ctx.cli.unsafe_hooks,
         )
         .await?;
     }

@@ -26,6 +26,21 @@
 //! On non-Unix targets all checks are skipped (Windows' permission model is
 //! DACL-based and does not map onto these POSIX bits); a single advisory is
 //! printed to stderr on first use.
+//!
+//! W8 / TOCTOU residual race: validation runs once at preflight and again
+//! immediately before every spawn (chokepoint in `handlers::hooks`), but a
+//! microscopic stat→execve window remains. The kernel resolves the script
+//! path a second time on `execve(2)`; an attacker who can win a race
+//! between our last `stat(2)` and the kernel's path resolution could still
+//! swap the file. Closing that window would require exec-by-fd
+//! (`fexecve(3)` / `execveat(2)` on an fd captured at validation time),
+//! which cannot be expressed through `std`/`tokio` process APIs: wiring it
+//! in needs `CommandExt::pre_exec` or a manual `fork(2)` — both `unsafe`,
+//! and the crate is built with `#![forbid(unsafe_code)]`.
+//! The double-check shrinks the window from
+//! seconds-to-minutes (preflight → final spawn across the full ACME order)
+//! down to microseconds, which is the strongest mitigation available to a
+//! pure-safe-Rust binary.
 
 use anyhow::{Context, Result, bail};
 use std::path::Path;
