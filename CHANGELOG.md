@@ -10,6 +10,8 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.2.5] - 2026-06-10
+
 ### Changed
 
 - Refreshed transitive dependencies via `cargo update`: `http` 1.4.1 →
@@ -91,7 +93,8 @@ are documented only in git history and GitHub releases.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.5...HEAD
+[2.2.5]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...2.2.5
 [2.2.4]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...2.2.4
 [2.2.3]: https://github.com/andrico21/acme-client-rs/compare/2.2.2...2.2.3
 [2.2.2]: https://github.com/andrico21/acme-client-rs/compare/2.2.1...2.2.2
