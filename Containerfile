@@ -2,7 +2,8 @@
 #
 # Multi-stage build for acme-client-rs producing a *distroless* runtime image.
 #
-# Stage 1 (builder): rust:alpine — compiles a fully static musl binary with
+# Stage 1 (builder): rust:alpine — compiles a fully static musl binary for
+#                    the requested platform (linux/amd64 or linux/arm64) with
 #                    rustls (aws-lc-rs) for TLS — no OpenSSL — and full
 #                    security hardening flags (PIE, full RELRO, NX stack).
 # Stage 2 (runtime): gcr.io/distroless/static-debian13:nonroot — no shell,
@@ -28,10 +29,21 @@ COPY . .
 # also apply to host-built proc-macro crates (e.g. asn1-rs-derive), and
 # `+crt-static` makes them un-buildable as dylibs:
 #   "cannot produce proc-macro for ... as the target ... does not support these crate types"
-ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
-
-RUN cargo build --release --target x86_64-unknown-linux-musl \
- && strip target/x86_64-unknown-linux-musl/release/acme-client-rs
+#
+# TARGETARCH is auto-populated by BuildKit/buildah per platform leg. Each leg
+# builds natively (host triple == target triple), so std for the target is
+# already installed — no `rustup target add` needed. `--target` stays
+# mandatory for the proc-macro flag scoping above.
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+ && export "CARGO_TARGET_$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS=-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" \
+ && cargo build --release --target "$RUST_TARGET" \
+ && strip "target/$RUST_TARGET/release/acme-client-rs" \
+ && cp "target/$RUST_TARGET/release/acme-client-rs" /acme-client-rs
 
 # -- Stage 2: Distroless runtime --
 FROM gcr.io/distroless/static-debian13:nonroot
@@ -53,7 +65,7 @@ LABEL org.opencontainers.image.title="acme-client-rs" \
       org.opencontainers.image.vendor="andrico21" \
       org.opencontainers.image.base.name="gcr.io/distroless/static-debian13:nonroot"
 
-COPY --from=builder /src/target/x86_64-unknown-linux-musl/release/acme-client-rs /usr/local/bin/acme-client-rs
+COPY --from=builder /acme-client-rs /usr/local/bin/acme-client-rs
 
 # ── Runtime environment ──────────────────────────────────────────────────────
 # Timezone (used for log timestamps and certificate-expiry date formatting).

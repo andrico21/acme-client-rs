@@ -15,6 +15,7 @@
 | Артефакт | Платформа | Линковка | Примечания |
 |---|---|---|---|
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Статическая (musl)** | **Рекомендуется.** Без runtime-зависимостей — работает на любом дистрибутиве Linux. |
+| `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Статическая (musl)** | Raspberry Pi 3/4/5 (64-битная ОС), AWS Graviton, любой ARM64-дистрибутив Linux. |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Динамическая (GNU) | Требует GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Динамическая | Intel Mac. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Динамическая | Apple Silicon (M1+). |
@@ -29,7 +30,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 
 > **Совет:** На Linux всегда предпочитайте **musl**-бинарник. Вариант GNU динамически линкуется с системным GLIBC и не запустится на дистрибутивах со GLIBC старее 2.39 (например, RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
 
-В качестве альтернативы — сборка из исходников, см. раздел [Сборка](#сборка) ниже.
+В качестве альтернативы — сборка из исходников, см. раздел [Сборка](#сборка) ниже. Также публикуется мультиархитектурный контейнерный образ (`linux/amd64`, `linux/arm64` — поддерживаются Raspberry Pi 3/4/5 с 64-битной ОС) на [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
 
 ## Возможности
 

@@ -15,6 +15,7 @@ Download a prebuilt binary from the [latest release](https://github.com/andrico2
 | Artifact | Platform | Linking | Notes |
 |---|---|---|---|
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Static (musl)** | **Recommended.** No runtime dependencies — works on any Linux distro. |
+| `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Static (musl)** | Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, any ARM64 Linux distro. |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Dynamic (GNU) | Requires GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Dynamic | Intel Macs. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Dynamic | Apple Silicon (M1+). |
@@ -29,7 +30,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 
 > **Tip:** On Linux, always prefer the **musl** binary. The GNU variant dynamically links against the system GLIBC and will fail on distributions shipping GLIBC older than 2.39 (e.g., RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
 
-Alternatively, build from source — see [Building](#building) below.
+Alternatively, build from source — see [Building](#building) below. A multi-arch container image (`linux/amd64`, `linux/arm64` — Raspberry Pi 3/4/5 with 64-bit OS supported) is also published to [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
 
 ## Features
 

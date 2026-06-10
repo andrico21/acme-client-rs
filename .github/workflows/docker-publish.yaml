@@ -20,9 +20,16 @@ name: Docker Publish
 # `workflow_run.head_branch` / `head_sha` fields throughout to recover the
 # original tag and commit.
 #
-# First-iteration scope: linux/amd64 only. Multi-arch (linux/arm64) can be
-# added later by enabling QEMU + buildx --platform linux/amd64,linux/arm64;
-# expect ~20–30 min build time per arch under QEMU emulation.
+# Multi-arch design (linux/amd64 + linux/arm64):
+#   preflight — single gate + tag↔SHA verification, exposes `is_release`.
+#   build     — one native leg per platform (amd64 on ubuntu-24.04, arm64 on
+#               ubuntu-24.04-arm; no QEMU). Each leg pushes BY DIGEST only
+#               (no tags), uploads its digest as an artifact, and runs its
+#               own Trivy scan against the per-arch image.
+#   merge     — assembles the multi-arch manifest list from the two digests
+#               with `docker buildx imagetools create` and applies all tags.
+# Semver tags are applied only for real release runs; manual dispatch runs
+# get branch/sha tags only.
 #
 # Required repository secrets:
 #   DOCKERHUB_USERNAME — Docker Hub username (used as image namespace)
@@ -51,9 +58,9 @@ env:
   SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
-  publish:
-    name: Build, scan & push container image
-    runs-on: ubuntu-latest
+  preflight:
+    name: Gate & verify source
+    runs-on: ubuntu-24.04
     # Gate:
     #   - workflow_dispatch  → always allowed (manual override for testing)
     #   - workflow_run       → only when Release succeeded on a tag push from
@@ -68,6 +75,8 @@ jobs:
         !contains(github.event.workflow_run.head_branch, '-dev') &&
         !contains(github.event.workflow_run.head_branch, '-test')
       )
+    outputs:
+      is_release: ${{ steps.flags.outputs.is_release }}
     steps:
       - name: Checkout source at triggering commit
         uses: actions/checkout@v6
@@ -92,6 +101,48 @@ jobs:
             exit 1
           fi
 
+      - name: Compute release flag
+        id: flags
+        shell: bash
+        run: |
+          # Semver tags are applied only when building an actual release tag:
+          # a workflow_run from Release, or a manual dispatch ON a tag ref.
+          # Dispatch on a branch gets branch/sha tags only (is_release=false),
+          # so `type=semver` never receives a non-semver value downstream.
+          if [ "${{ github.event_name }}" = "workflow_run" ] || [ "${{ startsWith(github.ref, 'refs/tags/') }}" = "true" ]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build & push ${{ matrix.arch }} image
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Explicit per-leg fields: `platform` is the buildx --platform value;
+        # `arch` is the sanitized identifier used in artifact names, cache
+        # scopes and SARIF categories (slashes are not allowed there).
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-24.04
+            cache_scope: publish-linux-amd64
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+            cache_scope: publish-linux-arm64
+    env:
+      IMAGE: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+    steps:
+      - name: Checkout source at triggering commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -109,31 +160,26 @@ jobs:
           # `context: git` plus explicit `value=` overrides on each semver
           # pattern are required because `github.ref` won't be the tag in a
           # workflow_run-triggered run (it'll be the default branch ref).
+          # Build legs consume only `labels` + `version` from this step —
+          # tags are applied exclusively by the merge job.
           context: git
-          images: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
-          # Tag generation strategy:
-          #   semver tag "2.2.4" → :2.2.4, :2.2, :2, :latest
-          #   workflow_dispatch on master → :master, :sha-abcdef
-          # `flavor: latest=auto` adds :latest only for non-prerelease semver
-          # tags (which is fine — we already exclude -dev/-test at the if:).
+          images: ${{ env.IMAGE }}
           tags: |
-            type=semver,pattern={{version}},value=${{ env.SOURCE_TAG }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ env.SOURCE_TAG }}
-            type=semver,pattern={{major}},value=${{ env.SOURCE_TAG }}
+            type=semver,pattern={{version}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
+            type=semver,pattern={{major}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
             type=ref,event=branch
             type=sha,format=short,prefix=sha-
           flavor: |
             latest=auto
 
-      - name: Build and push image
+      - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Containerfile
-          platforms: linux/amd64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           # Stamp the OCI image.version label with the semver `{{version}}`
           # output (e.g. "2.2.4"). For workflow_dispatch runs this falls back
@@ -141,27 +187,50 @@ jobs:
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
           # Supply-chain hardening: emit SBOM + SLSA provenance attestations.
+          # These ride along as attestation manifests in the per-arch image
+          # index and survive the digest merge (they show up as
+          # `unknown/unknown` platform entries — expected, not a bug).
           sbom: true
           provenance: mode=max
-          # GitHub Actions cache speeds up rebuilds across workflow runs.
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # GitHub Actions cache, scoped per platform so the legs do not
+          # evict each other's layers.
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+          # Push by digest only — tags are applied by the merge job after
+          # both per-arch images exist.
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
-      # ── Trivy: post-push informational scan ──────────────────────────────
+      - name: Export digest
+        shell: bash
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+      # ── Trivy: post-push informational scan (per arch) ────────────────────
       #
-      # The image is already published; Trivy reads it back from the registry
-      # by digest (deterministic — no race with metadata tag fan-out).
-      # Findings are uploaded as SARIF → Security tab → Code scanning, AND
-      # as JSON/SARIF artifacts retained for 90 days. The scan is informational
-      # (`exit-code: '0'`) — it does NOT fail the publish.
+      # The per-arch image is already pushed (by digest); Trivy reads it back
+      # from the registry by digest (deterministic — no race with the merge
+      # job's tag fan-out). Findings are uploaded as SARIF → Security tab →
+      # Code scanning (one category per arch), AND as JSON/SARIF artifacts
+      # retained for 90 days. The scan is informational (`exit-code: '0'`) —
+      # it does NOT fail the publish.
 
       - name: Compute scan target image reference
         id: scan-image
         shell: bash
         run: |
-          # Digest-pinned ref guarantees Trivy scans the exact image we
-          # published, regardless of which tag race won.
-          echo "ref=${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
+          # Digest-pinned ref guarantees Trivy scans the exact per-arch image
+          # we published, regardless of which tag race won.
+          echo "ref=${IMAGE}@${{ steps.build.outputs.digest }}" >> "$GITHUB_OUTPUT"
 
       - name: Run Trivy image scan (SARIF for GitHub Code Scanning)
         uses: aquasecurity/trivy-action@master
@@ -171,7 +240,7 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           format: sarif
-          output: trivy-results.sarif
+          output: trivy-results-${{ matrix.arch }}.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '0'
@@ -186,7 +255,7 @@ jobs:
           scanners: vuln
           vuln-type: os,library
           format: json
-          output: trivy-results.json
+          output: trivy-results-${{ matrix.arch }}.json
           severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
           exit-code: '0'
@@ -194,14 +263,14 @@ jobs:
           skip-setup-trivy: true
 
       - name: Upload Trivy SARIF to GitHub Code Scanning
-        if: always() && hashFiles('trivy-results.sarif') != ''
+        if: always() && hashFiles(format('trivy-results-{0}.sarif', matrix.arch)) != ''
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-results.sarif
-          category: trivy-image
+          sarif_file: trivy-results-${{ matrix.arch }}.sarif
+          category: trivy-image-${{ matrix.arch }}
 
       - name: Render Trivy summary on run page
-        if: always() && hashFiles('trivy-results.json') != ''
+        if: always() && hashFiles(format('trivy-results-{0}.json', matrix.arch)) != ''
         shell: bash
         run: |
           # Aggregate vulnerability counts across all Results[] in Trivy's JSON
@@ -218,10 +287,10 @@ jobs:
                 TOTAL:    ($vs | length)
               }
             | "\(.CRITICAL)\t\(.HIGH)\t\(.MEDIUM)\t\(.LOW)\t\(.UNKNOWN)\t\(.TOTAL)"
-          ' trivy-results.json)"
+          ' "trivy-results-${{ matrix.arch }}.json")"
           IFS=$'\t' read -r crit high med low unk total <<< "$counts"
           {
-            echo "## Image scan (Trivy)"
+            echo "## Image scan (Trivy) — ${{ matrix.arch }}"
             echo ""
             echo "Scan target: \`${{ steps.scan-image.outputs.ref }}\`"
             echo ""
@@ -234,7 +303,7 @@ jobs:
             echo "| UNKNOWN | ${unk} |"
             echo "| **Total** | **${total}** |"
             echo ""
-            echo "Full JSON + SARIF reports retained 90 days as workflow artifact \`trivy-image-scan-${{ github.run_id }}\`."
+            echo "Full JSON + SARIF reports retained 90 days as workflow artifact \`trivy-reports-${{ matrix.arch }}\`."
             echo "CRITICAL/HIGH findings (fixed-only) also published to the **Security → Code scanning** tab."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -242,31 +311,140 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: trivy-image-scan-${{ github.run_id }}
+          name: trivy-reports-${{ matrix.arch }}
           path: |
-            trivy-results.sarif
-            trivy-results.json
+            trivy-results-${{ matrix.arch }}.sarif
+            trivy-results-${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 90
 
+  merge:
+    name: Merge & tag multi-arch manifest
+    needs: [preflight, build]
+    runs-on: ubuntu-24.04
+    env:
+      IMAGE: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+    steps:
+      - name: Checkout source at triggering commit
+        uses: actions/checkout@v6
+        with:
+          # metadata-action runs with `context: git` below — it must see the
+          # release SHA, not the workflow_run default-branch HEAD, or the
+          # sha-* tag and revision labels would point at the wrong commit.
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract image metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          context: git
+          images: ${{ env.IMAGE }}
+          # Tag generation strategy:
+          #   semver tag "2.2.4" → :2.2.4, :2.2, :2, :latest (release runs only)
+          #   workflow_dispatch on master → :master, :sha-abcdef
+          # `flavor: latest=auto` adds :latest only for non-prerelease semver
+          # tags (which is fine — we already exclude -dev/-test at preflight).
+          tags: |
+            type=semver,pattern={{version}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
+            type=semver,pattern={{major}},value=${{ env.SOURCE_TAG }},enable=${{ needs.preflight.outputs.is_release == 'true' }}
+            type=ref,event=branch
+            type=sha,format=short,prefix=sha-
+          flavor: |
+            latest=auto
+
+      - name: Create and push multi-arch manifest
+        id: manifest
+        shell: bash
+        run: |
+          # Assemble -t args from metadata tags and image@digest args from the
+          # downloaded digest files. Bash arrays (not jq/printf interpolation)
+          # so tags or digests can never word-split or glob.
+          TAG_ARGS=()
+          while IFS= read -r tag; do
+            [ -n "$tag" ] && TAG_ARGS+=(-t "$tag")
+          done <<< "$DOCKER_METADATA_OUTPUT_TAGS"
+          if [ "${#TAG_ARGS[@]}" -eq 0 ]; then
+            echo "::error::metadata-action produced no tags" >&2
+            exit 1
+          fi
+
+          DIGEST_ARGS=()
+          for f in /tmp/digests/*; do
+            DIGEST_ARGS+=("${IMAGE}@sha256:$(basename "$f")")
+          done
+          # Exactly one digest per platform leg — a missing file means a leg
+          # silently failed to export and the index would be single-arch.
+          if [ "${#DIGEST_ARGS[@]}" -ne 2 ]; then
+            echo "::error::expected 2 per-arch digests, found ${#DIGEST_ARGS[@]}" >&2
+            exit 1
+          fi
+
+          docker buildx imagetools create "${TAG_ARGS[@]}" "${DIGEST_ARGS[@]}"
+
+          first_tag="${TAG_ARGS[1]}"
+          echo "first_tag=${first_tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect merged manifest
+        shell: bash
+        run: |
+          docker buildx imagetools inspect "${{ steps.manifest.outputs.first_tag }}"
+
+      - name: Verify attestations survived the merge
+        shell: bash
+        run: |
+          # provenance/SBOM attestation manifests appear as `unknown/unknown`
+          # platform entries in the merged index. Informational visibility
+          # check — prints the count, never fails the publish.
+          raw="$(docker buildx imagetools inspect --raw "${{ steps.manifest.outputs.first_tag }}")"
+          att="$(jq '[.manifests[] | select(.annotations["vnd.docker.reference.type"] == "attestation-manifest")] | length' <<< "$raw")"
+          plat="$(jq '[.manifests[] | select((.annotations["vnd.docker.reference.type"] // "") != "attestation-manifest")] | length' <<< "$raw")"
+          echo "platform manifests: ${plat}, attestation manifests: ${att}"
+
+      - name: Compute index digest
+        id: index
+        shell: bash
+        run: |
+          digest="$(docker buildx imagetools inspect --format '{{json .Manifest.Digest}}' "${{ steps.manifest.outputs.first_tag }}" | tr -d '"')"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
       - name: Render image identity on run page
-        if: always() && steps.build.outputs.digest != ''
+        if: always() && steps.index.outputs.digest != ''
         shell: bash
         env:
           IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
-          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.index.outputs.digest }}
           IMAGE_VERSION: ${{ steps.meta.outputs.version }}
         run: |
-          # Surface what was just published — digest, tags, source provenance —
-          # so the run page answers "what image did this produce?" without log
-          # spelunking. Renders even if Trivy steps failed (build succeeded).
+          # Surface what was just published — index digest, tags, source
+          # provenance — so the run page answers "what image did this
+          # produce?" without log spelunking.
           {
             echo "## Image identity"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Image | \`${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}\` |"
-            echo "| Digest | \`${IMAGE_DIGEST}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\` |"
+            echo "| Index digest | \`${IMAGE_DIGEST}\` |"
             echo "| Version (OCI label) | \`${IMAGE_VERSION}\` |"
             echo "| Source tag | \`${SOURCE_TAG}\` |"
             echo "| Source commit | \`${SOURCE_SHA}\` |"
@@ -281,6 +459,6 @@ jobs:
             echo "### Pull by digest (recommended — immutable)"
             echo ""
             echo '```bash'
-            echo "docker pull ${REGISTRY}/${{ secrets.DOCKERHUB_USERNAME }}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+            echo "docker pull ${IMAGE}@${IMAGE_DIGEST}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

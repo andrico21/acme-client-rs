@@ -19,11 +19,11 @@ Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened static mus
 | Working directory | `/data` |
 | Declared volume | `/data` (account key + issued cert/key live here) |
 | Exposed port | `80/tcp` (built-in HTTP-01 challenge server) |
-| Platform | `linux/amd64` |
+| Platforms | `linux/amd64`, `linux/arm64` |
 | Image size | ~10 MB |
 | Default env | `TZ=UTC`, `RUST_LOG=info` |
 
-The image is **distroless**: it contains only CA roots, `/etc/passwd` with the `nonroot` user, and the binary. There is no shell, no libc, and no package manager — the only attack surface is the binary itself. Because the `ENTRYPOINT` is the binary, every `docker run` argument after the image name is passed straight to `acme-client-rs`.
+The image is **distroless**: it contains only CA roots, `/etc/passwd` with the `nonroot` user, and the binary. There is no shell, no libc, and no package manager — the only attack surface is the binary itself. Because the `ENTRYPOINT` is the binary, every `docker run` argument after the image name is passed straight to `acme-client-rs`. The `linux/arm64` variant runs on Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, and any other ARM64 Linux host — `docker pull` selects the right architecture automatically.
 
 ## Tags
 
