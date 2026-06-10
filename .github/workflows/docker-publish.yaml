@@ -48,7 +48,9 @@ permissions:
 
 env:
   REGISTRY: docker.io
-  IMAGE_NAME: acme-client-rs
+  # NOTE: the full image reference (docker.io/<user>/acme-client-rs) is spelled
+  # out literally in the job-level `IMAGE` env of the build and merge jobs:
+  # the `env` context is not available inside job-level `env` values.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # In a `workflow_run`-triggered run, `github.ref` / `github.sha` point at
   # the default branch HEAD. Recover the triggering tag + commit from the
@@ -135,7 +137,7 @@ jobs:
             runner: ubuntu-24.04-arm
             cache_scope: publish-linux-arm64
     env:
-      IMAGE: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+      IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/acme-client-rs
     steps:
       - name: Checkout source at triggering commit
         uses: actions/checkout@v6
@@ -323,7 +325,7 @@ jobs:
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     env:
-      IMAGE: ${{ env.REGISTRY }}/${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}
+      IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/acme-client-rs
     steps:
       - name: Checkout source at triggering commit
         uses: actions/checkout@v6

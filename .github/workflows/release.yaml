@@ -85,27 +85,22 @@ jobs:
   build-linux-aarch64-musl:
     name: Build Linux (aarch64, musl, static)
     runs-on: ubuntu-24.04-arm
-    container:
-      image: rust:1.96.0-alpine
+    # JavaScript actions (checkout, upload-artifact) cannot run inside Alpine
+    # containers on arm64 runners (no alpine-arm64 node), so the job runs on
+    # the host and only the build happens inside the Alpine image.
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install build dependencies
-        run: apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
-
-      - name: Build
-        env:
-          OPENSSL_STATIC: "1"
-        run: cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
-
-      - name: Strip binary
-        run: strip target/release/acme-client-rs
-
-      - name: Verify static linking
+      - name: Build (native arm64, Alpine musl)
         run: |
-          file target/release/acme-client-rs
-          # Must be statically linked (output varies: "statically linked" or "static-pie linked")
-          file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
+          docker run --rm -v "$PWD:/work" -w /work rust:1.96.0-alpine sh -ec '
+            apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
+            OPENSSL_STATIC=1 cargo rustc --release -- -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack
+            strip target/release/acme-client-rs
+            file target/release/acme-client-rs
+            # Must be statically linked (output varies: "statically linked" or "static-pie linked")
+            file target/release/acme-client-rs | grep -qE "statically linked|static-pie linked"
+          '
 
       - name: Package
         run: |
