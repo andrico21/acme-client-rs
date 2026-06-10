@@ -11,10 +11,12 @@ use crate::jws::{AccountKey, KeyAlgorithm};
 use crate::{build_client, outln};
 
 use super::parse_eab;
-// cancel-safe: pure compute + single `spawn_blocking` await + single sync file
-// write. Drop at any await point leaves no external side effects (no DNS,
-// network, or registry mutation). The destination file is only created on the
-// final `write_secret_file` call, which is not awaited.
+// cancel-safe before the final `spawn_blocking` write: pure compute (and an
+// off-runtime scrypt task) with no external side effects. NOT cancel-safe
+// once the write task is spawned: `spawn_blocking` detaches, so a dropped
+// await leaves the blocking task running to completion and the secret file
+// may be created after the caller has gone away. There is still no DNS,
+// network, or CA-side mutation.
 pub(crate) async fn cmd_generate_key(
     path: &Path,
     algorithm: KeyAlgorithm,
@@ -27,7 +29,7 @@ pub(crate) async fn cmd_generate_key(
     let key = AccountKey::generate(algorithm)?;
     let pem = zeroize::Zeroizing::new(key.to_pkcs8_pem()?);
     let encrypted = password.is_some();
-    let bytes_to_write = if let Some(pw) = password {
+    let bytes_to_write: zeroize::Zeroizing<Vec<u8>> = if let Some(pw) = password {
         // scrypt N=16384 ≈ 16 MiB / hundreds of ms — must not block reactor.
         let pem_for_task = pem.clone();
         let pw_for_task = zeroize::Zeroizing::new(pw.expose_secret().to_string());
@@ -36,20 +38,26 @@ pub(crate) async fn cmd_generate_key(
         })
         .await
         .context("scrypt encryption task panicked")??;
-        zeroize::Zeroizing::new(encrypted_pem)
+        zeroize::Zeroizing::new(encrypted_pem.into_bytes())
     } else {
-        zeroize::Zeroizing::new(pem.to_string())
+        zeroize::Zeroizing::new(pem.as_bytes().to_vec())
     };
-    crate::fs_secure::write_secret_file(
-        path,
-        bytes_to_write.as_bytes(),
-        if force {
-            crate::fs_secure::Overwrite::Allow
-        } else {
-            crate::fs_secure::Overwrite::Forbid
-        },
-    )
-    .with_context(|| format!("failed to write key to {}", path.display()))?;
+    let path_owned = path.to_path_buf();
+    let path_display = path.display().to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::fs_secure::write_secret_file(
+            &path_owned,
+            &bytes_to_write,
+            if force {
+                crate::fs_secure::Overwrite::Allow
+            } else {
+                crate::fs_secure::Overwrite::Forbid
+            },
+        )
+    })
+    .await
+    .context("write_secret_file task panicked")?
+    .with_context(|| format!("failed to write key to {path_display}"))?;
     if !silent {
         if fmt == OutputFormat::Json {
             outln!(

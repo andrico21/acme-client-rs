@@ -134,9 +134,11 @@ pub(super) async fn finalize(
     // --reuse-key path == --key-output path → on-disk file is the source of
     // truth; skip the write so we don't trip the SEC-08 "refusing to
     // overwrite" guardrail and don't re-encode an unchanged key.
-    let skip_key_write = ctx
-        .reuse_key
-        .is_some_and(|src| paths_resolve_same(src, ctx.key_output));
+    let skip_key_write = if let Some(src) = ctx.reuse_key {
+        paths_resolve_same(src, ctx.key_output).await
+    } else {
+        false
+    };
     if !skip_key_write {
         let key_output_owned = ctx.key_output.to_path_buf();
         let force = ctx.force;
@@ -220,8 +222,12 @@ pub(super) async fn finalize(
     Ok(())
 }
 
-fn paths_resolve_same(a: &std::path::Path, b: &std::path::Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+// cancel-safe: read-only canonicalize lookups, no side effects.
+async fn paths_resolve_same(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (
+        tokio::fs::canonicalize(a).await,
+        tokio::fs::canonicalize(b).await,
+    ) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,
     }

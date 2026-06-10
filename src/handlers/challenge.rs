@@ -9,7 +9,10 @@ use crate::{build_client, outln};
 
 use super::check_wildcard_compatible;
 // NOT cancel-safe: binds TCP listener and serves a single challenge
-// response. Drop releases the listener; CA poll will then fail.
+// response, or writes a challenge file via a detached `spawn_blocking`
+// task. Drop releases the listener (CA poll will then fail), and a drop
+// between the write `spawn_blocking` await and the cleanup leaves the
+// challenge file on disk.
 pub(crate) async fn cmd_serve_http01(
     cli: &Cli,
     token: &crate::types::ChallengeToken,
@@ -29,7 +32,13 @@ pub(crate) async fn cmd_serve_http01(
     )
     .await?;
     if let Some(dir) = challenge_dir {
-        let file = crate::challenge::http01::write_challenge_file(dir, token, &key)?;
+        let dir_owned = dir.to_path_buf();
+        let token_owned = token.clone();
+        let file = tokio::task::spawn_blocking(move || {
+            crate::challenge::http01::write_challenge_file(&dir_owned, &token_owned, &key)
+        })
+        .await
+        .context("write_challenge_file task panicked")??;
         super::emit_result(
             cli,
             || {
@@ -51,7 +60,11 @@ pub(crate) async fn cmd_serve_http01(
             let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new()))
                 .await;
         }
-        crate::challenge::http01::cleanup_challenge_file(&file);
+        let file_for_cleanup = file.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::challenge::http01::cleanup_challenge_file(&file_for_cleanup);
+        })
+        .await;
         Ok(())
     } else {
         crate::challenge::http01::serve(token, &key, port).await
