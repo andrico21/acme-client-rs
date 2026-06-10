@@ -111,7 +111,9 @@ impl Transport {
             .to_str()
             .context("Replay-Nonce is not valid ASCII")?
             .to_string();
-        debug!("Obtained nonce: {nonce}");
+        // Log only the length: a Replay-Nonce is a single-use anti-replay
+        // credential (RFC 8555 §6.5) and must not appear in logs.
+        debug!(len = nonce.len(), "Obtained nonce");
         Ok(nonce)
     }
 
