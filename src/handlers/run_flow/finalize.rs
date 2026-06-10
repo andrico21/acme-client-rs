@@ -108,12 +108,12 @@ pub(super) async fn finalize(
                 .await
                 .with_context(|| format!("failed to read password file: {}", path.display()))?,
         );
-        let pw: Option<String> = content
+        content
             .lines()
             .next()
-            .map(|line| line.trim().to_string())
-            .filter(|pw| !pw.is_empty());
-        pw.map(secrecy::SecretString::from)
+            .map(str::trim)
+            .filter(|pw| !pw.is_empty())
+            .map(secrecy::SecretString::from)
     } else {
         None
     };

@@ -32,9 +32,9 @@ pub(crate) async fn cmd_generate_key(
     let bytes_to_write: zeroize::Zeroizing<Vec<u8>> = if let Some(pw) = password {
         // scrypt N=16384 ≈ 16 MiB / hundreds of ms — must not block reactor.
         let pem_for_task = pem.clone();
-        let pw_for_task = zeroize::Zeroizing::new(pw.expose_secret().to_string());
+        let pw_for_task = pw.clone();
         let encrypted_pem = tokio::task::spawn_blocking(move || {
-            encrypt_private_key(&pem_for_task, pw_for_task.as_str())
+            encrypt_private_key(&pem_for_task, pw_for_task.expose_secret())
         })
         .await
         .context("scrypt encryption task panicked")??;
