@@ -397,7 +397,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             && let Some(ref dns) = dns_for_hook
         {
             run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value, ctx.cli.unsafe_hooks).await;
-            if let Some(handle) = &dns_cleanup_handle {
+            if let Some(handle) = dns_cleanup_handle.take() {
                 handle.complete();
             }
         }

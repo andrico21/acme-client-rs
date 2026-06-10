@@ -64,12 +64,18 @@ pub fn write_secret_file(path: &Path, contents: &[u8], overwrite: Overwrite) -> 
     let tmp_path = write_unique_temp_file(parent, &file_name, contents)?;
 
     if let Err(e) = std::fs::rename(&tmp_path, path) {
-        let _ = std::fs::remove_file(&tmp_path);
+        if let Err(rm_err) = std::fs::remove_file(&tmp_path) {
+            tracing::warn!(
+                "failed to remove leftover temp file {} after failed rename: {}",
+                tmp_path.display(),
+                rm_err
+            );
+        }
         return Err(e)
             .with_context(|| format!("failed to atomically rename into {}", path.display()));
     }
 
-    fsync_dir(parent);
+    fsync_dir(parent).with_context(|| format!("failed to fsync directory {}", parent.display()))?;
 
     Ok(())
 }
@@ -193,14 +199,38 @@ fn permissive_mode(path: &Path) -> Option<u32> {
 }
 
 #[cfg(unix)]
-fn fsync_dir(dir: &Path) {
-    if let Ok(d) = std::fs::File::open(dir) {
-        let _ = d.sync_all();
-    }
+fn fsync_dir(dir: &Path) -> std::io::Result<()> {
+    let d = std::fs::File::open(dir)?;
+    d.sync_all()
 }
 
 #[cfg(not(unix))]
-fn fsync_dir(_dir: &Path) {}
+fn fsync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Re-assert `0o600` (owner read/write only) on an existing secret file.
+///
+/// Used on the `--reuse-key` skip path where the on-disk key is reused
+/// as-is: the file may have been created with a permissive umask before
+/// this client took ownership of it, so we must enforce the secret-file
+/// mode every run, not only when we write.
+///
+/// On non-Unix platforms this is a documented no-op (Windows ACLs are
+/// out of scope for this client, mirroring `write_secret_file`).
+pub fn ensure_secret_perms(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to chmod 0600 on {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+    Ok(())
+}
 
 #[cfg(test)]
 #[allow(clippy::panic)]
@@ -315,6 +345,27 @@ mod tests {
         assert!(
             leftover.is_empty(),
             "temp files must not survive: {leftover:?}"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn w17_ensure_secret_perms_tightens_0644_to_0600() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tmpdir("w17_ensure_perms")?;
+        let path = dir.join("reused.key");
+        std::fs::write(&path, b"PEM")?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))?;
+        assert_eq!(
+            std::fs::metadata(&path)?.permissions().mode() & 0o777,
+            0o644
+        );
+        ensure_secret_perms(&path)?;
+        assert_eq!(
+            std::fs::metadata(&path)?.permissions().mode() & 0o777,
+            0o600,
+            "ensure_secret_perms must chmod to 0600"
         );
         Ok(())
     }

@@ -139,10 +139,17 @@ pub(super) async fn finalize(
     } else {
         false
     };
-    if !skip_key_write {
-        let key_output_owned = ctx.key_output.to_path_buf();
+    let key_output_owned = ctx.key_output.to_path_buf();
+    let key_display = ctx.key_output.display().to_string();
+    if skip_key_write {
+        tokio::task::spawn_blocking(move || {
+            crate::fs_secure::ensure_secret_perms(&key_output_owned)
+        })
+        .await
+        .context("ensure_secret_perms task panicked")?
+        .with_context(|| format!("failed to re-assert 0600 on {key_display}"))?;
+    } else {
         let force = ctx.force;
-        let key_display = ctx.key_output.display().to_string();
         tokio::task::spawn_blocking(move || {
             crate::fs_secure::write_secret_file(
                 &key_output_owned,

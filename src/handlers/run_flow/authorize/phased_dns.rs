@@ -152,7 +152,7 @@ pub(super) async fn run_phased_dns(
             token,
             txt_name,
             txt_value,
-            cleanup_handle,
+            cleanup_handle: Some(cleanup_handle),
         });
     }
 
@@ -373,7 +373,7 @@ pub(super) async fn run_phased_dns(
         }
 
         // Phase 5: Cleanup all DNS records
-        for p in &pending {
+        for p in &mut pending {
             info!(
                 "Calling DNS hook (cleanup): {} for {}",
                 hook.display(),
@@ -387,7 +387,9 @@ pub(super) async fn run_phased_dns(
                 ctx.cli.unsafe_hooks,
             )
             .await;
-            p.cleanup_handle.complete();
+            if let Some(handle) = p.cleanup_handle.take() {
+                handle.complete();
+            }
         }
     }
     Ok(())

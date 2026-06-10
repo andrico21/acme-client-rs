@@ -62,8 +62,10 @@ pub struct CleanupHandle {
 
 impl CleanupHandle {
     /// De-register this action: the happy path already cleaned the resource, so
-    /// a later SIGINT must not re-run the hook. Idempotent.
-    pub fn complete(&self) {
+    /// a later SIGINT must not re-run the hook. Consuming `self` makes
+    /// double-complete a compile error and prevents `let _ = register(...)`
+    /// misuse from silently dropping the handle without firing cleanup.
+    pub fn complete(self) {
         let mut guard = self.registry.lock_recover();
         guard.actions.retain(|(id, _)| *id != self.id);
     }
