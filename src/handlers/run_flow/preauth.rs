@@ -133,9 +133,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(ctx.dns_checker().await?, txt_name.as_str(), &txt_value)
-                            .await?
-                        {
+                        if dns_txt_check(ctx.dns_checker().await?, &txt_name, &txt_value).await? {
                             found = true;
                             break;
                         }
@@ -237,9 +235,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     let mut found = false;
                     while std::time::Instant::now() < deadline {
-                        if dns_txt_check(ctx.dns_checker().await?, txt_name.as_str(), &txt_value)
-                            .await?
-                        {
+                        if dns_txt_check(ctx.dns_checker().await?, &txt_name, &txt_value).await? {
                             found = true;
                             break;
                         }

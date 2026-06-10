@@ -135,7 +135,7 @@ pub(super) async fn provision_dns01(
     }
 
     if let Some(timeout_secs) = ctx.dns_wait {
-        wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
+        wait_for_dns_propagation(ctx, &txt_name, &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         // Interactive: wait for Enter
         outln!("Press Enter once the record has propagated...");
@@ -213,7 +213,7 @@ pub(super) async fn provision_dns_persist01(
     }
 
     if let Some(timeout_secs) = ctx.dns_wait {
-        wait_for_dns_propagation(ctx, txt_name.as_str(), &txt_value, timeout_secs).await?;
+        wait_for_dns_propagation(ctx, &txt_name, &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         outln!("Press Enter once the record has propagated...");
         let _ =
@@ -281,7 +281,7 @@ pub(super) async fn provision_tlsalpn01(
 // Dropping aborts the wait with no side effects.
 async fn wait_for_dns_propagation(
     ctx: &RunContext<'_>,
-    txt_name: &str,
+    txt_name: &crate::types::DnsName,
     txt_value: &str,
     timeout_secs: u64,
 ) -> Result<()> {

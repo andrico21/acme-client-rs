@@ -80,8 +80,9 @@ impl DnsChecker {
 
     /// Return true iff any TXT record at `name` exactly matches `expected`.
     // cancel-safe: single DNS TXT lookup, byte-exact comparison. Pure read.
-    pub async fn txt_matches(&self, name: &str, expected: &str) -> Result<bool> {
-        let fqdn = Name::from_str(name).with_context(|| format!("invalid DNS name: {name}"))?;
+    pub async fn txt_matches(&self, name: &crate::types::DnsName, expected: &str) -> Result<bool> {
+        let fqdn =
+            Name::from_str(name.as_str()).with_context(|| format!("invalid DNS name: {name}"))?;
 
         let resolver: Arc<TokioResolver> = match self.mode {
             DnsCheckMode::System | DnsCheckMode::Cached => Arc::clone(&self.bootstrap),
@@ -266,10 +267,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_name_returns_error() -> anyhow::Result<()> {
-        let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
-        let err = checker.txt_matches("foo..example.com", "anything").await;
-        assert!(err.is_err(), "expected error for malformed DNS name");
+    async fn malformed_name_rejected_at_parse() -> anyhow::Result<()> {
+        assert!(crate::types::DnsName::parse("foo..example.com").is_err());
         Ok(())
     }
 
@@ -278,7 +277,8 @@ mod tests {
     async fn smoke_cached_mode_finds_real_txt() -> anyhow::Result<()> {
         let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
-        let found = checker.txt_matches("google.com", expected).await?;
+        let name = crate::types::DnsName::parse("google.com").expect("google.com is valid");
+        let found = checker.txt_matches(&name, expected).await?;
         assert!(found, "expected to find Google's SPF TXT record");
         Ok(())
     }
@@ -288,7 +288,8 @@ mod tests {
     async fn smoke_authoritative_mode_finds_real_txt() -> anyhow::Result<()> {
         let checker = DnsChecker::new(DnsCheckMode::Authoritative, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
-        let found = checker.txt_matches("google.com", expected).await?;
+        let name = crate::types::DnsName::parse("google.com").expect("google.com is valid");
+        let found = checker.txt_matches(&name, expected).await?;
         assert!(
             found,
             "expected to find Google's SPF TXT record via authoritative NS"
@@ -302,7 +303,8 @@ mod tests {
         let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         // Substring of the real SPF record — old `dig | contains` impl would
         // falsely return true. Exact-match must reject it.
-        let found = checker.txt_matches("google.com", "v=spf1").await?;
+        let name = crate::types::DnsName::parse("google.com").expect("google.com is valid");
+        let found = checker.txt_matches(&name, "v=spf1").await?;
         assert!(
             !found,
             "exact match must NOT accept a substring of a real TXT record"

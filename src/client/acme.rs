@@ -77,7 +77,7 @@ struct Transport {
     http: reqwest::Client,
     account_key: AccountKey,
     nonce: Option<String>,
-    account_url: Option<String>,
+    account_url: Option<Url>,
     insecure: bool,
     allow_private: bool,
 }
@@ -195,7 +195,7 @@ impl Transport {
         for attempt in 0u8..2 {
             let nonce = self.get_nonce(new_nonce).await?;
 
-            let body = match (mode, self.account_url.as_deref()) {
+            let body = match (mode, self.account_url.as_ref().map(Url::as_str)) {
                 (SigningMode::ForceJwk, _) | (SigningMode::Auto, None) => self
                     .account_key
                     .sign_with_jwk(payload, &nonce, url_str)
@@ -316,12 +316,12 @@ impl AcmeClient {
 
     // ── Accessors ───────────────────────────────────────────────────────
 
-    pub fn set_account_url(&mut self, url: impl Into<String>) {
-        self.transport.account_url = Some(url.into());
+    pub fn set_account_url(&mut self, url: Url) {
+        self.transport.account_url = Some(url);
     }
 
     pub fn account_url(&self) -> Option<&str> {
-        self.transport.account_url.as_deref()
+        self.transport.account_url.as_ref().map(Url::as_str)
     }
 
     pub fn account_key(&self) -> &AccountKey {
@@ -392,7 +392,7 @@ impl AcmeClient {
             resp.validated_location(tls, net)?
         };
         info!("Account URL: {account_url}");
-        self.transport.account_url = Some(account_url.to_string());
+        self.transport.account_url = Some(account_url);
 
         resp.json()
     }
@@ -403,10 +403,8 @@ impl AcmeClient {
         let url: Url = self
             .transport
             .account_url
-            .as_deref()
-            .context("account URL not set - create an account first")?
-            .parse()
-            .context("stored account URL is not a valid URL")?;
+            .clone()
+            .context("account URL not set - create an account first")?;
         info!("Deactivating account: {url}");
 
         let payload = serde_json::to_string(&DeactivateAccountRequest {
@@ -585,7 +583,8 @@ impl AcmeClient {
         let account_url = self
             .transport
             .account_url
-            .as_deref()
+            .as_ref()
+            .map(Url::as_str)
             .context("account URL not set - create an account first")?;
 
         info!("Rolling over account key (key-change)");
@@ -697,7 +696,7 @@ impl AcmeClient {
         let mut joined = base_url.clone();
         joined
             .path_segments_mut()
-            .map_err(|()| anyhow::anyhow!("renewalInfo URL is cannot-be-base"))?
+            .map_err(|()| anyhow::anyhow!("renewalInfo URL is a cannot-be-a-base URL"))?
             .push(&cert_id);
         info!("Fetching ARI renewal info: {joined}");
 

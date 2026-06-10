@@ -71,7 +71,7 @@ pub(super) fn emit_result(
 // cancel-safe: single DNS lookup; pure read.
 pub(super) async fn dns_txt_check(
     checker: &DnsChecker,
-    name: &str,
+    name: &crate::types::DnsName,
     expected: &str,
 ) -> Result<bool> {
     checker.txt_matches(name, expected).await

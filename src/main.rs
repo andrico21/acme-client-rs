@@ -19,7 +19,7 @@ mod jws;
 mod output;
 mod types;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches};
 use tracing::{error, info};
 
@@ -47,6 +47,10 @@ async fn main() {
         )
         .init();
 
+    // Keep the parsed `ArgMatches` alive: `apply_config` (cli_config.rs) and
+    // `show-config` need `matches.value_source(...)` to distinguish CLI / env /
+    // default provenance. Collapsing this to `Cli::parse()` would discard that
+    // source metadata and silently break config-mode precedence.
     let matches = Cli::command().get_matches();
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
 
@@ -240,7 +244,7 @@ async fn run(
                 !args.domains.is_empty(),
                 "at least one domain is required (pass on CLI or set [run].domains in config)"
             );
-            cmd_run(&cli, args, cleanup_registry).await
+            cmd_run(&cli, args.as_ref(), cleanup_registry).await
         }
     }
 }
@@ -272,7 +276,8 @@ pub(crate) async fn build_client(cli: &Cli) -> Result<AcmeClient> {
     let mut client = AcmeClient::new(&cli.directory, key, tls, cli.connect_timeout, net).await?;
     if let Some(ref url) = cli.account_url {
         client::validate_acme_url(url, tls, net)?;
-        client.set_account_url(url.as_str());
+        let parsed: url::Url = url.parse().context("--account-url is not a valid URL")?;
+        client.set_account_url(parsed);
     }
     Ok(client)
 }

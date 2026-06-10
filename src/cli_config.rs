@@ -257,6 +257,7 @@ fn apply_run(
     let Commands::Run(args) = &mut cli.command else {
         return Ok(());
     };
+    let args = args.as_mut();
 
     if let Some((_, sub_matches)) = matches.subcommand() {
         use clap::parser::ValueSource;

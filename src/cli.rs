@@ -160,7 +160,6 @@ pub(crate) struct Cli {
 }
 
 #[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)]
 pub(crate) enum Commands {
     /// Generate a self-documented TOML config file template
     #[command(after_long_help = "\
@@ -574,7 +573,7 @@ Examples:
     --on-challenge-ready ./reload-nginx.sh \\
     --on-cert-issued ./deploy-cert.sh \\
     example.com")]
-    Run(RunArgs),
+    Run(Box<RunArgs>),
 }
 
 /// Flattened argument struct for the `run` subcommand.

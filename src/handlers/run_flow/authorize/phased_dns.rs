@@ -187,7 +187,7 @@ pub(super) async fn run_phased_dns(
                     let deadline =
                         std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
                     while std::time::Instant::now() < deadline {
-                        match dns_txt_check(&checker, name.as_str(), &value).await {
+                        match dns_txt_check(&checker, &name, &value).await {
                             Ok(true) => return Ok((domain, true)),
                             #[allow(clippy::match_same_arms)]
                             Ok(false) => {}
