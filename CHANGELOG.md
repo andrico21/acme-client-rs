@@ -10,6 +10,21 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed transitive dependencies via `cargo update`: `http` 1.4.1 →
+  1.4.2, `js-sys` 0.3.99 → 0.3.100, `regex-syntax` 0.8.10 → 0.8.11,
+  `uuid` 1.23.2 → 1.23.3, `wasm-bindgen` (and `-futures`, `-macro`,
+  `-macro-support`, `-shared`) 0.2.122 → 0.2.123 / 0.4.72 → 0.4.73,
+  `web-sys` 0.3.99 → 0.3.100, `zerocopy` (and `zerocopy-derive`) 0.8.50
+  → 0.8.52. No direct dependency bumps; all top-level pins in
+  `Cargo.toml` were already at the latest published version of their
+  pinned major. SemVer-incompatible upgrades to `hmac` 0.13, `rand_core`
+  0.10, `sha2` 0.11, and `crypto-common` 0.1.7 are deferred — the
+  RustCrypto stack used here (`ecdsa`, `p256`/`p384`/`p521`, `rsa`,
+  `pkcs8`, `ed25519-dalek`, `rcgen`, `scrypt`) still pins the old
+  majors, so bumping in isolation would break the build.
+
 ## [2.2.4] - 2026-06-04
 
 ### Changed
