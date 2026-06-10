@@ -141,7 +141,7 @@ pub mod http01 {
 
     /// 404 response for non-matching paths. Static — no per-connection allocation.
     /// Security: no `Server` header to avoid identifying the ACME client.
-    const NOT_FOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+    const NOT_FOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store, max-age=0\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
 
     /// Serve a single accepted TCP connection: read one request, reply with
     /// the key-authorization body when the path matches, else 404. Errors
@@ -187,6 +187,8 @@ pub mod http01 {
                  Content-Type: application/octet-stream\r\n\
                  Content-Length: {}\r\n\
                  X-Content-Type-Options: nosniff\r\n\
+                 Cache-Control: no-store, max-age=0\r\n\
+                 Referrer-Policy: no-referrer\r\n\
                  Connection: close\r\n\r\n{}",
                 auth.len(),
                 auth
@@ -554,5 +556,69 @@ mod tests {
         assert!(super::dns_persist01::print_instructions(&domain, &bad, uri, None, None).is_err());
         let ok = vec!["ca.example.org".to_string()];
         assert!(super::dns_persist01::print_instructions(&domain, &ok, uri, None, None).is_ok());
+    }
+
+    async fn http01_roundtrip(request: &str) -> anyhow::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::http01::serve_one_connection(
+                stream,
+                peer,
+                "token.thumbprint",
+                "/.well-known/acme-challenge/token",
+            )
+            .await;
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await?;
+        client.write_all(request.as_bytes()).await?;
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).await?;
+        server.await?;
+        Ok(resp)
+    }
+
+    #[tokio::test]
+    async fn w10_http01_200_response_carries_security_headers() -> anyhow::Result<()> {
+        let resp =
+            http01_roundtrip("GET /.well-known/acme-challenge/token HTTP/1.1\r\n\r\n").await?;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(
+            resp.contains("X-Content-Type-Options: nosniff"),
+            "got: {resp}"
+        );
+        assert!(
+            resp.contains("Cache-Control: no-store, max-age=0"),
+            "got: {resp}"
+        );
+        assert!(resp.contains("Referrer-Policy: no-referrer"), "got: {resp}");
+        assert!(
+            !resp.contains("Server:"),
+            "fingerprint header leaked: {resp}"
+        );
+        assert!(resp.ends_with("token.thumbprint"), "got: {resp}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn w10_http01_404_response_carries_security_headers() -> anyhow::Result<()> {
+        let resp = http01_roundtrip("GET /other HTTP/1.1\r\n\r\n").await?;
+        assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "got: {resp}");
+        assert!(
+            resp.contains("X-Content-Type-Options: nosniff"),
+            "got: {resp}"
+        );
+        assert!(
+            resp.contains("Cache-Control: no-store, max-age=0"),
+            "got: {resp}"
+        );
+        assert!(resp.contains("Referrer-Policy: no-referrer"), "got: {resp}");
+        assert!(
+            !resp.contains("token.thumbprint"),
+            "key auth leaked on 404: {resp}"
+        );
+        Ok(())
     }
 }
