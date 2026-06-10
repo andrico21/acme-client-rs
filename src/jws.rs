@@ -479,9 +479,18 @@ impl AccountKey {
     /// Build the inner JWS for External Account Binding (RFC 8555 §7.3.4).
     ///
     /// The payload is the account's public JWK, signed with HMAC-SHA256
-    /// using the EAB key provided by the CA.
-    pub fn sign_eab(&self, eab_kid: &str, hmac_key: &[u8], url: &str) -> Result<serde_json::Value> {
+    /// using the EAB key provided by the CA. The HMAC key is wrapped in a
+    /// [`secrecy::SecretSlice`] so the raw key bytes are only exposed inside
+    /// this function (right before being fed to `HmacSha256::new_from_slice`)
+    /// and are zeroized on drop.
+    pub fn sign_eab(
+        &self,
+        eab_kid: &str,
+        hmac_key: &secrecy::SecretSlice<u8>,
+        url: &str,
+    ) -> Result<serde_json::Value> {
         use hmac::{Hmac, Mac};
+        use secrecy::ExposeSecret;
         type HmacSha256 = Hmac<Sha256>;
 
         let header = serde_json::json!({
@@ -493,7 +502,8 @@ impl AccountKey {
         let payload_b64 = URL_SAFE_NO_PAD.encode(serde_json::to_string(&self.jwk()?)?.as_bytes());
         let signing_input = format!("{protected}.{payload_b64}");
 
-        let mut mac = HmacSha256::new_from_slice(hmac_key).context("invalid HMAC key length")?;
+        let mut mac = HmacSha256::new_from_slice(hmac_key.expose_secret())
+            .context("invalid HMAC key length")?;
         mac.update(signing_input.as_bytes());
         let sig = mac.finalize().into_bytes();
         let sig_b64 = URL_SAFE_NO_PAD.encode(sig);
@@ -526,5 +536,67 @@ impl AccountKey {
         };
 
         serde_json::to_string(&jws).context("failed to serialize JWS")
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
+mod tests {
+    use super::*;
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use hmac::{Hmac, Mac};
+    use secrecy::SecretSlice;
+
+    type HmacSha256 = Hmac<Sha256>;
+
+    #[test]
+    fn sign_eab_accepts_secret_slice_and_produces_verifiable_hs256() {
+        let account_key = AccountKey::generate(KeyAlgorithm::Es256).expect("generate ES256 key");
+        let raw_hmac = vec![0x42_u8; 32];
+        let hmac_key = SecretSlice::from(raw_hmac.clone());
+        let url = "https://acme.example/acme/new-account";
+        let kid = "kid-eab-1";
+
+        let jws = account_key
+            .sign_eab(kid, &hmac_key, url)
+            .expect("sign_eab succeeds");
+
+        let protected = jws["protected"].as_str().expect("protected b64u");
+        let payload = jws["payload"].as_str().expect("payload b64u");
+        let signature = jws["signature"].as_str().expect("signature b64u");
+
+        let signing_input = format!("{protected}.{payload}");
+        let mut mac =
+            HmacSha256::new_from_slice(&raw_hmac).expect("hmac construction with 32-byte key");
+        mac.update(signing_input.as_bytes());
+        let expected = mac.finalize().into_bytes();
+        let expected_b64 = URL_SAFE_NO_PAD.encode(expected);
+        assert_eq!(
+            signature, expected_b64,
+            "sign_eab HS256 signature must match independent HMAC of protected.payload"
+        );
+
+        let header_json = URL_SAFE_NO_PAD
+            .decode(protected)
+            .expect("decode protected b64u");
+        let header: serde_json::Value =
+            serde_json::from_slice(&header_json).expect("parse protected header");
+        assert_eq!(header["alg"], "HS256");
+        assert_eq!(header["kid"], kid);
+        assert_eq!(header["url"], url);
+    }
+
+    #[test]
+    fn sign_eab_accepts_variable_length_hmac_keys() {
+        let account_key = AccountKey::generate(KeyAlgorithm::Es256).expect("generate ES256 key");
+        let url = "https://acme.example/acme/new-account";
+        for len in [16_usize, 32, 64, 128] {
+            let raw = vec![0xA5_u8; len];
+            let key = SecretSlice::from(raw);
+            account_key
+                .sign_eab("kid-len", &key, url)
+                .unwrap_or_else(|err| panic!("sign_eab failed for key length {len}: {err:#}"));
+        }
     }
 }

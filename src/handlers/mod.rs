@@ -80,10 +80,14 @@ pub(super) async fn dns_txt_check(
 // ── EAB helper ──────────────────────────────────────────────────────────────
 
 /// Decode the base64url EAB HMAC key and return `(kid, decoded_key)`.
+///
+/// The decoded HMAC bytes are wrapped in [`secrecy::SecretSlice`] immediately
+/// after base64url decode so callers never hold a plain `Vec<u8>`; the only
+/// sanctioned exposure point is [`crate::jws::AccountKey::sign_eab`].
 pub(super) fn parse_eab(
     kid: Option<&str>,
     hmac_key_b64: Option<&str>,
-) -> Result<Option<(String, secrecy::SecretBox<Vec<u8>>)>> {
+) -> Result<Option<(String, secrecy::SecretSlice<u8>)>> {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
@@ -94,7 +98,7 @@ pub(super) fn parse_eab(
                 .context("--eab-hmac-key is not valid base64url")?;
             Ok(Some((
                 kid.to_string(),
-                secrecy::SecretBox::new(Box::new(key_bytes)),
+                secrecy::SecretSlice::from(key_bytes),
             )))
         }
         (None, None) => Ok(None),

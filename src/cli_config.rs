@@ -401,11 +401,7 @@ fn apply_run(
         args.eab_kid.clone_from(&cfg_run.eab_kid);
     }
     if args.eab_hmac_key.is_none() {
-        use secrecy::ExposeSecret;
-        args.eab_hmac_key = cfg_run
-            .eab_hmac_key
-            .as_ref()
-            .map(|s| s.expose_secret().to_string());
+        args.eab_hmac_key.clone_from(&cfg_run.eab_hmac_key);
     }
 
     Ok(())
@@ -448,11 +444,7 @@ fn apply_account(cli: &mut Cli, cfg_acct: &config::AccountConfig) {
         eab_kid.clone_from(&cfg_acct.eab_kid);
     }
     if eab_hmac_key.is_none() {
-        use secrecy::ExposeSecret;
-        *eab_hmac_key = cfg_acct
-            .eab_hmac_key
-            .as_ref()
-            .map(|s| s.expose_secret().to_string());
+        eab_hmac_key.clone_from(&cfg_acct.eab_hmac_key);
     }
 }
 

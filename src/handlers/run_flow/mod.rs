@@ -117,18 +117,12 @@ impl<'a> RunContext<'a> {
             key_output: &args.key_output,
             reuse_key: args.reuse_key.as_deref(),
             days: args.days,
-            key_password: args
-                .key_password
-                .as_ref()
-                .map(|s| secrecy::SecretString::from(s.clone())),
+            key_password: args.key_password.clone(),
             key_password_file: args.key_password_file.as_deref(),
             on_challenge_ready: args.on_challenge_ready.as_deref(),
             on_cert_issued: args.on_cert_issued.as_deref(),
             eab_kid: args.eab_kid.as_deref(),
-            eab_hmac_key: args
-                .eab_hmac_key
-                .as_ref()
-                .map(|s| secrecy::SecretString::from(s.clone())),
+            eab_hmac_key: args.eab_hmac_key.clone(),
             pre_authorize: args.pre_authorize,
             ari: args.ari,
             reissue_on_mismatch: args.reissue_on_mismatch,

@@ -341,7 +341,7 @@ impl AcmeClient {
         &mut self,
         contact: Option<Vec<String>>,
         terms_of_service_agreed: bool,
-        eab: Option<(&str, &[u8])>,
+        eab: Option<(&str, &secrecy::SecretSlice<u8>)>,
     ) -> Result<Account> {
         info!("Creating/looking-up ACME account");
 

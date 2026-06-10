@@ -235,8 +235,13 @@ Examples:
         #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
         eab_kid: Option<String>,
         /// EAB HMAC key (base64url-encoded, from the CA)
-        #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
-        eab_hmac_key: Option<String>,
+        #[arg(
+            long,
+            requires = "eab_kid",
+            env = "ACME_EAB_HMAC_KEY",
+            value_parser = parse_secret_string
+        )]
+        eab_hmac_key: Option<secrecy::SecretString>,
     },
 
     /// Request a new certificate order
@@ -369,8 +374,12 @@ Examples:
         #[arg(long)]
         key_output: PathBuf,
         /// Password to encrypt the private key (visible in process list - prefer --key-password-file)
-        #[arg(long, conflicts_with = "key_password_file")]
-        key_password: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "key_password_file",
+            value_parser = parse_secret_string
+        )]
+        key_password: Option<secrecy::SecretString>,
         /// Read the private key encryption password from a file (first line, trailing newline stripped)
         #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
         key_password_file: Option<PathBuf>,
@@ -440,9 +449,10 @@ Examples:
         #[arg(
             long,
             env = "ACME_NEW_KEY_PASSWORD",
-            conflicts_with = "new_key_password_file"
+            conflicts_with = "new_key_password_file",
+            value_parser = parse_secret_string
         )]
-        new_key_password: Option<String>,
+        new_key_password: Option<secrecy::SecretString>,
 
         /// Read the new account key decryption password from a file (first non-empty line)
         #[arg(
@@ -615,8 +625,8 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     pub(crate) days: Option<u32>,
     /// Password to encrypt the private key (visible in process list - prefer --key-password-file)
-    #[arg(long, conflicts_with = "key_password_file")]
-    pub(crate) key_password: Option<String>,
+    #[arg(long, conflicts_with = "key_password_file", value_parser = parse_secret_string)]
+    pub(crate) key_password: Option<secrecy::SecretString>,
     /// Read the private key encryption password from a file (first line, trailing newline stripped)
     #[arg(long, conflicts_with = "key_password", env = "ACME_KEY_PASSWORD_FILE")]
     pub(crate) key_password_file: Option<PathBuf>,
@@ -630,8 +640,8 @@ pub(crate) struct RunArgs {
     #[arg(long, requires = "eab_hmac_key", env = "ACME_EAB_KID")]
     pub(crate) eab_kid: Option<String>,
     /// EAB HMAC key (base64url-encoded, from the CA)
-    #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY")]
-    pub(crate) eab_hmac_key: Option<String>,
+    #[arg(long, requires = "eab_kid", env = "ACME_EAB_HMAC_KEY", value_parser = parse_secret_string)]
+    pub(crate) eab_hmac_key: Option<secrecy::SecretString>,
     /// Pre-authorize identifiers via newAuthz before creating the order
     #[arg(long)]
     pub(crate) pre_authorize: bool,
@@ -686,32 +696,19 @@ fn parse_secret_string(raw: &str) -> Result<secrecy::SecretString, std::convert:
     Ok(secrecy::SecretString::from(raw.to_string()))
 }
 
-/// Partially masks a secret for debug output: keeps the first two and last two
-/// characters, replacing the middle with an ellipsis. Values of four or fewer
-/// characters are fully masked so short secrets cannot be reconstructed.
-fn mask_secret(value: &str) -> String {
-    let chars: Vec<char> = value.chars().collect();
-    if chars.len() <= 4 {
-        return "****".to_string();
-    }
-    let first: String = chars.iter().take(2).collect();
-    let last: String = chars
-        .iter()
-        .rev()
-        .take(2)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("{first}…{last}")
-}
-
-/// Hand-written `Debug` so the private-key encryption password is never shown
-/// in full in logs or panic output (only a first-two/last-two mask). The EAB
-/// HMAC key is intentionally shown in full: operators rely on its visibility to
-/// confirm the External Account Binding credential when debugging onboarding.
-/// All fields are destructured so a newly added field forces a compile error
-/// here rather than silently escaping the redaction review.
+/// Hand-written `Debug` so every secret-bearing field is rendered through
+/// `secrecy::SecretString`'s own redacting `Debug` (`SecretBox<str>([REDACTED])`)
+/// rather than as plaintext. The supported way to inspect EAB credentials and
+/// other secrets is `show-config --show-secrets` (handlers/config.rs), which
+/// reads from the config-layer `SecretString` directly.
+///
+/// All fields are destructured so adding a new field forces a compile error
+/// here rather than silently bypassing the redaction review.
+///
+/// Caveat: this only blocks accidental Debug/Display rendering. clap's
+/// `ArgMatches` retains raw argv/env copies internally, so the goal is "no
+/// rendered leak + minimized plaintext copies", NOT perfect zeroization of
+/// process memory.
 impl std::fmt::Debug for RunArgs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
@@ -760,7 +757,7 @@ impl std::fmt::Debug for RunArgs {
             .field("key_output", key_output)
             .field("reuse_key", reuse_key)
             .field("days", days)
-            .field("key_password", &key_password.as_deref().map(mask_secret))
+            .field("key_password", key_password)
             .field("key_password_file", key_password_file)
             .field("on_challenge_ready", on_challenge_ready)
             .field("on_cert_issued", on_cert_issued)
@@ -864,7 +861,7 @@ mod tests {
     }
 
     #[test]
-    fn m5_run_args_debug_masks_password_shows_eab() {
+    fn m5_run_args_debug_redacts_all_secrets() {
         let cli = Cli::try_parse_from([
             "acme",
             "run",
@@ -886,20 +883,9 @@ mod tests {
             "raw password leaked: {rendered}"
         );
         assert!(
-            rendered.contains("su…pw"),
-            "password not masked: {rendered}"
+            !rendered.contains("visible-hmac-value"),
+            "raw EAB HMAC key leaked: {rendered}"
         );
-        assert!(
-            rendered.contains("visible-hmac-value"),
-            "eab_hmac_key must be shown in full: {rendered}"
-        );
-    }
-
-    #[test]
-    fn m5_mask_secret_fully_masks_short_values() {
-        assert_eq!(mask_secret("abcd"), "****");
-        assert_eq!(mask_secret(""), "****");
-        assert_eq!(mask_secret("abcde"), "ab…de");
     }
 
     #[test]

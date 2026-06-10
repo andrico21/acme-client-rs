@@ -94,10 +94,7 @@ pub(crate) async fn cmd_account(
             .as_ref()
             .map(<secrecy::SecretString as secrecy::ExposeSecret<str>>::expose_secret),
     )?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| {
-        use secrecy::ExposeSecret;
-        (kid.as_str(), key.expose_secret().as_slice())
-    });
+    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key));
     let account = client.create_account(contact, agree_tos, eab_ref).await?;
     super::emit_result(
         cli,
@@ -141,15 +138,18 @@ pub(crate) async fn cmd_deactivate(cli: &Cli) -> Result<()> {
 pub(crate) async fn cmd_key_rollover(
     cli: &Cli,
     new_key_path: &Path,
-    new_key_password: Option<&str>,
+    new_key_password: Option<secrecy::SecretString>,
     new_key_password_file: Option<&std::path::Path>,
 ) -> Result<()> {
-    let pw = resolve_account_key_password(new_key_password, new_key_password_file).await?;
-    let new_key = load_account_key_with_password(
-        new_key_path,
-        pw.as_ref().map(secrecy::ExposeSecret::expose_secret),
+    use secrecy::ExposeSecret;
+    let pw = resolve_account_key_password(
+        new_key_password.as_ref().map(ExposeSecret::expose_secret),
+        new_key_password_file,
     )
     .await?;
+    let new_key =
+        load_account_key_with_password(new_key_path, pw.as_ref().map(ExposeSecret::expose_secret))
+            .await?;
     let mut client = build_client(cli).await?;
 
     // key-change requires KID signing; look up account if URL not provided

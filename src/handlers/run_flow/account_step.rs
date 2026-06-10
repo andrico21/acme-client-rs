@@ -28,10 +28,7 @@ pub(super) async fn create_or_lookup(ctx: &mut RunContext<'_>) -> Result<AcmeCli
             .as_ref()
             .map(<secrecy::SecretString as secrecy::ExposeSecret<str>>::expose_secret),
     )?;
-    let eab_ref = eab.as_ref().map(|(kid, key)| {
-        use secrecy::ExposeSecret;
-        (kid.as_str(), key.expose_secret().as_slice())
-    });
+    let eab_ref = eab.as_ref().map(|(kid, key)| (kid.as_str(), key));
     let account = client.create_account(contact_list, true, eab_ref).await?;
     if !ctx.json && !ctx.silent {
         outln!("Account status: {}", account.status);

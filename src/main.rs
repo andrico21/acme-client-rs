@@ -161,9 +161,7 @@ async fn run(
                 contact.clone(),
                 *agree_tos,
                 eab_kid.as_deref(),
-                eab_hmac_key
-                    .as_ref()
-                    .map(|s| secrecy::SecretString::from(s.clone())),
+                eab_hmac_key.clone(),
             )
             .await
         }
@@ -208,9 +206,7 @@ async fn run(
                 domains,
                 *cert_key_algorithm,
                 key_output,
-                key_password
-                    .as_ref()
-                    .map(|s| secrecy::SecretString::from(s.clone())),
+                key_password.clone(),
                 key_password_file.as_deref(),
                 *force,
             )
@@ -227,7 +223,7 @@ async fn run(
             cmd_key_rollover(
                 &cli,
                 new_key,
-                new_key_password.as_deref(),
+                new_key_password.clone(),
                 new_key_password_file.as_deref(),
             )
             .await
