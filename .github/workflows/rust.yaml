@@ -26,6 +26,15 @@ jobs:
       - name: Check advisories, licenses, bans & sources
         run: cargo deny check
 
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      # --ignore mirrors the documented RUSTSEC-2023-0071 exception in
+      # deny.toml (rsa Marvin attack: signing only, no decryption, no fixed
+      # version upstream). Keep both files in sync when revisiting.
+      - name: Audit RustSec advisories
+        run: cargo audit --ignore RUSTSEC-2023-0071
+
   lint:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
@@ -41,7 +50,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Test-script output-safety lint
         run: bash tests/lint-output-safety.sh
