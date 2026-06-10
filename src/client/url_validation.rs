@@ -47,6 +47,9 @@ pub fn validate_acme_url(url: &str, tls: TlsPolicy, net: NetworkPolicy) -> Resul
         bail!("URL must not contain userinfo (user:pass@host); refusing {url:?}");
     }
     let host = parsed.host_str().unwrap_or("");
+    // Invariant: IPv6 zone-id hosts (`[fe80::1%25eth0]`, raw-`%` form) cannot reach
+    // this bracket-trim path — `url::Url::parse` rejects them with "invalid IPv6
+    // address" before validate_acme_url runs, so the trim is a pure literal-IP shape.
     let host_ip: Option<IpAddr> = host
         .trim_start_matches('[')
         .trim_end_matches(']')
@@ -342,6 +345,17 @@ mod tests {
             )
             .is_ok()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn zone_id_urls_are_rejected_at_parse() -> anyhow::Result<()> {
+        for url in ["https://[fe80::1%25eth0]/dir", "https://[fe80::1%eth0]/dir"] {
+            assert!(
+                validate_acme_url(url, TlsPolicy::RequireHttps, NetworkPolicy::PublicOnly).is_err(),
+                "{url} should be rejected at Url::parse"
+            );
+        }
         Ok(())
     }
 

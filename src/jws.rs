@@ -68,16 +68,48 @@ pub struct AccountKey {
 
 // ── JWS serialization helpers ───────────────────────────────────────────────
 
+/// Account authentication for the JWS protected header (RFC 8555 §6.2).
+///
+/// Exactly one of `jwk` (pre-account requests such as `newAccount`) or
+/// `kid` (all requests after account creation) must be present; the enum
+/// makes the both-set / neither-set states unrepresentable.
+enum HeaderAuth<'a> {
+    Jwk(serde_json::Value),
+    Kid(&'a str),
+}
+
 /// JWS Protected Header (RFC 8555 §6.2).
-#[derive(Serialize)]
 struct ProtectedHeader<'a> {
     alg: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    jwk: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    kid: Option<&'a str>,
+    auth: HeaderAuth<'a>,
     nonce: &'a str,
     url: &'a str,
+}
+
+impl Serialize for ProtectedHeader<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        // Destructure so adding a field forces this impl to be updated.
+        let Self {
+            alg,
+            auth,
+            nonce,
+            url,
+        } = self;
+        // Key order matches the previous derive output: alg, (jwk|kid), nonce, url.
+        let mut s = serializer.serialize_struct("ProtectedHeader", 4)?;
+        s.serialize_field("alg", alg)?;
+        match auth {
+            HeaderAuth::Jwk(jwk) => s.serialize_field("jwk", jwk)?,
+            HeaderAuth::Kid(kid) => s.serialize_field("kid", kid)?,
+        }
+        s.serialize_field("nonce", nonce)?;
+        s.serialize_field("url", url)?;
+        s.end()
+    }
 }
 
 /// JWS Flattened JSON Serialization (RFC 7515 §7.2.2).
@@ -384,11 +416,11 @@ impl AccountKey {
     ///
     /// Per RFC 8555 §6.2 this is used for `newAccount` and for `revokeCert`
     /// when signing with the certificate key.
+    // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
     pub fn sign_with_jwk(&self, payload: &str, nonce: &str, url: &str) -> Result<String> {
         let header = ProtectedHeader {
             alg: self.alg(),
-            jwk: Some(self.jwk()?),
-            kid: None,
+            auth: HeaderAuth::Jwk(self.jwk()?),
             nonce,
             url,
         };
@@ -399,6 +431,7 @@ impl AccountKey {
     ///
     /// Per RFC 8555 §6.2 this is used for all requests *after* account
     /// creation.
+    // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
     pub fn sign_with_kid(
         &self,
         payload: &str,
@@ -408,8 +441,7 @@ impl AccountKey {
     ) -> Result<String> {
         let header = ProtectedHeader {
             alg: self.alg(),
-            jwk: None,
-            kid: Some(kid),
+            auth: HeaderAuth::Kid(kid),
             nonce,
             url,
         };
@@ -456,6 +488,7 @@ impl AccountKey {
     ///
     /// The inner JWS uses a protected header with `alg`, `jwk` (the NEW
     /// key's public JWK), and `url` (the key-change URL).  No `nonce` or `kid`.
+    // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
     pub fn sign_key_change_inner(&self, payload: &str, url: &str) -> Result<String> {
         let header = serde_json::json!({
             "alg": self.alg(),
@@ -483,6 +516,7 @@ impl AccountKey {
     /// [`secrecy::SecretSlice`] so the raw key bytes are only exposed inside
     /// this function (right before being fed to `HmacSha256::new_from_slice`)
     /// and are zeroized on drop.
+    // cancel-safe: synchronous pure-CPU signing, no I/O, no awaits — safe to call from cancellable contexts.
     pub fn sign_eab(
         &self,
         eab_kid: &str,
@@ -598,5 +632,30 @@ mod tests {
                 .sign_eab("kid-len", &key, url)
                 .unwrap_or_else(|err| panic!("sign_eab failed for key length {len}: {err:#}"));
         }
+    }
+
+    #[test]
+    fn protected_header_serializes_exact_key_order_for_both_variants() {
+        let jwk_header = ProtectedHeader {
+            alg: "ES256",
+            auth: HeaderAuth::Jwk(serde_json::json!({"kty": "EC"})),
+            nonce: "nonce-1",
+            url: "https://acme.example/acme/new-account",
+        };
+        assert_eq!(
+            serde_json::to_string(&jwk_header).expect("serialize jwk header"),
+            r#"{"alg":"ES256","jwk":{"kty":"EC"},"nonce":"nonce-1","url":"https://acme.example/acme/new-account"}"#,
+        );
+
+        let kid_header = ProtectedHeader {
+            alg: "ES256",
+            auth: HeaderAuth::Kid("https://acme.example/acme/acct/1"),
+            nonce: "nonce-2",
+            url: "https://acme.example/acme/order/7",
+        };
+        assert_eq!(
+            serde_json::to_string(&kid_header).expect("serialize kid header"),
+            r#"{"alg":"ES256","kid":"https://acme.example/acme/acct/1","nonce":"nonce-2","url":"https://acme.example/acme/order/7"}"#,
+        );
     }
 }

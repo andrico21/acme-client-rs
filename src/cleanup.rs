@@ -25,6 +25,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::challenge;
+use crate::defaults;
 use crate::types::DnsName;
 
 /// One unit of work the SIGINT handler will run before exit.
@@ -138,10 +139,43 @@ fn run_one(action: &CleanupAction) {
                 .env("ACME_TXT_VALUE", txt_value)
                 .env("ACME_ACTION", "cleanup");
             crate::handlers::hooks::scrub_secret_env(&mut cmd);
-            let _ = cmd.status();
+            run_hook_bounded(&mut cmd, defaults::hooks::HOOK_TIMEOUT);
         }
         CleanupAction::ServerTask(handle) => {
             handle.abort();
+        }
+    }
+}
+
+/// Spawn `cmd` and wait at most `timeout` for it to exit. If the deadline
+/// passes, kill the child and reap it; if spawn or wait fails, log and
+/// continue. Synchronous by design: this runs from the SIGINT cleanup path,
+/// which executes outside the tokio runtime after a Ctrl-C.
+fn run_hook_bounded(cmd: &mut std::process::Command, timeout: std::time::Duration) {
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("cleanup hook failed to spawn: {e}");
+            return;
+        }
+    };
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    tracing::warn!("cleanup hook exceeded timeout {timeout:?}; killing child");
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(e) => {
+                tracing::warn!("cleanup hook wait failed: {e}");
+                return;
+            }
         }
     }
 }
@@ -255,5 +289,19 @@ mod tests {
         reg.run_all_sync();
         assert!(!path.exists(), "poisoned registry must still drain");
         Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn c3_run_hook_bounded_kills_hung_hook() {
+        let start = std::time::Instant::now();
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("60");
+        run_hook_bounded(&mut cmd, std::time::Duration::from_secs(1));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(5),
+            "hung hook must be killed at the deadline, took {elapsed:?}"
+        );
     }
 }

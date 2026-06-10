@@ -174,31 +174,52 @@ pub mod http01 {
                 return;
             }
         };
-        let req = String::from_utf8_lossy(buf.get(..n).unwrap_or(&[]));
+        let Some(slice) = buf.get(..n) else {
+            tracing::warn!(
+                "HTTP-01: read length {n} exceeded buffer invariant (cap={}), dropping {addr}",
+                buf.len()
+            );
+            return;
+        };
+        let req = String::from_utf8_lossy(slice);
         // Match only the request-target on the request line, never headers or
         // body. Anything looser would serve the key authorization to probes
         // that happen to include the challenge path as a substring elsewhere.
         let request_line = req.split("\r\n").next().unwrap_or("");
         let expected_prefix = format!("GET {path} ");
-        let write_res = if request_line.starts_with(&expected_prefix) {
-            info!("HTTP-01: serving challenge response to {addr}");
-            let resp = format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: application/octet-stream\r\n\
-                 Content-Length: {}\r\n\
-                 X-Content-Type-Options: nosniff\r\n\
-                 Cache-Control: no-store, max-age=0\r\n\
-                 Referrer-Policy: no-referrer\r\n\
-                 Connection: close\r\n\r\n{}",
-                auth.len(),
-                auth
-            );
-            stream.write_all(resp.as_bytes()).await
-        } else {
-            stream.write_all(NOT_FOUND_RESPONSE).await
-        };
-        if let Err(e) = write_res {
-            tracing::debug!("HTTP-01: write to {addr} failed: {e}");
+        // Slowloris guard (write side, mirrors read-side bound at line 163):
+        // a peer that opens the TCP recv-window then stops draining must not
+        // pin a write task indefinitely. 5s is generous for any legitimate
+        // small-body response.
+        let write_res = timeout(Duration::from_secs(5), async {
+            if request_line.starts_with(&expected_prefix) {
+                info!("HTTP-01: serving challenge response to {addr}");
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\n\
+                     Content-Type: application/octet-stream\r\n\
+                     Content-Length: {}\r\n\
+                     X-Content-Type-Options: nosniff\r\n\
+                     Cache-Control: no-store, max-age=0\r\n\
+                     Referrer-Policy: no-referrer\r\n\
+                     Connection: close\r\n\r\n{}",
+                    auth.len(),
+                    auth
+                );
+                stream.write_all(resp.as_bytes()).await?;
+            } else {
+                stream.write_all(NOT_FOUND_RESPONSE).await?;
+            }
+            stream.shutdown().await
+        })
+        .await;
+        match write_res {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::debug!("HTTP-01: write to {addr} failed: {e}");
+            }
+            Err(_) => {
+                tracing::debug!("HTTP-01: write to {addr} timed out");
+            }
         }
     }
 
