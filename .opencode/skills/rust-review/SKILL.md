@@ -27,8 +27,10 @@ source - every check below references a specific section.
 Also read `README.md` from the workspace root for repository-level constraints
 (architecture rules, security posture, release profile).
 
-**Rust 1.95 (stable since 2026-04-16):** the workspace pins
-`rust-toolchain.toml` to `1.95.0`. Be aware of the new/widened clippy lints
+**Rust toolchain:** the workspace pins `rust-toolchain.toml` to `1.96.0`.
+The `(1.95)` markers below tag APIs/lints introduced in Rust 1.95
+(stable since 2026-04-16) - they all apply on 1.96 as well.
+Be aware of the new/widened clippy lints
 that fire under this workspace's `pedantic = "warn"` posture (notably
 `duration_suboptimal_units`, `unnecessary_trailing_comma`,
 `manual_checked_ops`, `manual_take`) and the stdlib APIs that replace
