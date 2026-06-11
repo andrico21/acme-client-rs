@@ -1,0 +1,223 @@
+name: Release (MIPS)
+
+# Builds the MIPS router/Entware binaries (mipsel + big-endian mips) and attaches
+# them to the SAME GitHub Release as the main Release workflow.
+#
+# WHY A SEPARATE WORKFLOW: MIPS cannot be built on the project's pinned stable
+# toolchain (no prebuilt std; Tier 3). It requires a nightly toolchain with
+# -Z build-std AND a ring-only crypto graph (aws-lc-rs/aws-lc-sys do not build
+# cleanly for these targets). Forcing that into release.yaml would mean nightly +
+# ring-only in the shared build, changing every existing leg. Instead this file is
+# fully self-contained and the main release.yaml stays byte-for-byte unchanged.
+#
+# WHY THE SOURCE IS PATCHED AT BUILD TIME: the committed repo keeps the full
+# aws-lc-rs stack on stable 1.96.0 (unchanged for all other targets). The ring-only
+# escape hatch (hickory dnssec-ring, reqwest rustls-no-provider + explicit
+# rustls{ring}) and the nightly toolchain pin are applied here, in-workflow, by a
+# drift-guarded patch script — the working tree is never mutated in git.
+#
+# Both binaries are static, soft-float, stripped MIPS32r2 ELFs suitable for
+# dropping into /opt/bin on Entware devices (Keenetic, OpenWRT, etc.).
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-mips:
+    name: Build Linux (${{ matrix.name }}, musl, static)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Little-endian: ramips MT7620/7621 — bulk of consumer routers and
+          # mainstream Keenetic. ELF Data is 2's-complement LSB.
+          - name: mipsel
+            target: mipsel-unknown-linux-musl
+            cargo_target_env: MIPSEL_UNKNOWN_LINUX_MUSL
+            xtool_image: docker.io/muslcc/x86_64:mipsel-linux-muslsf@sha256:ef600e089d5b65302f2038c85d74cac260d51529c1cf3fc6620b7f621a191c28
+            xtool_triple: mipsel-linux-muslsf
+            elf_data: 2's complement, little endian
+            artifact: acme-client-rs-linux-mipsel-musl
+          # Big-endian: ath79/lantiq older Atheros. ELF Data is 2's-complement MSB.
+          - name: mips
+            target: mips-unknown-linux-musl
+            cargo_target_env: MIPS_UNKNOWN_LINUX_MUSL
+            xtool_image: docker.io/muslcc/x86_64:mips-linux-muslsf@sha256:5023ed52b1afdaa854f81544c1c6592a7dd6a0ae7b6c59561b1deea706ee86a5
+            xtool_triple: mips-linux-muslsf
+            elf_data: 2's complement, big endian
+            artifact: acme-client-rs-linux-mips-musl
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Apply ring-only crypto patch (build-time only, drift-guarded)
+        # Switches the crypto graph to ring-only for this MIPS build, and pins the
+        # toolchain to nightly + rust-src (for -Z build-std). Each edit asserts the
+        # expected upstream line exists first, so an unnoticed Cargo.toml bump fails
+        # the build loudly instead of silently producing the wrong crypto backend.
+        run: |
+          python3 - Cargo.toml rust-toolchain.toml <<'PYEOF'
+          import sys
+          CARGO, TOOLCHAIN = sys.argv[1], sys.argv[2]
+
+          def patch(path, edits, inserts=()):
+              text = open(path, encoding="utf-8").read()
+              for old, new in edits:
+                  if old not in text:
+                      sys.exit(f"PATCH-DRIFT: expected line not found in {path}:\n  {old}")
+                  text = text.replace(old, new, 1)
+              for marker, line in inserts:
+                  if line in text:
+                      sys.exit(f"PATCH-DRIFT: insert target already present in {path}:\n  {line}")
+                  if marker not in text:
+                      sys.exit(f"PATCH-DRIFT: insert anchor not found in {path}:\n  {marker}")
+                  text = text.replace(marker, marker + "\n" + line, 1)
+              open(path, "w", encoding="utf-8").write(text)
+
+          HICKORY_OLD = 'features = ["tokio", "system-config", "dnssec-aws-lc-rs"] }'
+          HICKORY_NEW = 'features = ["tokio", "system-config", "dnssec-ring"] }'
+          REQWEST_OLD = 'reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "json"] }'
+          REQWEST_NEW = 'reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "json"] }'
+          RUSTLS_LINE = 'rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }'
+
+          patch(CARGO, edits=[(HICKORY_OLD, HICKORY_NEW), (REQWEST_OLD, REQWEST_NEW)], inserts=[(REQWEST_NEW, RUSTLS_LINE)])
+          patch(TOOLCHAIN, edits=[('channel = "1.96.0"', 'channel = "nightly"'), ('components = ["rustfmt", "clippy"]', 'components = ["rust-src"]')])
+
+          cargo = open(CARGO, encoding="utf-8").read()
+          toolchain = open(TOOLCHAIN, encoding="utf-8").read()
+          for needle, where in [(HICKORY_NEW, cargo), (REQWEST_NEW, cargo), (RUSTLS_LINE, cargo), ('channel = "nightly"', toolchain), ('components = ["rust-src"]', toolchain)]:
+              if needle not in where:
+                  sys.exit(f"PATCH-VERIFY-FAILED: {needle}")
+          print("PATCH-OK")
+          PYEOF
+
+      - name: Build combined toolchain image (rust:1-trixie + muslcc soft-float)
+        # The muslcc gcc driver locates cc1 and its sysroot via paths RELATIVE to the
+        # driver binary, so the ENTIRE toolchain tree must be copied under a single
+        # prefix (/opt/xmusl) preserving sibling layout — splitting bin from libexec
+        # breaks it with "cannot execute cc1". Host distro is immaterial to the
+        # static musl artifact; rust:1-trixie matches the project's debian13 runtime.
+        run: |
+          cat > Containerfile.mips <<DOCKEREOF
+          FROM ${{ matrix.xtool_image }} AS xtool
+
+          FROM docker.io/library/rust:1-trixie
+          COPY --from=xtool /bin                       /opt/xmusl/bin
+          COPY --from=xtool /lib                       /opt/xmusl/lib
+          COPY --from=xtool /libexec                   /opt/xmusl/libexec
+          COPY --from=xtool /include                   /opt/xmusl/include
+          COPY --from=xtool /${{ matrix.xtool_triple }} /opt/xmusl/${{ matrix.xtool_triple }}
+          COPY --from=xtool /share                     /opt/xmusl/share
+          DOCKEREOF
+          docker build -f Containerfile.mips -t mips-builder:${{ matrix.name }} .
+
+      - name: Build (cross, ${{ matrix.target }}, nightly build-std, ring-only, static)
+        # Recipe proven locally for both MIPS endians. Key flags:
+        #   -Z build-std=std,panic_abort  — Tier 3 target has no prebuilt std.
+        #   +crt-static                   — fully static (no /lib/ld-musl interp).
+        #   link-self-contained=no        — let the gcc driver own CRT resolution
+        #                                   (crt1/crti/crtn/crtbegin/crtend) via its
+        #                                   configured prefix + sysroot.
+        #   libunwind.a GROUP shim        — Rust's musl static std links -lunwind,
+        #                                   but muslcc provides the _Unwind_* ABI via
+        #                                   libgcc_eh.a (+ libgcc.a), not a standalone
+        #                                   libunwind; the script routes -lunwind there.
+        # The soft-float toolchain (muslsf) matches Rust's mipsel/mips soft-float ABI;
+        # a hard-float toolchain links but produces an ABI-mismatched binary.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            -e SCRIPT_TARGET="${{ matrix.target }}" \
+            -e CARGO_ENV_PREFIX="${{ matrix.cargo_target_env }}" \
+            -e XTOOL_TRIPLE="${{ matrix.xtool_triple }}" \
+            mips-builder:${{ matrix.name }} bash -ec '
+              set -eux
+              CC_BIN="/opt/xmusl/bin/gcc"
+              AR_BIN="/opt/xmusl/bin/ar"
+              SYSROOT="/opt/xmusl/${XTOOL_TRIPLE}"
+              GCCLIB="/opt/xmusl/lib/gcc/${XTOOL_TRIPLE}/11.2.1"
+              SYSLIB="${SYSROOT}/lib"
+
+              "$CC_BIN" -dumpmachine
+              rustup toolchain install nightly --profile minimal
+              rustup component add rust-src --toolchain nightly
+
+              # libunwind.a -> libgcc_eh.a + libgcc.a (both implement the _Unwind_* ABI).
+              printf "GROUP ( %s/libgcc_eh.a %s/libgcc.a )\n" "$GCCLIB" "$GCCLIB" > "$GCCLIB/libunwind.a"
+
+              # The CC/AR/CFLAGS env vars cargo+cc-rs read use the lowercase triple
+              # with - replaced by _ (the target is already lowercase).
+              TRIPLE_ENV="$(echo "$SCRIPT_TARGET" | tr "-" "_")"
+              export CC_${TRIPLE_ENV}="$CC_BIN"
+              export AR_${TRIPLE_ENV}="$AR_BIN"
+              export CFLAGS_${TRIPLE_ENV}="--sysroot=$SYSROOT"
+              export CARGO_TARGET_${CARGO_ENV_PREFIX}_LINKER="$CC_BIN"
+              export CARGO_TARGET_${CARGO_ENV_PREFIX}_RUSTFLAGS="-C target-feature=+crt-static -C link-self-contained=no -C link-arg=--sysroot=$SYSROOT -Lnative=$GCCLIB -Lnative=$SYSLIB"
+              export TARGET_CC="$CC_BIN"
+              export TARGET_AR="$AR_BIN"
+
+              cargo +nightly build --release --target "$SCRIPT_TARGET" -Z build-std=std,panic_abort
+            '
+
+      - name: Verify ELF (static, MIPS, soft-float, correct endianness)
+        run: |
+          BIN="target/${{ matrix.target }}/release/acme-client-rs"
+          file "$BIN"
+          # Static: rejects any dynamically-linked output (no /lib/ld-musl interp).
+          file "$BIN" | grep -q "statically linked"
+          # No INTERP program header is the authoritative static check.
+          ! readelf -l "$BIN" | grep -qi interp
+          # Correct architecture + endianness for this matrix leg.
+          readelf -h "$BIN" | grep -q "Machine:.*MIPS"
+          readelf -h "$BIN" | grep -qiE "Data:.*${{ matrix.elf_data }}"
+          # Soft-float ABI must match Rust's target (hard-float = silent FP corruption).
+          readelf -A "$BIN" | grep -qi "FP ABI: Soft float"
+
+      - name: Strip binary
+        # Belt-and-suspenders: the release profile already sets strip=true, but the
+        # other release legs strip explicitly too, so match that convention.
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work mips-builder:${{ matrix.name }} \
+            /opt/xmusl/bin/strip "target/${{ matrix.target }}/release/acme-client-rs"
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/acme-client-rs" dist/
+          cd dist
+          tar czf "../${{ matrix.artifact }}.tar.gz" acme-client-rs
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
+
+  release-mips:
+    name: Attach MIPS binaries to Release
+    needs: build-mips
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Attach MIPS assets to the GitHub Release
+        # action-gh-release is idempotent: it updates the release for this tag
+        # (created by the main Release workflow) and only adds/replaces the listed
+        # files. generate_release_notes is deliberately omitted so this job never
+        # overwrites the notes/body owned by the main release.
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            acme-client-rs-linux-mipsel-musl.tar.gz
+            acme-client-rs-linux-mips-musl.tar.gz

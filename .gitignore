@@ -40,6 +40,9 @@ Thumbs.db
 /.sisyphus/
 /.omo/
 
+# Local-only throwaway build spikes (e.g. MIPS nightly feasibility); never committed
+/.spike-mips/
+
 # Node.js artifacts (some agent tooling installs these in the worktree;
 # this project is pure Rust and should NEVER track JS dependencies)
 /node_modules/
