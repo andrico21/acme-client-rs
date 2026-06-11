@@ -17,10 +17,6 @@
 # Final image is ~10 MB, runs as non-root by default, and contains zero
 # attack surface beyond the binary itself.
 
-# Make Docker's automatic platform arg usable in the FROM selector below
-# (linux/amd64 -> amd64, linux/arm64 -> arm64, linux/arm/v7 -> arm).
-ARG TARGETARCH
-
 # -- Stage 1: Builder selection --
 #
 # Base-only selector stages — keep them free of build commands: some
@@ -40,6 +36,11 @@ FROM docker.io/library/rust:1.96-alpine3.23 AS builder-arm64
 FROM --platform=$BUILDPLATFORM docker.io/messense/rust-musl-cross@sha256:965d005bc457b10afa22dc9211ee8c64beceab156d2d731a028f6d11d3b3e619 AS builder-arm
 
 # The single build stage: exactly one selector above, chosen per platform leg.
+# The ARG must sit HERE, between the selector stages and the consuming FROM:
+# declared at the top of the file, BuildKit expands it EMPTY in the FROM line
+# ("failed to parse stage name builder-"), while buildah fills it — only this
+# position works on both engines (linux/amd64 -> amd64, linux/arm/v7 -> arm).
+ARG TARGETARCH
 FROM builder-${TARGETARCH} AS builder
 
 ARG TARGETARCH
