@@ -85,9 +85,9 @@ jobs:
           echo "PASS: non-exec stack"
 
       - name: Strip binary
-        # The release profile already sets strip=true, but the other release legs
-        # strip explicitly too, so match that convention.
-        run: strip target/armv7-unknown-linux-gnueabihf/release/acme-client-rs
+        # Must use the CROSS strip: host x86_64 `strip` cannot read an ARM ELF
+        # ("Unable to recognise the format of the input file") and fails the job.
+        run: arm-linux-gnueabihf-strip target/armv7-unknown-linux-gnueabihf/release/acme-client-rs
 
       - name: Package
         run: |
