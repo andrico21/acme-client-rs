@@ -22,6 +22,8 @@ Download a prebuilt binary from the [latest release](https://github.com/andrico2
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Dynamic | Apple Silicon (M1+). |
 | `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Dynamic (MSVC) | Windows 10+. |
 
+Prebuilt container images are available in [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs)
+
 **Linux quick install (static binary):**
 
 ```sh
