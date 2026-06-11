@@ -1,0 +1,122 @@
+name: Release (ARM GNU)
+
+# Builds the ARMv7 hard-float GLIBC (dynamic) binary and attaches it to the SAME
+# GitHub Release as the main Release workflow.
+#
+# WHY A SEPARATE WORKFLOW: the main release.yaml already ships the musl-static
+# armv7 binary (acme-client-rs-linux-armv7-musl). This adds the glibc *dynamic*
+# variant — the Debian/Ubuntu "armhf" .deb world — for devices that run a normal
+# glibc userland and prefer the smaller dynamically-linked binary. Keeping it in
+# its own file means release.yaml stays byte-for-byte unchanged.
+#
+# UNLIKE the MIPS workflow this needs NO nightly, NO -Z build-std and NO ring-only
+# escape hatch: armv7-unknown-linux-gnueabihf is a Tier 2 target with prebuilt std
+# on the pinned stable 1.96.0, and the full default aws-lc-rs crypto stack
+# cross-compiles cleanly (validated locally: aws-lc-sys + ring + rustls all build).
+#
+# The binary is a hardened glibc PIE: Type DYN, full RELRO, non-exec stack,
+# interpreter /lib/ld-linux-armhf.so.3. PIE is KEPT here (the musl-static armv7 leg
+# omits it due to a musl static-pie startup defect that does not affect glibc).
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-arm-gnu:
+    name: Build Linux (armv7, gnueabihf, dynamic)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.96.0
+          targets: armv7-unknown-linux-gnueabihf
+
+      - name: Install ARM glibc cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+
+      - name: Build
+        env:
+          # arm-linux-gnueabihf-gcc drives both the Rust final link and the C
+          # sources in aws-lc-sys / ring (via TARGET_CC). PIE + full RELRO + NX
+          # mirrors the x86_64-gnu leg's hardening (glibc dynamic, no musl
+          # static-pie defect, so PIE is safe here).
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_RUSTFLAGS: "-C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
+          CC_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-gcc
+          AR_armv7_unknown_linux_gnueabihf: arm-linux-gnueabihf-ar
+          TARGET_CC: arm-linux-gnueabihf-gcc
+          TARGET_AR: arm-linux-gnueabihf-ar
+        run: |
+          cargo build --release --target armv7-unknown-linux-gnueabihf
+
+      - name: Verify ELF
+        run: |
+          BIN="target/armv7-unknown-linux-gnueabihf/release/acme-client-rs"
+          file "$BIN"
+          # glibc dynamic: must have an INTERP segment (NOT static).
+          readelf -l "$BIN" | grep -qi "interpreter: /lib/ld-linux-armhf.so.3"
+          echo "PASS: dynamic, glibc armhf interpreter"
+          # Position-independent executable.
+          readelf -h "$BIN" | grep -qiE "Type:[[:space:]]*DYN"
+          echo "PASS: Type DYN (PIE)"
+          # ARM hard-float ABI. The ELF header Flags line is authoritative
+          # ("hard-float ABI"); file(1) does not reliably print it on all versions.
+          readelf -h "$BIN" | grep -q "Machine:.*ARM"
+          readelf -h "$BIN" | grep -qi "hard-float ABI"
+          echo "PASS: ARM hard-float"
+          # Hardening: full RELRO + non-executable stack.
+          readelf -l "$BIN" | grep -q "GNU_RELRO"
+          echo "PASS: GNU_RELRO"
+          readelf -l "$BIN" | grep -E "GNU_STACK" | grep -qv "RWE"
+          echo "PASS: non-exec stack"
+
+      - name: Strip binary
+        # The release profile already sets strip=true, but the other release legs
+        # strip explicitly too, so match that convention.
+        run: strip target/armv7-unknown-linux-gnueabihf/release/acme-client-rs
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp target/armv7-unknown-linux-gnueabihf/release/acme-client-rs dist/
+          cd dist
+          tar czf ../acme-client-rs-linux-armv7-gnueabihf.tar.gz acme-client-rs
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: acme-client-rs-linux-armv7-gnueabihf
+          path: acme-client-rs-linux-armv7-gnueabihf.tar.gz
+
+  release-arm-gnu:
+    name: Attach ARM GNU binary to Release
+    needs: build-arm-gnu
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+
+      - name: Attach ARM GNU asset to the GitHub Release
+        # action-gh-release is idempotent: it updates the release for this tag
+        # (created by the main Release workflow) and only adds/replaces the listed
+        # file. generate_release_notes is deliberately omitted so this job never
+        # overwrites the notes/body owned by the main release.
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            acme-client-rs-linux-armv7-gnueabihf.tar.gz
