@@ -22,6 +22,8 @@
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Динамическая | Apple Silicon (M1+). |
 | `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Динамическая (MSVC) | Windows 10+. |
 
+Готовые образы контейнеров доступны на [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs)
+
 **Быстрая установка на Linux (статический бинарник):**
 
 ```sh
