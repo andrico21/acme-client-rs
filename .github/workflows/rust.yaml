@@ -104,6 +104,27 @@ jobs:
             cargo test --verbose
           '
 
+  # Compile coverage for Raspberry Pi 2/3/4 (32-bit OS). Cross-compiled natively
+  # on amd64 via the messense musl toolchain (pinned by multi-arch INDEX digest);
+  # build-only because test execution would need QEMU, which is flaky for this
+  # workload — tests already run on the amd64 and arm64 legs.
+  build-linux-armv7:
+    name: Build (Linux armv7, cross)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cross-build (armv7 musl)
+        run: |
+          # rustup target add is required on every fresh container run: the image
+          # installs the repo-pinned toolchain, which lacks the armv7 std.
+          docker run --rm -v "$PWD:/work" -w /work \
+            docker.io/messense/rust-musl-cross@sha256:965d005bc457b10afa22dc9211ee8c64beceab156d2d731a028f6d11d3b3e619 \
+            sh -ec '
+              rustup target add armv7-unknown-linux-musleabihf
+              cargo build --verbose --target armv7-unknown-linux-musleabihf
+            '
+
   build-windows:
     name: Build & Test (Windows)
     runs-on: windows-latest
