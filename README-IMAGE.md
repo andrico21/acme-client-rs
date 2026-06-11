@@ -2,7 +2,7 @@
 
 A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist) support. Handles the full certificate lifecycle — account registration, issuance, renewal, and revocation — packaged as a **distroless container image** that runs the statically linked (musl) binary as a non-root user with zero runtime dependencies.
 
-Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened static musl binary (PIE, full RELRO, NX stack), and structured JSON output for CI/CD integration.
+Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened static musl binary (PIE + full RELRO + NX stack on amd64/arm64; the armv7 variant is a non-PIE static ET_EXEC with RELRO/NX, because static-pie binaries crash at startup on that target), and structured JSON output for CI/CD integration.
 
 - **GitHub:** <https://github.com/andrico21/acme-client-rs>
 - **License:** [Apache-2.0](https://github.com/andrico21/acme-client-rs/blob/master/LICENSE)
@@ -19,11 +19,11 @@ Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened static mus
 | Working directory | `/data` |
 | Declared volume | `/data` (account key + issued cert/key live here) |
 | Exposed port | `80/tcp` (built-in HTTP-01 challenge server) |
-| Platforms | `linux/amd64`, `linux/arm64` |
+| Platforms | `linux/amd64`, `linux/arm64`, `linux/arm/v7` |
 | Image size | ~10 MB |
 | Default env | `TZ=UTC`, `RUST_LOG=info` |
 
-The image is **distroless**: it contains only CA roots, `/etc/passwd` with the `nonroot` user, and the binary. There is no shell, no libc, and no package manager — the only attack surface is the binary itself. Because the `ENTRYPOINT` is the binary, every `docker run` argument after the image name is passed straight to `acme-client-rs`. The `linux/arm64` variant runs on Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, and any other ARM64 Linux host — `docker pull` selects the right architecture automatically.
+The image is **distroless**: it contains only CA roots, `/etc/passwd` with the `nonroot` user, and the binary. There is no shell, no libc, and no package manager — the only attack surface is the binary itself. Because the `ENTRYPOINT` is the binary, every `docker run` argument after the image name is passed straight to `acme-client-rs`. The `linux/arm64` variant runs on Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, and any other ARM64 Linux host; the `linux/arm/v7` variant covers Raspberry Pi 2/3/4 on 32-bit Raspberry Pi OS — `docker pull` selects the right architecture automatically.
 
 ## Tags
 

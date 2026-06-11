@@ -20,13 +20,14 @@ name: Docker Publish
 # `workflow_run.head_branch` / `head_sha` fields throughout to recover the
 # original tag and commit.
 #
-# Multi-arch design (linux/amd64 + linux/arm64):
+# Multi-arch design (linux/amd64 + linux/arm64 + linux/arm/v7):
 #   preflight — single gate + tag↔SHA verification, exposes `is_release`.
-#   build     — one native leg per platform (amd64 on ubuntu-24.04, arm64 on
-#               ubuntu-24.04-arm; no QEMU). Each leg pushes BY DIGEST only
+#   build     — one leg per platform (amd64 on ubuntu-24.04, arm64 on
+#               ubuntu-24.04-arm, arm/v7 cross-compiled on ubuntu-24.04;
+#               no QEMU anywhere). Each leg pushes BY DIGEST only
 #               (no tags), uploads its digest as an artifact, and runs its
 #               own Trivy scan against the per-arch image.
-#   merge     — assembles the multi-arch manifest list from the two digests
+#   merge     — assembles the multi-arch manifest list from the three digests
 #               with `docker buildx imagetools create` and applies all tags.
 # Semver tags are applied only for real release runs; manual dispatch runs
 # get branch/sha tags only.
@@ -136,6 +137,13 @@ jobs:
             arch: arm64
             runner: ubuntu-24.04-arm
             cache_scope: publish-linux-arm64
+          # linux/arm/v7 has no native runner; the Containerfile's builder-arm
+          # stage cross-compiles FROM $BUILDPLATFORM (native amd64 here), and
+          # the runtime stage is COPY-only — no QEMU involved.
+          - platform: linux/arm/v7
+            arch: armv7
+            runner: ubuntu-24.04
+            cache_scope: publish-linux-arm-v7
     env:
       IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/acme-client-rs
     steps:
@@ -406,8 +414,8 @@ jobs:
           done
           # Exactly one digest per platform leg — a missing file means a leg
           # silently failed to export and the index would be single-arch.
-          if [ "${#DIGEST_ARGS[@]}" -ne 2 ]; then
-            echo "::error::expected 2 per-arch digests, found ${#DIGEST_ARGS[@]}" >&2
+          if [ "${#DIGEST_ARGS[@]}" -ne 3 ]; then
+            echo "::error::expected 3 per-arch digests (amd64, arm64, armv7), found ${#DIGEST_ARGS[@]}" >&2
             exit 1
           fi
 
@@ -456,7 +464,7 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Image | \`${IMAGE}\` |"
-            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\` |"
+            echo "| Platforms | \`linux/amd64\`, \`linux/arm64\`, \`linux/arm/v7\` |"
             echo "| Index digest | \`${IMAGE_DIGEST}\` |"
             echo "| Version (OCI label) | \`${IMAGE_VERSION}\` |"
             echo "| Source tag | \`${SOURCE_TAG}\` |"

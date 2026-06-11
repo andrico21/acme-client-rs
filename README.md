@@ -4,7 +4,7 @@
 
 A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single self-contained binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
 
-Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX), and structured JSON output for CI/CD integration.
+Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX; the armv7 build is non-PIE static ET_EXEC with RELRO/NX — see [Hardened builds](#hardened-builds)), and structured JSON output for CI/CD integration.
 
 > **AI Disclosure:** This project was developed with AI assistance using [Claude Opus 4.6](https://www.anthropic.com/claude) (via GitHub Copilot). All code, documentation, and tests were reviewed and validated by the author.
 
@@ -16,6 +16,7 @@ Download a prebuilt binary from the [latest release](https://github.com/andrico2
 |---|---|---|---|
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Static (musl)** | **Recommended.** No runtime dependencies — works on any Linux distro. |
 | `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Static (musl)** | Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, any ARM64 Linux distro. |
+| `acme-client-rs-linux-armv7-musl.tar.gz` | Linux ARMv7 | **Static (musl)** | Raspberry Pi 2/3/4 (32-bit OS). |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Dynamic (GNU) | Requires GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Dynamic | Intel Macs. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Dynamic | Apple Silicon (M1+). |
@@ -30,7 +31,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 
 > **Tip:** On Linux, always prefer the **musl** binary. The GNU variant dynamically links against the system GLIBC and will fail on distributions shipping GLIBC older than 2.39 (e.g., RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
 
-Alternatively, build from source — see [Building](#building) below. A multi-arch container image (`linux/amd64`, `linux/arm64` — Raspberry Pi 3/4/5 with 64-bit OS supported) is also published to [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
+Alternatively, build from source — see [Building](#building) below. A multi-arch container image (`linux/amd64`, `linux/arm64`, `linux/arm/v7` — Raspberry Pi 3/4/5 with 64-bit OS and Pi 2/3/4 with 32-bit OS supported) is also published to [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
 
 ## Features
 
@@ -367,6 +368,8 @@ RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-W
 | `-z now` | Full RELRO - resolve all symbols at load time (not lazily) |
 | `-z noexecstack` | Non-executable stack (NX) |
 | `target-feature=+crt-static` | Statically link the C runtime (with musl) |
+
+> **ARMv7 exception:** on `armv7-unknown-linux-musleabihf`, `-C relocation-model=pie` silently produces a non-PIE `ET_EXEC` binary, and forcing `-static-pie` links a binary that crashes at startup (musl static-pie startup defect on that target, verified under qemu-arm 7.2 and 10.2). The released armv7 build therefore omits the PIE flag and ships a non-PIE static executable with full RELRO and NX intact. All other Linux targets (x86_64, aarch64) are static-PIE as shown above.
 
 #### macOS
 

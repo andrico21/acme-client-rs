@@ -4,7 +4,7 @@
 
 Легковесный ACME-клиент в виде единого исполняемого файла, реализующий [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) с поддержкой [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) и [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist). Полный жизненный цикл сертификата - от регистрации аккаунта до выпуска, продления и отзыва - в одном самодостаточном бинарнике без внешних зависимостей.
 
-Написан на Rust (редакция 2024) с `#![forbid(unsafe_code)]`, защищёнными release-сборками (CFG, ASLR, full RELRO, NX) и структурированным JSON-выводом для интеграции с CI/CD.
+Написан на Rust (редакция 2024) с `#![forbid(unsafe_code)]`, защищёнными release-сборками (CFG, ASLR, full RELRO, NX; сборка для armv7 — статический ET_EXEC без PIE, с RELRO/NX — см. раздел о защищённых сборках) и структурированным JSON-выводом для интеграции с CI/CD.
 
 > **Раскрытие информации об ИИ:** Этот проект разработан с помощью ИИ - [Claude Opus 4.6](https://www.anthropic.com/claude) (через GitHub Copilot). Весь код, документация и тесты были проверены и утверждены автором.
 
@@ -16,6 +16,7 @@
 |---|---|---|---|
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Статическая (musl)** | **Рекомендуется.** Без runtime-зависимостей — работает на любом дистрибутиве Linux. |
 | `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Статическая (musl)** | Raspberry Pi 3/4/5 (64-битная ОС), AWS Graviton, любой ARM64-дистрибутив Linux. |
+| `acme-client-rs-linux-armv7-musl.tar.gz` | Linux ARMv7 | **Статическая (musl)** | Raspberry Pi 2/3/4 (32-битная ОС). |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Динамическая (GNU) | Требует GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Динамическая | Intel Mac. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Динамическая | Apple Silicon (M1+). |
@@ -30,7 +31,7 @@ sudo install -m 755 acme-client-rs /usr/local/bin/
 
 > **Совет:** На Linux всегда предпочитайте **musl**-бинарник. Вариант GNU динамически линкуется с системным GLIBC и не запустится на дистрибутивах со GLIBC старее 2.39 (например, RHEL 9, Rocky 9, Debian 12, Ubuntu 22.04).
 
-В качестве альтернативы — сборка из исходников, см. раздел [Сборка](#сборка) ниже. Также публикуется мультиархитектурный контейнерный образ (`linux/amd64`, `linux/arm64` — поддерживаются Raspberry Pi 3/4/5 с 64-битной ОС) на [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
+В качестве альтернативы — сборка из исходников, см. раздел [Сборка](#сборка) ниже. Также публикуется мультиархитектурный контейнерный образ (`linux/amd64`, `linux/arm64`, `linux/arm/v7` — поддерживаются Raspberry Pi 3/4/5 с 64-битной ОС и Raspberry Pi 2/3/4 с 32-битной ОС) на [Docker Hub](https://hub.docker.com/r/andrico21/acme-client-rs).
 
 ## Возможности
 
@@ -367,6 +368,8 @@ RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-W
 | `-z now` | Full RELRO - разрешение всех символов при загрузке (без ленивой загрузки) |
 | `-z noexecstack` | Неисполняемый стек (NX) |
 | `target-feature=+crt-static` | Статическая линковка C-рантайма (с musl) |
+
+> **Исключение для ARMv7:** на `armv7-unknown-linux-musleabihf` флаг `-C relocation-model=pie` молча даёт не-PIE `ET_EXEC`-бинарник, а принудительный `-static-pie` линкует бинарник, который падает при запуске (дефект запуска static-pie в musl на этой платформе, проверено под qemu-arm 7.2 и 10.2). Поэтому release-сборка для armv7 не использует PIE и поставляется как статический не-PIE исполняемый файл с полным RELRO и NX. Все остальные Linux-цели (x86_64, aarch64) — static-PIE, как показано выше.
 
 #### macOS
 

@@ -2,10 +2,14 @@
 #
 # Multi-stage build for acme-client-rs producing a *distroless* runtime image.
 #
-# Stage 1 (builder): rust:alpine — compiles a fully static musl binary for
-#                    the requested platform (linux/amd64 or linux/arm64) with
-#                    rustls (aws-lc-rs) for TLS — no OpenSSL — and full
-#                    security hardening flags (PIE, full RELRO, NX stack).
+# Stage 1 (builder): compiles a fully static musl binary for the requested
+#                    platform (linux/amd64, linux/arm64, or linux/arm/v7)
+#                    with rustls (aws-lc-rs) for TLS — no OpenSSL — and
+#                    security hardening flags: PIE + full RELRO + NX stack on
+#                    amd64/arm64; armv7 ships a non-PIE static ET_EXEC with
+#                    RELRO/NX because static-pie binaries for
+#                    armv7-unknown-linux-musleabihf link but crash at startup
+#                    (verified under qemu-arm 7.2 and 10.2).
 # Stage 2 (runtime): gcr.io/distroless/static-debian13:nonroot — no shell,
 #                    no package manager, no libc; just CA roots, /etc/passwd
 #                    with a `nonroot` user (UID 65532), and the binary.
@@ -13,14 +17,37 @@
 # Final image is ~10 MB, runs as non-root by default, and contains zero
 # attack surface beyond the binary itself.
 
-# -- Stage 1: Build --
-#
-# Pin to a specific Rust + Alpine pair for reproducibility. Bump in lockstep
-# with `.github/workflows/release.yaml` (rust:X.Y.Z-alpine) and verify Alpine
-# tag at https://hub.docker.com/_/rust .
-FROM docker.io/library/rust:1.96-alpine3.23 AS builder
+# Make Docker's automatic platform arg usable in the FROM selector below
+# (linux/amd64 -> amd64, linux/arm64 -> arm64, linux/arm/v7 -> arm).
+ARG TARGETARCH
 
-RUN apk add --no-cache musl-dev pkgconf
+# -- Stage 1: Builder selection --
+#
+# Base-only selector stages — keep them free of build commands: some
+# podman/buildah versions do not prune unused stages the way BuildKit does,
+# so any work here would run for every platform on every local build.
+#
+# amd64/arm64 build natively on rust:alpine (pin Rust + Alpine in lockstep
+# with `.github/workflows/release.yaml`; verify the Alpine tag at
+# https://hub.docker.com/_/rust). There is NO arm32v7 rust:alpine image, so
+# the linux/arm/v7 leg cross-compiles on the build host's own platform
+# ($BUILDPLATFORM) inside messense/rust-musl-cross, which carries the
+# armv7-musleabihf cross toolchain. Pinned by multi-arch INDEX digest
+# (amd64/arm64/arm children) — re-resolve the index digest manually when
+# bumping the toolchain.
+FROM docker.io/library/rust:1.96-alpine3.23 AS builder-amd64
+FROM docker.io/library/rust:1.96-alpine3.23 AS builder-arm64
+FROM --platform=$BUILDPLATFORM docker.io/messense/rust-musl-cross@sha256:965d005bc457b10afa22dc9211ee8c64beceab156d2d731a028f6d11d3b3e619 AS builder-arm
+
+# The single build stage: exactly one selector above, chosen per platform leg.
+FROM builder-${TARGETARCH} AS builder
+
+ARG TARGETARCH
+ARG TARGETVARIANT
+
+# Alpine arches need the musl headers + pkgconf; the messense cross image
+# ships its toolchain complete (and has no apk).
+RUN case "$TARGETARCH" in amd64|arm64) apk add --no-cache musl-dev pkgconf ;; esac
 
 WORKDIR /src
 COPY . .
@@ -30,19 +57,33 @@ COPY . .
 # `+crt-static` makes them un-buildable as dylibs:
 #   "cannot produce proc-macro for ... as the target ... does not support these crate types"
 #
-# TARGETARCH is auto-populated by BuildKit/buildah per platform leg. Each leg
-# builds natively (host triple == target triple), so std for the target is
-# already installed — no `rustup target add` needed. `--target` stays
-# mandatory for the proc-macro flag scoping above.
-ARG TARGETARCH
+# TARGETARCH/TARGETVARIANT are auto-populated by BuildKit/buildah per leg.
+# amd64/arm64 build natively (host triple == target triple, std already
+# installed). The arm/v7 leg cross-compiles: `rustup target add` first
+# (the repo-pinned toolchain ships without armv7 std — E0463 otherwise).
+# `--target` stays mandatory for the proc-macro flag scoping above.
+#
+# armv7 hardening omits PIE deliberately: `-C relocation-model=pie` silently
+# yields ET_EXEC there, and forcing `-static-pie` links a binary that
+# segfaults at startup (musl static-pie startup defect on this target,
+# verified under qemu-arm 7.2 and 10.2). RELRO/NX/static are kept.
 RUN case "$TARGETARCH" in \
-      amd64) RUST_TARGET=x86_64-unknown-linux-musl ;; \
-      arm64) RUST_TARGET=aarch64-unknown-linux-musl ;; \
+      amd64) RUST_TARGET=x86_64-unknown-linux-musl; \
+             HARDENING="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" ;; \
+      arm64) RUST_TARGET=aarch64-unknown-linux-musl; \
+             HARDENING="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" ;; \
+      arm)   if [ "$TARGETVARIANT" != "v7" ]; then echo "unsupported arm variant: '${TARGETVARIANT}' (only v7)" >&2; exit 1; fi; \
+             RUST_TARGET=armv7-unknown-linux-musleabihf; \
+             HARDENING="-C target-feature=+crt-static -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"; \
+             rustup target add "$RUST_TARGET" ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
- && export "CARGO_TARGET_$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS=-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" \
+ && export "CARGO_TARGET_$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS=$HARDENING" \
  && cargo build --release --target "$RUST_TARGET" \
- && strip "target/$RUST_TARGET/release/acme-client-rs" \
+ # Cargo's release profile already strips (strip = true); the explicit strip
+ # is kept on the alpine arches for parity with release.yaml and skipped on
+ # arm, where the cross image's host `strip` cannot process ARM ELF.
+ && case "$TARGETARCH" in amd64|arm64) strip "target/$RUST_TARGET/release/acme-client-rs" ;; esac \
  && cp "target/$RUST_TARGET/release/acme-client-rs" /acme-client-rs
 
 # -- Stage 2: Distroless runtime --
