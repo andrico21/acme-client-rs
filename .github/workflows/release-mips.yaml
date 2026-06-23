@@ -58,7 +58,7 @@ jobs:
             elf_data: 2's complement, big endian
             artifact: acme-client-rs-linux-mips-musl
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Apply ring-only crypto patch (build-time only, drift-guarded)
         # Switches the crypto graph to ring-only for this MIPS build, and pins the

@@ -82,7 +82,7 @@ jobs:
       is_release: ${{ steps.flags.outputs.is_release }}
     steps:
       - name: Checkout source at triggering commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Pin to the SHA that triggered the upstream Release run, NOT the
           # default branch HEAD. Required for reproducible builds — master
@@ -148,7 +148,7 @@ jobs:
       IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/acme-client-rs
     steps:
       - name: Checkout source at triggering commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ env.SOURCE_SHA }}
           fetch-depth: 0
@@ -347,7 +347,7 @@ jobs:
       IMAGE: docker.io/${{ secrets.DOCKERHUB_USERNAME }}/acme-client-rs
     steps:
       - name: Checkout source at triggering commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # metadata-action runs with `context: git` below — it must see the
           # release SHA, not the workflow_run default-branch HEAD, or the
