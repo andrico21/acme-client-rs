@@ -18,7 +18,7 @@ jobs:
     name: Build Linux (x86_64, GNU)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -51,7 +51,7 @@ jobs:
     container:
       image: rust:1.96.0-alpine
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
@@ -89,7 +89,7 @@ jobs:
     # containers on arm64 runners (no alpine-arm64 node), so the job runs on
     # the host and only the build happens inside the Alpine image.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build (native arm64, Alpine musl)
         run: |
@@ -121,7 +121,7 @@ jobs:
     # No QEMU: the cross toolchain runs natively on the amd64 host.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build (cross, armv7 musl)
         # PIE is deliberately omitted for armv7: -C relocation-model=pie
@@ -161,7 +161,7 @@ jobs:
     name: Build macOS (x86_64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -187,7 +187,7 @@ jobs:
     name: Build macOS (ARM64)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -212,7 +212,7 @@ jobs:
     name: Build Windows (x86_64, MSVC)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -240,7 +240,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-linux-musl
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/download-artifact@v8
         with:

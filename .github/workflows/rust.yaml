@@ -18,7 +18,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
@@ -39,7 +39,7 @@ jobs:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -61,7 +61,7 @@ jobs:
     container:
       image: rust:1.96.0-alpine
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install build dependencies
         run: apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
@@ -94,7 +94,7 @@ jobs:
     # arm64 runners (the runner ships no alpine-arm64 node), so the job runs on
     # the host and only the build+test happens inside the Alpine image.
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Build and test (native arm64, Alpine musl)
         run: |
@@ -112,7 +112,7 @@ jobs:
     name: Build (Linux armv7, cross)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Cross-build (armv7 musl)
         run: |
@@ -129,7 +129,7 @@ jobs:
     name: Build & Test (Windows)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -150,7 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: build-linux
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Download binary
         uses: actions/download-artifact@v8
