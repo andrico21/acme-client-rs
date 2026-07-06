@@ -11,7 +11,7 @@ name: Release (ARM GNU)
 #
 # UNLIKE the MIPS workflow this needs NO nightly, NO -Z build-std and NO ring-only
 # escape hatch: armv7-unknown-linux-gnueabihf is a Tier 2 target with prebuilt std
-# on the pinned stable 1.96.0, and the full default aws-lc-rs crypto stack
+# on the pinned stable 1.96.1, and the full default aws-lc-rs crypto stack
 # cross-compiles cleanly (validated locally: aws-lc-sys + ring + rustls all build).
 #
 # The binary is a hardened glibc PIE: Type DYN, full RELRO, non-exec stack,
@@ -40,7 +40,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.0
+          toolchain: 1.96.1
           targets: armv7-unknown-linux-gnueabihf
 
       - name: Install ARM glibc cross toolchain

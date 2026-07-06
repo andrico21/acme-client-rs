@@ -11,7 +11,7 @@ name: Release (MIPS)
 # fully self-contained and the main release.yaml stays byte-for-byte unchanged.
 #
 # WHY THE SOURCE IS PATCHED AT BUILD TIME: the committed repo keeps the full
-# aws-lc-rs stack on stable 1.96.0 (unchanged for all other targets). The ring-only
+# aws-lc-rs stack on stable 1.96.1 (unchanged for all other targets). The ring-only
 # escape hatch (hickory dnssec-ring, reqwest rustls-no-provider + explicit
 # rustls{ring}) and the nightly toolchain pin are applied here, in-workflow, by a
 # drift-guarded patch script — the working tree is never mutated in git.
@@ -91,7 +91,7 @@ jobs:
           RUSTLS_LINE = 'rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }'
 
           patch(CARGO, edits=[(HICKORY_OLD, HICKORY_NEW), (REQWEST_OLD, REQWEST_NEW)], inserts=[(REQWEST_NEW, RUSTLS_LINE)])
-          patch(TOOLCHAIN, edits=[('channel = "1.96.0"', 'channel = "nightly"'), ('components = ["rustfmt", "clippy"]', 'components = ["rust-src"]')])
+          patch(TOOLCHAIN, edits=[('channel = "1.96.1"', 'channel = "nightly"'), ('components = ["rustfmt", "clippy"]', 'components = ["rust-src"]')])
 
           cargo = open(CARGO, encoding="utf-8").read()
           toolchain = open(TOOLCHAIN, encoding="utf-8").read()

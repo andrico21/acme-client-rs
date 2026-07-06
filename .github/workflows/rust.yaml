@@ -43,7 +43,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.0
+          toolchain: 1.96.1
           components: rustfmt, clippy
 
       - name: Check formatting
@@ -59,7 +59,7 @@ jobs:
     name: Build & Test (Linux)
     runs-on: ubuntu-24.04
     container:
-      image: rust:1.96.0-alpine
+      image: rust:1.96.1-alpine
     steps:
       - uses: actions/checkout@v7
 
@@ -98,7 +98,7 @@ jobs:
 
       - name: Build and test (native arm64, Alpine musl)
         run: |
-          docker run --rm -v "$PWD:/work" -w /work rust:1.96.0-alpine sh -ec '
+          docker run --rm -v "$PWD:/work" -w /work rust:1.96.1-alpine sh -ec '
             apk add --no-cache build-base pkgconf openssl openssl-dev openssl-libs-static perl make tar zstd
             cargo build --verbose
             cargo test --verbose
@@ -133,7 +133,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.96.0
+          toolchain: 1.96.1
 
       - name: Build
         env:
