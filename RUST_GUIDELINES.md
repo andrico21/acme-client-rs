@@ -340,6 +340,15 @@ pub struct Config { /* ... */ }
 pub fn validate(input: &str) -> Result<(), ValidationError> { /* ... */ }
 ```
 
+**Note (Rust 1.97+):** the `must_use` lint now sees through infallible
+result-like wrappers. `Result<T, Uninhabited>` and `ControlFlow<Uninhabited, T>`
+-- where the error / break arm is an uninhabited type such as `!` or
+`core::convert::Infallible` -- are treated as `T` for the lint. A `#[must_use]`
+value returned inside a can't-fail `Result` therefore still triggers the
+unused-result warning; you no longer silently lose the check by wrapping in an
+infallible `Result`. (Clippy applied the same rule to `double_must_use` and
+`let_underscore_must_use` back in 1.95.)
+
 ### DO: Use enums instead of boolean parameters
 
 Boolean parameters are unreadable at the call site and error-prone.
@@ -603,6 +612,41 @@ let data = {
 };
 // `data` is now immutable -- no accidental modification
 ```
+
+### DO: Prefer std bit-manipulation methods over hand-rolled equivalents (Rust 1.97+)
+
+Rust 1.97 stabilized a family of `const fn` bit helpers on every integer
+type and on `NonZero<_>`. Prefer them over hand-rolled shift / mask /
+`leading_zeros` arithmetic: they are branch-free, express intent directly,
+and remove the off-by-one and zero-input traps that hand-rolled versions
+invite. Same rationale as the `manual_checked_ops` lint (Section 9) -- let
+the standard library say what you mean.
+
+| Method | Returns | Example |
+|--------|---------|---------|
+| `n.bit_width()` | `u32` -- min bits to represent `n` | `0b1110u8.bit_width() == 4`; `0` for `0` |
+| `n.isolate_highest_one()` | value with only the top set bit kept | `0b0110_0100u8 -> 0b0100_0000`; `0` for `0` |
+| `n.isolate_lowest_one()` | value with only the bottom set bit kept | `0b0110_0100u8 -> 0b0000_0100`; `0` for `0` |
+| `n.highest_one()` | `Option<u32>` -- index of the top set bit | `0b1_1111u8 -> Some(4)`; `None` for `0` |
+| `n.lowest_one()` | `Option<u32>` -- index of the bottom set bit | `0b1_1111u8 -> Some(0)`; `None` for `0` |
+
+```rust
+// BAD: hand-rolled, easy to get the off-by-one or the zero case wrong
+let top_bit_mask = 1u32 << (u32::BITS - 1 - x.leading_zeros()); // underflows at x == 0
+let width = u32::BITS - x.leading_zeros();
+
+// GOOD (Rust 1.97+): intent is explicit, zero is handled, all const fn
+let top_bit_mask = x.isolate_highest_one(); // 0 when x == 0, no shift overflow
+let width = x.bit_width();                   // 0 when x == 0
+```
+
+Note the two shapes: `isolate_*_one` returns the **bit itself** (a mask),
+while `highest_one` / `lowest_one` return the **index** as `Option<u32>`
+(`None` when the input is zero -- no `u32::BITS` sentinel to special-case).
+
+MSRV note: these are 1.97 APIs. Adopting them raises your minimum toolchain
+to 1.97 -- honor your MSRV policy (Section 12) before using them in a crate
+that pins an older `rust-toolchain.toml`.
 
 ### DO: Use `ptr::read_unaligned` (or `from_le_bytes`) for multi-byte reads from `&[u8]`
 
@@ -982,12 +1026,37 @@ introduce new warnings, breaking your build.
 // BAD: In source code
 #![deny(warnings)]
 
-// GOOD: In CI only
-// RUSTFLAGS="-D warnings" cargo build
-
-// GOOD: Deny specific lints
+// GOOD: Deny a specific, curated set of lints you have chosen to enforce
 #![deny(unused, dead_code)]
 ```
+
+Enforce "no warnings" at the CI boundary instead. **Rust 1.97+** stabilized
+Cargo's [`build.warnings`](https://doc.rust-lang.org/cargo/reference/config.html#buildwarnings)
+config, which is now the preferred mechanism -- it is cache-friendly
+(changing it does **not** invalidate the build cache, unlike `RUSTFLAGS`)
+and it applies only to your **local** packages, never to dependencies.
+
+```toml
+# .cargo/config.toml -- deny warnings for local packages
+[build]
+warnings = "deny"     # "warn" (default) | "allow" | "deny"
+```
+
+```bash
+# Or per-invocation via env var (no cache bust, trivial to toggle):
+CARGO_BUILD_WARNINGS=deny  cargo check --workspace   # CI: fail on any warning
+CARGO_BUILD_WARNINGS=allow cargo check               # local: silence transient noise
+# Pair with --keep-going to collect every warning, not just the first package's:
+CARGO_BUILD_WARNINGS=deny  cargo check --workspace --keep-going
+
+# Pre-1.97 fallback (busts the build cache, blunt instrument):
+RUSTFLAGS="-D warnings" cargo build
+```
+
+Caveat: `build.warnings` gates rustc's `warnings` lint group only. The
+`linker_messages` lint (Rust 1.97+, see Section 9) is deliberately **not**
+in that group, so neither `build.warnings = "deny"` nor `RUSTFLAGS="-D warnings"`
+affects it -- escalate it separately if you want linker output to fail CI.
 
 ### Blanket Impls in Public APIs (Semver Hazard)
 
@@ -1227,6 +1296,8 @@ These Rust-level lints enforce safety invariants at the crate boundary.
 unsafe_code = "forbid"             # Forbid unsafe entirely if not needed
 unreachable_pub = "warn"           # pub items not reachable from crate root
 missing_docs = "warn"              # At minimum for public API (library crates)
+dead_code_pub_in_binary = "warn"   # Rust 1.97+: unused `pub` items in a binary
+                                   # crate (allow-by-default; opt in for bins)
 ```
 
 `unsafe_code = "forbid"` should be set in every crate that does not need
@@ -1236,6 +1307,47 @@ individual items with a safety comment explaining the invariant.
 
 For library crates, `missing_docs = "warn"` ensures every public item
 has documentation. Promote to `"deny"` once existing docs are complete.
+
+For **binary** crates, `dead_code_pub_in_binary` (Rust 1.97+, allow-by-default)
+extends dead-code detection to `pub` items. A binary has no public API, so
+`pub` should not suppress the unused-code warning the way it does in a
+library. It complements `unreachable_pub`: the latter flags `pub` that ought
+to be `pub(crate)`, the former flags `pub` items that are simply never used.
+Opt in for binary crates; leave it off for library crates, where `pub` items
+are the intended API surface.
+
+### Linker Diagnostics (Rust 1.97+)
+
+Rust 1.97 stopped hiding linker stderr. Links that previously succeeded
+silently now surface their output through a new warn-by-default
+`linker_messages` lint:
+
+```text
+warning: linker stderr: <message>
+  |
+  = note: `#[warn(linker_messages)]` on by default
+```
+
+This is high-signal for any crate that links C libraries (`libopus`,
+mbedTLS, OpenSSL, platform SDKs) or uses a custom linker script -- several
+real defects were found upstream once this output stopped being swallowed.
+Two properties matter:
+
+- `linker_messages` is **not** part of the `warnings` lint group. Neither
+  `RUSTFLAGS="-D warnings"` nor Cargo's `build.warnings = "deny"` (Section 7)
+  affects it -- set its level explicitly.
+- Linker output is platform-dependent and rustc does not control it
+  precisely, so treat it as advisory. rustc already filters common false
+  positives; triage the rest and silence known-benign, platform-specific
+  noise deliberately rather than globally.
+
+```toml
+[lints.rust]
+# Default is "warn". Escalate to "deny" only once the output is known-clean
+# on every target you build; otherwise pin proven-benign noise to "allow"
+# with a comment naming the platform and the exact message.
+linker_messages = "warn"
+```
 
 ### Lints for LLM-generated code
 
@@ -1334,6 +1446,13 @@ cargo install tokio-console
 # Add tokio-console subscriber, then:
 tokio-console
 ```
+
+**Symbol mangling note (Rust 1.97+):** 1.97 switched the default symbol
+mangling scheme to `v0`. Backtraces, `perf` / `flamegraph` output, debuggers,
+and `tokio-console` traces may render symbols differently, and **old
+demanglers may fail to demangle them entirely**. If a profiler shows raw
+`_R...` symbols, update it (or `rustfilt`) to a v0-aware version. This is a
+tooling-compatibility note only -- it does not change runtime behavior.
 
 ---
 
@@ -1632,6 +1751,7 @@ Use this when reviewing code:
 - [ ] No `String::from("...")` where `&str` is accepted
 - [ ] HashMap lookups use `&str`, not cloned `String` keys
 - [ ] `core::hint::cold_path()` marks genuinely unlikely branches (Rust 1.95+); perf hint only, never correctness
+- [ ] Prefer std bit ops `bit_width` / `isolate_highest_one` / `isolate_lowest_one` / `highest_one` / `lowest_one` over hand-rolled shift/mask arithmetic (Rust 1.97+)
 
 **Async**
 - [ ] No `std::fs` / `std::net` in async functions
@@ -1674,6 +1794,7 @@ Use this when reviewing code:
 - [ ] Functions below cognitive complexity threshold (no god functions)
 - [ ] Prefer `Atomic*::update` / `try_update` over hand-rolled `compare_exchange` loops (Rust 1.95+)
 - [ ] Prefer `Vec::push_mut` / `VecDeque::push_{front,back}_mut` / `LinkedList::push_{front,back}_mut` over `push` + `last_mut().unwrap()` (Rust 1.95+)
+- [ ] `linker_messages` lint (Rust 1.97+) triaged; escalated or `allow`-ed explicitly (it is NOT in the `warnings` group, so `-D warnings` / `build.warnings` don't cover it)
 
 **Supply Chain**
 - [ ] `deny.toml` configured with license allowlist, banned crates, source restrictions
@@ -1691,6 +1812,7 @@ Use this when reviewing code:
 **Tooling**
 - [ ] `cargo fmt --check` in CI
 - [ ] `cargo clippy -D warnings` with full lint set in CI
+- [ ] rustc warnings denied in CI via `build.warnings = "deny"` / `CARGO_BUILD_WARNINGS=deny` (Rust 1.97+), preferred over `RUSTFLAGS=-Dwarnings` (cache-friendly, local-only)
 - [ ] `cargo audit` and `cargo deny check` in CI
 - [ ] `cargo semver-checks` in CI for library crates
 - [ ] `rustfmt.toml` with `imports_granularity` and `group_imports` configured
@@ -1710,6 +1832,15 @@ cargo clippy --all-targets --all-features -- -D warnings  # Lints
 cargo test --all-features                           # Tests
 cargo audit                                         # Security advisories
 cargo deny check                                    # License, bans, duplicates
+```
+
+**Rust 1.97+:** the `-D warnings` on the clippy line denies warnings only for
+the targets clippy compiles. To deny **rustc** warnings across the whole
+workspace in a cache-friendly, toggleable way, prefer Cargo's stabilized
+`build.warnings` config (Section 7) over `RUSTFLAGS="-D warnings"`:
+
+```bash
+CARGO_BUILD_WARNINGS=deny cargo check --workspace --all-features --keep-going
 ```
 
 ### Recommended CI Tools
@@ -1875,6 +2006,12 @@ tests they can run autonomously vs which require human-assisted setup.
 
 ## References
 
+- [Rust 1.97.0 release notes](https://doc.rust-lang.org/stable/releases.html#version-1970-2026-07-09)
+  and [announcement](https://blog.rust-lang.org/2026/07/09/Rust-1.97.0/) -- basis for
+  the "(Rust 1.97+)" annotations: Cargo `build.warnings`, the `linker_messages` lint,
+  `dead_code_pub_in_binary`, v0 symbol mangling by default, the `must_use` uninhabited-`Result`
+  refinement, and the `bit_width` / `isolate_highest_one` / `isolate_lowest_one` /
+  `highest_one` / `lowest_one` integer methods. This document tracks stable Rust through 1.97.
 - [Rust Design Patterns](https://rust-unofficial.github.io/patterns/) -- idioms, design patterns, and guidelines
 - [Rust Anti-Patterns](https://rust-unofficial.github.io/patterns/anti_patterns/) -- common solutions that create more problems
 - [7 Rust Anti-Patterns Killing Your Performance](https://medium.com/solo-devs/the-7-rust-anti-patterns-that-are-secretly-killing-your-performance-and-how-to-fix-them-in-2025-dcebfdef7b54) -- clone epidemic, blocking async, unwrap addiction
