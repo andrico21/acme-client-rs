@@ -52,7 +52,6 @@ env:
   # NOTE: the full image reference (docker.io/<user>/acme-client-rs) is spelled
   # out literally in the job-level `IMAGE` env of the build and merge jobs:
   # the `env` context is not available inside job-level `env` values.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # In a `workflow_run`-triggered run, `github.ref` / `github.sha` point at
   # the default branch HEAD. Recover the triggering tag + commit from the
   # `workflow_run` event payload. For `workflow_dispatch` runs (testing on
