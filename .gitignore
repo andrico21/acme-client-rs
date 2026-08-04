@@ -43,6 +43,9 @@ Thumbs.db
 # Local-only throwaway build spikes (e.g. MIPS nightly feasibility); never committed
 /.spike-mips/
 
+# CodeGraph index (local-only symbol graph; created by `codegraph init`)
+/.codegraph/
+
 # Node.js artifacts (some agent tooling installs these in the worktree;
 # this project is pure Rust and should NEVER track JS dependencies)
 /node_modules/
