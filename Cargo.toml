@@ -6,7 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 idna = "1"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = "1"
@@ -18,7 +18,7 @@ hickory-resolver = { version = "0.26", default-features = false, features = ["to
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 p384 = { version = "0.13", features = ["ecdsa", "pem"] }
 p521 = { version = "0.13", features = ["ecdsa", "pem"] }
-pem = "3"
+pem = "4"
 pkcs8 = { version = "0.11", features = ["encryption"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 rcgen = "0.14"
