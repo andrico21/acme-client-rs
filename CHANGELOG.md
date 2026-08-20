@@ -10,6 +10,31 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.3.4] - 2026-08-20
+
+### Changed
+
+- Refreshed dependencies via `cargo update`. Security- and TLS-relevant
+  moves: `aws-lc-rs` 1.17.3 → 1.18.0, `aws-lc-sys` 0.43.0 → 0.44.0,
+  `rustls-webpki` 0.103.13 → 0.103.14, `h2` 0.4.15 → 0.4.17,
+  `quinn-proto` 0.11.16 → 0.11.17. Direct pins bumped to `base64` 0.23,
+  `pem` 4, `clap` 4.6.6, `rcgen` 0.14.9. No source changes — this
+  release is dependency and toolchain maintenance only.
+- Rust toolchain pinned to 1.97.1 (`rust-toolchain.toml` and all CI
+  build images), the current stable.
+- macOS release builds moved off the deprecated `macos-14` runner to
+  `macos-26`. GitHub fully retires the Sonoma images after 2026-11-02;
+  `build-macos-x86_64` already cross-compiles to
+  `x86_64-apple-darwin`, so it never depended on an Intel host.
+- SemVer-incompatible upgrades to `ecdsa` 0.17, `ed25519-dalek` 3.0,
+  `hmac` 0.13, `p256`/`p384`/`p521` 0.14, `rand_core` 0.10, `sha2`
+  0.11, and `crypto-common` 0.1.7 remain deferred. `rsa` 0.9.10 still
+  requires `digest` 0.10 / `sha2` 0.10, and the JWS code feeds one
+  `Sha256` type into both the `rsa` and `ecdsa` signing paths, so a
+  partial bump forks the graph into two incompatible `digest` versions
+  and fails to build. This set can only move once `rsa` supports
+  `digest` 0.11.
+
 ## [2.2.5] - 2026-06-10
 
 ### Changed
@@ -93,7 +118,8 @@ are documented only in git history and GitHub releases.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.2.5...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...HEAD
+[2.3.4]: https://github.com/andrico21/acme-client-rs/compare/2.3.3...2.3.4
 [2.2.5]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...2.2.5
 [2.2.4]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...2.2.4
 [2.2.3]: https://github.com/andrico21/acme-client-rs/compare/2.2.2...2.2.3
