@@ -877,6 +877,11 @@ mod regression_tests {
         captured
     }
 
+    // NOT cancel-safe: runs in a detached task that the runtime drops at test
+    // teardown, and a cancellation between recording the request and writing
+    // the response leaves the peer without a reply. Harmless here — the mock
+    // owns no state beyond the capture log, and an abandoned connection can
+    // only make an already-finished test's assertions fail loudly.
     async fn handle_connection(
         mut socket: tokio::net::TcpStream,
         captured: &Mutex<Vec<CapturedRequest>>,
