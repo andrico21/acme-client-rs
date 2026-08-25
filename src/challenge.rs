@@ -31,7 +31,7 @@ pub(crate) mod http01 {
     pub(crate) fn response_body(
         token: &ChallengeToken,
         account_key: &AccountKey,
-    ) -> anyhow::Result<String> {
+    ) -> Result<String> {
         key_authorization(token, account_key)
     }
 

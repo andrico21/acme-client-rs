@@ -990,11 +990,10 @@ mod regression_tests {
     }
 
     async fn build_client(port: u16) -> Result<AcmeClient> {
-        let (tls, net) =
-            super::super::net_policy::policies_from_cli_flags(super::super::net_policy::NetFlags {
-                insecure: true,
-                allow_private_network: true,
-            });
+        let (tls, net) = policies_from_cli_flags(NetFlags {
+            insecure: true,
+            allow_private_network: true,
+        });
         let key = AccountKey::generate(KeyAlgorithm::Es256)?;
         let url = format!("http://127.0.0.1:{port}/directory");
         AcmeClient::new(&url, key, tls, 5, net).await

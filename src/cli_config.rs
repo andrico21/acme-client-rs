@@ -334,7 +334,7 @@ fn apply_run(
         if let Some(ref v) = cfg_run.domains {
             args.domains.clone_from(v);
         }
-    } else if config_mode && cfg_run.domains.as_ref().is_none_or(std::vec::Vec::is_empty) {
+    } else if config_mode && cfg_run.domains.as_ref().is_none_or(Vec::is_empty) {
         info!(
             "Using domains from CLI: {:?} (not set in config file)",
             args.domains

@@ -159,10 +159,7 @@ mod tests {
         AcmeError, AcmeErrorType, Challenge, ChallengeStatus, ChallengeToken, ChallengeType,
     };
 
-    fn make_challenge(
-        status: ChallengeStatus,
-        error: Option<AcmeError>,
-    ) -> anyhow::Result<Challenge> {
+    fn make_challenge(status: ChallengeStatus, error: Option<AcmeError>) -> Result<Challenge> {
         Ok(Challenge {
             challenge_type: ChallengeType::Http01,
             url: "https://example.com/chall/1".parse()?,
@@ -184,14 +181,14 @@ mod tests {
     }
 
     #[test]
-    fn pending_without_error_is_not_terminal() -> anyhow::Result<()> {
+    fn pending_without_error_is_not_terminal() -> Result<()> {
         let ch = make_challenge(ChallengeStatus::Pending, None)?;
         assert!(!is_challenge_failed(&ch));
         Ok(())
     }
 
     #[test]
-    fn pending_with_error_is_not_terminal() -> anyhow::Result<()> {
+    fn pending_with_error_is_not_terminal() -> Result<()> {
         // step-ca returns error on pending challenge after sync validation failure
         let ch = make_challenge(ChallengeStatus::Pending, Some(make_error()))?;
         assert!(!is_challenge_failed(&ch));
@@ -199,28 +196,28 @@ mod tests {
     }
 
     #[test]
-    fn processing_without_error_is_not_terminal() -> anyhow::Result<()> {
+    fn processing_without_error_is_not_terminal() -> Result<()> {
         let ch = make_challenge(ChallengeStatus::Processing, None)?;
         assert!(!is_challenge_failed(&ch));
         Ok(())
     }
 
     #[test]
-    fn invalid_with_error_is_terminal() -> anyhow::Result<()> {
+    fn invalid_with_error_is_terminal() -> Result<()> {
         let ch = make_challenge(ChallengeStatus::Invalid, Some(make_error()))?;
         assert!(is_challenge_failed(&ch));
         Ok(())
     }
 
     #[test]
-    fn invalid_without_error_is_terminal() -> anyhow::Result<()> {
+    fn invalid_without_error_is_terminal() -> Result<()> {
         let ch = make_challenge(ChallengeStatus::Invalid, None)?;
         assert!(is_challenge_failed(&ch));
         Ok(())
     }
 
     #[test]
-    fn valid_is_not_terminal() -> anyhow::Result<()> {
+    fn valid_is_not_terminal() -> Result<()> {
         let ch = make_challenge(ChallengeStatus::Valid, None)?;
         assert!(!is_challenge_failed(&ch));
         Ok(())

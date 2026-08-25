@@ -147,7 +147,7 @@ pub(crate) async fn cmd_key_rollover(
     cli: &Cli,
     new_key_path: &Path,
     new_key_password: Option<secrecy::SecretString>,
-    new_key_password_file: Option<&std::path::Path>,
+    new_key_password_file: Option<&Path>,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
     let pw = resolve_account_key_password(

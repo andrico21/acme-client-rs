@@ -49,11 +49,11 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
             if requested != cert_sans {
                 let added: Vec<&str> = requested
                     .difference(&cert_sans)
-                    .map(std::string::String::as_str)
+                    .map(String::as_str)
                     .collect();
                 let removed: Vec<&str> = cert_sans
                     .difference(&requested)
-                    .map(std::string::String::as_str)
+                    .map(String::as_str)
                     .collect();
 
                 if ctx.reissue_on_mismatch {
@@ -104,12 +104,12 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
                                  Use --reissue-on-mismatch to override.",
                                 cert_sans
                                     .iter()
-                                    .map(std::string::String::as_str)
+                                    .map(String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 requested
                                     .iter()
-                                    .map(std::string::String::as_str)
+                                    .map(String::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", "),
                                 added.join(", "),

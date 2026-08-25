@@ -179,9 +179,9 @@ pub(crate) async fn cmd_finalize(
     finalize_url: &str,
     domains: &[String],
     cert_key_alg: CertKeyAlgorithm,
-    key_output: &std::path::Path,
+    key_output: &Path,
     key_password: Option<secrecy::SecretString>,
-    key_password_file: Option<&std::path::Path>,
+    key_password_file: Option<&Path>,
     force: bool,
 ) -> Result<()> {
     let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {

@@ -28,7 +28,7 @@ pub(crate) async fn load_account_key_with_password(
 // cancel-safe: reads password-file from disk or returns inline value. Pure read.
 pub(crate) async fn resolve_account_key_password(
     inline: Option<&str>,
-    file: Option<&std::path::Path>,
+    file: Option<&Path>,
 ) -> Result<Option<secrecy::SecretString>> {
     if let Some(pw) = inline {
         return Ok(Some(secrecy::SecretString::from(pw.to_owned())));

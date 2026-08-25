@@ -234,7 +234,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dns_check_mode_variants_are_distinct() -> anyhow::Result<()> {
+    fn dns_check_mode_variants_are_distinct() -> Result<()> {
         assert_ne!(DnsCheckMode::Authoritative, DnsCheckMode::Cached);
         assert_ne!(DnsCheckMode::Cached, DnsCheckMode::System);
         Ok(())
@@ -271,14 +271,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn malformed_name_rejected_at_parse() -> anyhow::Result<()> {
+    async fn malformed_name_rejected_at_parse() -> Result<()> {
         assert!(crate::types::DnsName::parse("foo..example.com").is_err());
         Ok(())
     }
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_cached_mode_finds_real_txt() -> anyhow::Result<()> {
+    async fn smoke_cached_mode_finds_real_txt() -> Result<()> {
         let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
         let name = crate::types::DnsName::parse("google.com").expect("google.com is valid");
@@ -289,7 +289,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_authoritative_mode_finds_real_txt() -> anyhow::Result<()> {
+    async fn smoke_authoritative_mode_finds_real_txt() -> Result<()> {
         let checker = DnsChecker::new(DnsCheckMode::Authoritative, Dnssec::Off)?;
         let expected = "v=spf1 include:_spf.google.com ~all";
         let name = crate::types::DnsName::parse("google.com").expect("google.com is valid");
@@ -303,7 +303,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "live network: run with `cargo test -- --ignored`"]
-    async fn smoke_exact_match_rejects_substring() -> anyhow::Result<()> {
+    async fn smoke_exact_match_rejects_substring() -> Result<()> {
         let checker = DnsChecker::new(DnsCheckMode::Cached, Dnssec::Off)?;
         // Substring of the real SPF record — old `dig | contains` impl would
         // falsely return true. Exact-match must reject it.

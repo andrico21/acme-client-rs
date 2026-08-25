@@ -288,9 +288,9 @@ mod tests {
         std::fs::write(&hook, "#!/bin/sh\nexit 0\n")?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
 
-        match crate::hook_check::check_hook_path(&hook)? {
-            crate::hook_check::HookCheck::Ok => {}
-            crate::hook_check::HookCheck::Violations(vs) => {
+        match check_hook_path(&hook)? {
+            HookCheck::Ok => {}
+            HookCheck::Violations(vs) => {
                 panic!("expected hook to pass preflight, got violations: {vs:?}")
             }
         }

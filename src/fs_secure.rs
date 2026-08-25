@@ -250,7 +250,7 @@ mod tests {
     use super::*;
     use std::io::Read;
 
-    fn tmpdir(tag: &str) -> anyhow::Result<std::path::PathBuf> {
+    fn tmpdir(tag: &str) -> Result<std::path::PathBuf> {
         let p = std::env::temp_dir().join(format!("acme-fs-secure-{}-{}", std::process::id(), tag));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p)?;
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn writes_file_with_0600_on_unix() -> anyhow::Result<()> {
+    fn writes_file_with_0600_on_unix() -> Result<()> {
         let dir = tmpdir("writes_0600")?;
         let path = dir.join("k.pem");
         write_secret_file(&path, b"hello", Overwrite::Forbid)?;
@@ -275,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn refuses_overwrite_without_force() -> anyhow::Result<()> {
+    fn refuses_overwrite_without_force() -> Result<()> {
         let dir = tmpdir("refuses_overwrite")?;
         let path = dir.join("k.pem");
         write_secret_file(&path, b"first", Overwrite::Forbid)?;
@@ -287,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn force_overwrites_regular_file() -> anyhow::Result<()> {
+    fn force_overwrites_regular_file() -> Result<()> {
         let dir = tmpdir("force_overwrites")?;
         let path = dir.join("k.pem");
         write_secret_file(&path, b"first", Overwrite::Forbid)?;
@@ -300,7 +300,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn force_refuses_symlink() -> anyhow::Result<()> {
+    fn force_refuses_symlink() -> Result<()> {
         let dir = tmpdir("force_refuses_symlink")?;
         let target = dir.join("real");
         std::fs::write(&target, b"x")?;
@@ -315,7 +315,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn l4_symlink_metadata_used() -> anyhow::Result<()> {
+    fn l4_symlink_metadata_used() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let dir = tmpdir("l4_symlink_metadata")?;
         let target = dir.join("secret");
@@ -345,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn m4_no_leftover_temp_files_after_write() -> anyhow::Result<()> {
+    fn m4_no_leftover_temp_files_after_write() -> Result<()> {
         let dir = tmpdir("m4_no_leftover")?;
         let path = dir.join("k.pem");
         write_secret_file(&path, b"secret", Overwrite::Forbid)?;
@@ -363,7 +363,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn w17_ensure_secret_perms_tightens_0644_to_0600() -> anyhow::Result<()> {
+    fn w17_ensure_secret_perms_tightens_0644_to_0600() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let dir = tmpdir("w17_ensure_perms")?;
         let path = dir.join("reused.key");

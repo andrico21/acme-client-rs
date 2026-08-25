@@ -174,7 +174,7 @@ pub(super) async fn run_phased_dns(
 
             let semaphore =
                 std::sync::Arc::new(tokio::sync::Semaphore::new(ctx.dns_propagation_concurrency));
-            let mut set: tokio::task::JoinSet<anyhow::Result<(crate::types::DnsName, bool)>> =
+            let mut set: tokio::task::JoinSet<Result<(crate::types::DnsName, bool)>> =
                 tokio::task::JoinSet::new();
             for p in &pending {
                 let name = p.txt_name.clone();

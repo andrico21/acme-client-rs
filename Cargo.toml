@@ -48,6 +48,7 @@ trivial_casts = "warn"
 trivial_numeric_casts = "warn"
 unused_extern_crates = "warn"
 unused_import_braces = "warn"
+unused_qualifications = "warn"
 # Warn-by-default but outside the `warnings` group, so neither `-D warnings`
 # nor `build.warnings = "deny"` reaches it without an explicit entry.
 linker_messages = "warn"

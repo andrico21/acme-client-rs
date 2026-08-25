@@ -213,7 +213,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
-    fn write_hook(path: &Path, mode: u32) -> anyhow::Result<()> {
+    fn write_hook(path: &Path, mode: u32) -> Result<()> {
         let mut f = File::create(path)?;
         writeln!(f, "#!/bin/sh\necho ok")?;
         set_permissions(path, Permissions::from_mode(mode))?;
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn relative_path_rejected() -> anyhow::Result<()> {
+    fn relative_path_rejected() -> Result<()> {
         let res = check_hook_path(Path::new("relative-hook.sh"))?;
         match res {
             HookCheck::Violations(vs) => {
@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test]
-    fn world_writable_file_rejected() -> anyhow::Result<()> {
+    fn world_writable_file_rejected() -> Result<()> {
         let dir = tempdir()?;
         set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("hook.sh");
@@ -249,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn group_writable_file_rejected() -> anyhow::Result<()> {
+    fn group_writable_file_rejected() -> Result<()> {
         let dir = tempdir()?;
         set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("hook.sh");
@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn world_writable_parent_dir_rejected() -> anyhow::Result<()> {
+    fn world_writable_parent_dir_rejected() -> Result<()> {
         let dir = tempdir()?;
         // Parent dir world-writable, file itself locked down.
         set_permissions(dir.path(), Permissions::from_mode(0o777))?;
@@ -288,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_all_hooks_strict_fails() -> anyhow::Result<()> {
+    fn validate_all_hooks_strict_fails() -> Result<()> {
         let dir = tempdir()?;
         set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("bad.sh");
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn sticky_world_writable_parent_accepted() -> anyhow::Result<()> {
+    fn sticky_world_writable_parent_accepted() -> Result<()> {
         let dir = tempdir()?;
         set_permissions(dir.path(), Permissions::from_mode(0o1777))?;
         let hook = dir.path().join("hook.sh");
@@ -316,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_all_hooks_unsafe_warns_but_passes() -> anyhow::Result<()> {
+    fn validate_all_hooks_unsafe_warns_but_passes() -> Result<()> {
         let dir = tempdir()?;
         set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         let hook = dir.path().join("bad.sh");
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_all_hooks_skips_none() -> anyhow::Result<()> {
+    fn validate_all_hooks_skips_none() -> Result<()> {
         // No hooks configured → always Ok regardless of mode.
         validate_all_hooks(&[("dns_hook", None), ("on_cert_issued", None)], false)?;
         Ok(())
