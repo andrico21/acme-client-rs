@@ -18,6 +18,8 @@ use super::super::{
 use super::RunContext;
 
 // NOT cancel-safe: same hook + CA-signal contract as the authorize pipeline.
+// HTTP-01 file cleanup is registered before the file is written, so a
+// cancellation in that window cannot leak a token file.
 // cognitive_complexity: per-challenge-type provisioning loop mirrors the
 // authorize pipeline; one body keeps the hook/CA-signal ordering auditable.
 #[allow(clippy::cognitive_complexity)]
@@ -68,17 +70,23 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
             ChallengeType::Http01 => {
                 let token = require_token()?;
                 if let Some(dir) = ctx.challenge_dir {
-                    let file = crate::challenge::http01::write_challenge_file(
-                        dir,
-                        token,
-                        client.account_key(),
-                    )?;
-                    if !ctx.json && !ctx.silent {
-                        outln!("  Challenge file written to {}", file.display());
-                    }
+                    // Cleanup is registered BEFORE the write so a cancellation
+                    // between the two cannot leak the token file;
+                    // `cleanup_challenge_file` tolerates a missing path.
+                    let auth =
+                        crate::challenge::http01::response_body(token, client.account_key())?;
+                    let file = crate::challenge::http01::challenge_file_path(dir, token);
                     let _ = ctx.cleanup_registry.register(
                         crate::cleanup::CleanupAction::HttpChallengeFile(file.clone()),
                     );
+                    let write_path = file.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::challenge::http01::write_challenge_file_blocking(&write_path, &auth)
+                    })
+                    .await??;
+                    if !ctx.json && !ctx.silent {
+                        outln!("  Challenge file written to {}", file.display());
+                    }
                     challenge_file = Some(file);
                 } else {
                     if ctx.http_port != 80 {

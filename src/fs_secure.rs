@@ -187,6 +187,18 @@ pub(crate) fn warn_if_world_readable(path: &Path, kind: &str) {
     }
 }
 
+/// Async wrapper for [`warn_if_world_readable`] that keeps the blocking
+/// `symlink_metadata` syscall off the runtime worker thread.
+///
+/// A `JoinError` is discarded: this advisory check must never fail issuance.
+// cancel-safe: the only side effect is a `tracing::warn!`, and dropping the
+// future at the await point merely skips the advisory.
+pub(crate) async fn warn_if_world_readable_async(path: &Path, kind: &str) {
+    let path = path.to_path_buf();
+    let kind = kind.to_owned();
+    let _ = tokio::task::spawn_blocking(move || warn_if_world_readable(&path, &kind)).await;
+}
+
 /// Group/world-accessible `0o777` bits of `path`, or `None`. Uses
 /// `symlink_metadata` (NOT `metadata`) so a sensitive path that is itself a
 /// symlink is flagged via its own `0o777` mode instead of statting the target.

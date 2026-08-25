@@ -32,6 +32,8 @@ pub(super) struct ProvisionResult {
 // signals CA via respond_to_challenge. Drop mid-flow may leave a registered
 // JoinHandle/file in CleanupRegistry which still runs on Drop, but the CA
 // may already be polling. Caller (sequential.rs) must run to completion.
+// HTTP-01 file cleanup is registered before the file is written, so a
+// cancellation in that window cannot leak a token file.
 pub(super) async fn provision_http01(
     ctx: &mut RunContext<'_>,
     client: &mut AcmeClient,
@@ -49,17 +51,25 @@ pub(super) async fn provision_http01(
     info!("ACME server will validate via: {validation_url}");
 
     if let Some(dir) = ctx.challenge_dir {
-        // File mode: write token file for an existing web server
-        let file =
-            crate::challenge::http01::write_challenge_file(dir, token, client.account_key())?;
-        if !ctx.json && !ctx.silent {
-            outln!("  Challenge file written to {}", file.display());
-        }
+        // File mode: write token file for an existing web server.
+        // Cleanup is registered BEFORE the write so a cancellation between
+        // the two cannot leak the token file; `cleanup_challenge_file`
+        // tolerates a path that does not exist yet.
+        let auth = crate::challenge::http01::response_body(token, client.account_key())?;
+        let file = crate::challenge::http01::challenge_file_path(dir, token);
         let _ = ctx
             .cleanup_registry
             .register(crate::cleanup::CleanupAction::HttpChallengeFile(
                 file.clone(),
             ));
+        let write_path = file.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::challenge::http01::write_challenge_file_blocking(&write_path, &auth)
+        })
+        .await??;
+        if !ctx.json && !ctx.silent {
+            outln!("  Challenge file written to {}", file.display());
+        }
         result.challenge_file = Some(file);
     } else {
         // Standalone mode: bind a TCP server

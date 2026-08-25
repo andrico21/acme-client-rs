@@ -10,7 +10,7 @@ pub(crate) async fn load_account_key_with_password(
     path: &Path,
     password: Option<&str>,
 ) -> Result<AccountKey> {
-    fs_secure::warn_if_world_readable(path, "account key");
+    fs_secure::warn_if_world_readable_async(path, "account key").await;
     let path_buf: PathBuf = path.to_path_buf();
     let pem = tokio::task::spawn_blocking(move || {
         std::fs::read_to_string(&path_buf)
@@ -34,7 +34,7 @@ pub(crate) async fn resolve_account_key_password(
         return Ok(Some(secrecy::SecretString::from(pw.to_string())));
     }
     if let Some(path) = file {
-        fs_secure::warn_if_world_readable(path, "password");
+        fs_secure::warn_if_world_readable_async(path, "password").await;
         let path_buf: PathBuf = path.to_path_buf();
         let content = tokio::task::spawn_blocking(move || {
             std::fs::read_to_string(&path_buf)

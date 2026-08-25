@@ -105,7 +105,7 @@ pub(super) async fn finalize(
     let password: Option<secrecy::SecretString> = if let Some(pw) = ctx.key_password.take() {
         Some(pw)
     } else if let Some(path) = ctx.key_password_file {
-        crate::fs_secure::warn_if_world_readable(path, "password");
+        crate::fs_secure::warn_if_world_readable_async(path, "password").await;
         let content = zeroize::Zeroizing::new(
             tokio::fs::read_to_string(path)
                 .await

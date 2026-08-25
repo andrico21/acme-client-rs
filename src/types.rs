@@ -222,17 +222,22 @@ impl Identifier {
     /// - Bare IPv4 (`1.2.3.4`) → [`Identifier::Ip`]
     /// - Bare IPv6 (`::1`, `2001:db8::1`) → [`Identifier::Ip`]
     /// - Bracketed IPv6 (`[::1]`) → [`Identifier::Ip`] (brackets stripped)
+    /// - Unbalanced brackets (`[::1`, `::1]`) → error, never silently
+    ///   reinterpreted as a DNS name
     /// - Anything else → [`Identifier::Dns`] via [`DnsName::parse`]
     pub(crate) fn from_str_auto(value: &str) -> Result<Self> {
-        // Strip brackets for IPv6 literals like [::1].
-        let candidate = value
-            .strip_prefix('[')
-            .and_then(|s| s.strip_suffix(']'))
-            .unwrap_or(value);
-        if candidate.parse::<std::net::IpAddr>().is_ok() {
-            Self::ip(candidate)
-        } else {
-            Self::dns(value)
+        match value.strip_circumfix("[", "]") {
+            // Balanced brackets are the IPv6-literal form and nothing else:
+            // a non-IP payload is an error, not a DNS name.
+            Some(inner) => Self::ip(inner),
+            None if !value.starts_with('[') && !value.ends_with(']') => {
+                if value.parse::<std::net::IpAddr>().is_ok() {
+                    Self::ip(value)
+                } else {
+                    Self::dns(value)
+                }
+            }
+            None => bail!("unbalanced IPv6 brackets in identifier: {value}"),
         }
     }
 
@@ -995,6 +1000,37 @@ mod tests {
         assert!(!dns.is_ip());
         assert_eq!(dns.value_str(), "example.com");
         Ok(())
+    }
+
+    #[test]
+    fn from_str_auto_strips_balanced_ipv6_brackets() -> anyhow::Result<()> {
+        let id = Identifier::from_str_auto("[2001:db8::1]")?;
+        assert!(id.is_ip());
+        assert_eq!(id.value_str(), "2001:db8::1");
+
+        let bare = Identifier::from_str_auto("::1")?;
+        assert!(bare.is_ip());
+        assert_eq!(bare.value_str(), "::1");
+        Ok(())
+    }
+
+    #[test]
+    fn from_str_auto_rejects_unbalanced_brackets() {
+        for value in ["[2001:db8::1", "2001:db8::1]", "[", "]", "[example.com"] {
+            let err = Identifier::from_str_auto(value)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                err.contains("unbalanced IPv6 brackets"),
+                "expected unbalanced-bracket rejection for {value:?}, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn from_str_auto_rejects_bracketed_non_ip() {
+        assert!(Identifier::from_str_auto("[example.com]").is_err());
     }
 
     #[test]

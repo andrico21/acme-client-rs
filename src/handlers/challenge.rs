@@ -32,10 +32,11 @@ pub(crate) async fn cmd_serve_http01(
     )
     .await?;
     if let Some(dir) = challenge_dir {
-        let dir_owned = dir.to_path_buf();
-        let token_owned = token.clone();
-        let file = tokio::task::spawn_blocking(move || {
-            crate::challenge::http01::write_challenge_file(&dir_owned, &token_owned, &key)
+        let auth = crate::challenge::http01::response_body(token, &key)?;
+        let file = crate::challenge::http01::challenge_file_path(dir, token);
+        let write_path = file.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::challenge::http01::write_challenge_file_blocking(&write_path, &auth)
         })
         .await
         .context("write_challenge_file task panicked")??;

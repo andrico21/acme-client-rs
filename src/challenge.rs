@@ -40,32 +40,36 @@ pub(crate) mod http01 {
         format!("/.well-known/acme-challenge/{token}")
     }
 
-    /// Write the challenge token file into `<dir>/.well-known/acme-challenge/`.
-    ///
-    /// Returns the full path to the written file (for cleanup).
+    /// The path a challenge token file will be written to under `challenge_dir`.
     ///
     /// The token is a [`ChallengeToken`], which guarantees the RFC 8555 §8.1
     /// `[A-Za-z0-9_-]{1,128}` base64url alphabet — no path-traversal or
-    /// separator bytes can appear in `file_path`. The file itself is created
-    /// with `O_NOFOLLOW` where supported to avoid following an
-    /// attacker-planted symlink in a shared webroot.
-    pub(crate) fn write_challenge_file(
-        challenge_dir: &Path,
-        token: &ChallengeToken,
-        account_key: &AccountKey,
-    ) -> Result<PathBuf> {
+    /// separator bytes can appear in the returned path.
+    pub(crate) fn challenge_file_path(challenge_dir: &Path, token: &ChallengeToken) -> PathBuf {
+        challenge_dir
+            .join(".well-known")
+            .join("acme-challenge")
+            .join(token.as_str())
+    }
+
+    /// Write `auth` to a challenge file path produced by [`challenge_file_path`].
+    ///
+    /// Blocking: callers on the async runtime must wrap this in
+    /// `spawn_blocking`. The file is created with `O_NOFOLLOW` where supported
+    /// to avoid following an attacker-planted symlink in a shared webroot.
+    pub(crate) fn write_challenge_file_blocking(file_path: &Path, auth: &str) -> Result<()> {
         use std::fs::OpenOptions;
         use std::io::Write;
 
-        let auth = response_body(token, account_key)?;
-        let well_known = challenge_dir.join(".well-known").join("acme-challenge");
-        std::fs::create_dir_all(&well_known).with_context(|| {
+        let well_known = file_path
+            .parent()
+            .with_context(|| format!("challenge path {} has no parent", file_path.display()))?;
+        std::fs::create_dir_all(well_known).with_context(|| {
             format!(
                 "failed to create challenge directory {}",
                 well_known.display()
             )
         })?;
-        let file_path = well_known.join(token.as_str());
 
         let mut opts = OpenOptions::new();
         opts.write(true).create(true).truncate(true);
@@ -77,7 +81,7 @@ pub(crate) mod http01 {
             opts.mode(0o644);
             opts.custom_flags(libc::O_NOFOLLOW);
         }
-        let mut f = opts.open(&file_path).with_context(|| {
+        let mut f = opts.open(file_path).with_context(|| {
             format!(
                 "failed to open challenge file {} (refused to follow symlink?)",
                 file_path.display()
@@ -86,7 +90,7 @@ pub(crate) mod http01 {
         f.write_all(auth.as_bytes())
             .with_context(|| format!("failed to write challenge file {}", file_path.display()))?;
         info!("HTTP-01: wrote challenge to {}", file_path.display());
-        Ok(file_path)
+        Ok(())
     }
 
     /// Remove a previously written challenge file (best-effort).

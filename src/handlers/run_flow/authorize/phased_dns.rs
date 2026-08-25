@@ -180,7 +180,7 @@ pub(super) async fn run_phased_dns(
                 let name = p.txt_name.clone();
                 let value = p.txt_value.clone();
                 let domain = p.domain.clone();
-                let sem = semaphore.clone();
+                let sem = std::sync::Arc::clone(&semaphore);
                 let checker = std::sync::Arc::clone(ctx.dns_checker().await?);
                 set.spawn(async move {
                     let _permit = sem
