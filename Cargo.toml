@@ -43,6 +43,15 @@ x509-parser = "0.18"
 unsafe_code = "forbid"
 unreachable_pub = "warn"
 missing_docs = "warn"
+missing_debug_implementations = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_extern_crates = "warn"
+unused_import_braces = "warn"
+# Warn-by-default but outside the `warnings` group, so neither `-D warnings`
+# nor `build.warnings = "deny"` reaches it without an explicit entry.
+linker_messages = "warn"
+dead_code_pub_in_binary = "warn"
 
 [lints.clippy]
 # ── Correctness / safety (deny) ──────────────────────────────────────────────
@@ -57,10 +66,10 @@ mem_forget = "deny"
 lossy_float_literal = "deny"
 float_cmp = "deny"
 float_cmp_const = "deny"
-# Unsafe / alignment hazards. Defense-in-depth behind `unsafe_code = "forbid"`
-# above — these cannot fire while unsafe is forbidden, but stay correct if the
-# forbid is ever weakened to deny. Sourced from RUST_GUIDELINES §9
-# "Lints for LLM-generated code".
+# Unsafe / alignment hazards. RUST_GUIDELINES §9 says to drop these under
+# `unsafe_code = "forbid"` unless the crate is firmware or FFI. Kept here
+# deliberately as defense-in-depth: they cannot fire while unsafe is forbidden,
+# but stay correct if the forbid is ever weakened to deny.
 cast_ptr_alignment = "deny"
 transmute_ptr_to_ref = "deny"
 not_unsafe_ptr_arg_deref = "deny"
@@ -84,9 +93,16 @@ inefficient_to_string = "warn"
 large_stack_arrays = "warn"
 large_stack_frames = "warn"
 mutex_atomic = "warn"
+box_collection = "warn"
+rc_buffer = "warn"
+large_enum_variant = "warn"
+exhaustive_enums = "warn"
+exhaustive_structs = "warn"
+clone_on_ref_ptr = "deny"
 # Not covered by the nursery group opt-in on 1.96 — enabled explicitly.
 cognitive_complexity = "warn"
 # ── Broad opt-in groups (warn) ───────────────────────────────────────────────
+all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Pedantic noise opt-outs
@@ -96,6 +112,10 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 similar_names = "allow"
+# Deviation from RUST_GUIDELINES §9, which asks for `too_many_lines = "warn"`.
+# Ten functions currently exceed the 100-line threshold; enabling the lint now
+# would mean ten `#[expect]` attributes. Tracked in
+# .omo/plans/refactor-oversized-functions.md and re-enabled once that lands.
 too_many_lines = "allow"
 struct_excessive_bools = "allow"
 multiple_crate_versions = "allow"
