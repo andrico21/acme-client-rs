@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use tracing::info;
 
-use crate::cli::{CertKeyAlgorithm, Cli, Commands, OutputFormat};
+use crate::cli::{CertKeyAlgorithm, Cli, Commands, OutputFormat, RunArgs};
 use crate::dns_check::DnsCheckMode;
 use crate::{config, fs_secure};
 
@@ -93,38 +93,53 @@ fn config_or_env_reset<T>(
     None
 }
 
-// cognitive_complexity: one branch per merged flag; splitting per-field would
-// scatter the documented precedence algorithm across helpers.
-#[allow(clippy::cognitive_complexity)]
 fn apply_global(
     cli: &mut Cli,
     matches: &clap::ArgMatches,
     cfg: &config::GlobalConfig,
     config_mode: bool,
 ) -> Result<()> {
+    if config_mode {
+        apply_global_log_ignored_envs(matches);
+    }
+    apply_global_identity(cli, matches, cfg, config_mode)?;
+    apply_global_safety_and_timeouts(cli, matches, cfg, config_mode);
+    apply_global_dns(cli, matches, cfg, config_mode);
+    Ok(())
+}
+
+/// Reports every global env var that a loaded config file causes us to ignore.
+fn apply_global_log_ignored_envs(matches: &clap::ArgMatches) {
     use clap::parser::ValueSource;
 
-    if config_mode {
-        for (id, env_name) in [
-            ("directory", "ACME_DIRECTORY_URL"),
-            ("account_key", "ACME_ACCOUNT_KEY_FILE"),
-            ("account_url", "ACME_ACCOUNT_URL"),
-            ("output_format", "ACME_OUTPUT_FORMAT"),
-            ("insecure", "ACME_INSECURE"),
-            ("connect_timeout", "ACME_CONNECT_TIMEOUT"),
-            ("allow_private_network", "ACME_ALLOW_PRIVATE_NETWORK"),
-            ("unsafe_hooks", "ACME_UNSAFE_HOOKS"),
-            ("dns_check_mode", "ACME_DNS_CHECK_MODE"),
-            ("dns_check_dnssec", "ACME_DNS_CHECK_DNSSEC"),
-        ] {
-            if matches.value_source(id) == Some(ValueSource::EnvVariable) {
-                tracing::debug!(
-                    "Config file mode: ignoring {env_name} env var (use --config values or pass --{} on CLI)",
-                    id.replace('_', "-"),
-                );
-            }
+    for (id, env_name) in [
+        ("directory", "ACME_DIRECTORY_URL"),
+        ("account_key", "ACME_ACCOUNT_KEY_FILE"),
+        ("account_url", "ACME_ACCOUNT_URL"),
+        ("output_format", "ACME_OUTPUT_FORMAT"),
+        ("insecure", "ACME_INSECURE"),
+        ("connect_timeout", "ACME_CONNECT_TIMEOUT"),
+        ("allow_private_network", "ACME_ALLOW_PRIVATE_NETWORK"),
+        ("unsafe_hooks", "ACME_UNSAFE_HOOKS"),
+        ("dns_check_mode", "ACME_DNS_CHECK_MODE"),
+        ("dns_check_dnssec", "ACME_DNS_CHECK_DNSSEC"),
+    ] {
+        if matches.value_source(id) == Some(ValueSource::EnvVariable) {
+            tracing::debug!(
+                "Config file mode: ignoring {env_name} env var (use --config values or pass --{} on CLI)",
+                id.replace('_', "-"),
+            );
         }
     }
+}
+
+fn apply_global_identity(
+    cli: &mut Cli,
+    matches: &clap::ArgMatches,
+    cfg: &config::GlobalConfig,
+    config_mode: bool,
+) -> Result<()> {
+    use clap::parser::ValueSource;
 
     if should_apply_config(matches.value_source("directory")) {
         if let Some(ref v) = cfg.directory {
@@ -167,6 +182,17 @@ fn apply_global(
         }
     }
 
+    Ok(())
+}
+
+fn apply_global_safety_and_timeouts(
+    cli: &mut Cli,
+    matches: &clap::ArgMatches,
+    cfg: &config::GlobalConfig,
+    config_mode: bool,
+) {
+    use clap::parser::ValueSource;
+
     // Global: insecure — fail-closed in config mode (H1/E2). When a config
     // file is loaded, env `ACME_INSECURE` is dropped so it cannot silently
     // disable TLS verification. Explicit `--insecure` on the CLI always wins,
@@ -208,7 +234,14 @@ fn apply_global(
     ) {
         cli.unsafe_hooks = v;
     }
+}
 
+fn apply_global_dns(
+    cli: &mut Cli,
+    matches: &clap::ArgMatches,
+    cfg: &config::GlobalConfig,
+    config_mode: bool,
+) {
     let cfg_dns_mode = cfg.dns_check_mode.as_ref().and_then(|s| {
         <DnsCheckMode as clap::ValueEnum>::from_str(s, true).map_or_else(
             |_| {
@@ -237,8 +270,6 @@ fn apply_global(
     ) {
         cli.dns_check_dnssec = v;
     }
-
-    Ok(())
 }
 
 /// Parse a config-file `output_format` strictly: unknown values are a hard
@@ -251,8 +282,6 @@ fn parse_output_format(value: &str) -> Result<OutputFormat> {
     }
 }
 
-// cognitive_complexity: same per-field precedence merge shape as apply_global.
-#[allow(clippy::cognitive_complexity)]
 fn apply_run(
     cli: &mut Cli,
     matches: &clap::ArgMatches,
@@ -265,6 +294,22 @@ fn apply_run(
     let args = args.as_mut();
 
     if let Some((_, sub_matches)) = matches.subcommand() {
+        apply_run_subcommand_fields(args, sub_matches, cfg_run, config_mode)?;
+    }
+    apply_run_optionals(args, cfg_run, config_mode);
+    apply_run_boolean_flags(args, cfg_run);
+    apply_run_account_and_persistence(args, matches, cfg_run)?;
+    apply_run_secrets(args, cfg_run);
+    Ok(())
+}
+
+fn apply_run_subcommand_fields(
+    args: &mut RunArgs,
+    sub_matches: &clap::ArgMatches,
+    cfg_run: &config::RunConfig,
+    config_mode: bool,
+) -> Result<()> {
+    {
         use clap::parser::ValueSource;
 
         if config_mode {
@@ -329,7 +374,10 @@ fn apply_run(
             args.profile = p;
         }
     }
+    Ok(())
+}
 
+fn apply_run_optionals(args: &mut RunArgs, cfg_run: &config::RunConfig, config_mode: bool) {
     if args.domains.is_empty() {
         if let Some(ref v) = cfg_run.domains {
             args.domains.clone_from(v);
@@ -366,6 +414,9 @@ fn apply_run(
     if args.reuse_key.is_none() {
         args.reuse_key.clone_from(&cfg_run.reuse_key);
     }
+}
+
+fn apply_run_boolean_flags(args: &mut RunArgs, cfg_run: &config::RunConfig) {
     if !args.pre_authorize && cfg_run.pre_authorize == Some(true) {
         args.pre_authorize = true;
     }
@@ -383,6 +434,13 @@ fn apply_run(
     {
         args.generate_account_key_if_missing = true;
     }
+}
+
+fn apply_run_account_and_persistence(
+    args: &mut RunArgs,
+    matches: &clap::ArgMatches,
+    cfg_run: &config::RunConfig,
+) -> Result<()> {
     if let Some((_, sub_matches)) = matches.subcommand()
         && should_apply_config(sub_matches.value_source("account_key_algorithm"))
         && let Some(ref v) = cfg_run.account_key_algorithm
@@ -400,7 +458,10 @@ fn apply_run(
     if args.persist_until.is_none() {
         args.persist_until = cfg_run.persist_until;
     }
+    Ok(())
+}
 
+fn apply_run_secrets(args: &mut RunArgs, cfg_run: &config::RunConfig) {
     // Secrets remain allowed from env even in config mode:
     //   key_password_file, eab_kid, eab_hmac_key
     if args.key_password_file.is_none() {
@@ -413,8 +474,6 @@ fn apply_run(
     if args.eab_hmac_key.is_none() {
         args.eab_hmac_key.clone_from(&cfg_run.eab_hmac_key);
     }
-
-    Ok(())
 }
 
 fn apply_order(cli: &mut Cli, matches: &clap::ArgMatches, config_mode: bool) {
@@ -460,12 +519,56 @@ fn apply_account(cli: &mut Cli, cfg_acct: &config::AccountConfig) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(clippy::expect_used, clippy::panic)]
 
     use clap::parser::ValueSource;
 
     use super::{config_or_env_reset, should_apply_config};
     use crate::dns_check::DnsCheckMode;
+
+    #[test]
+    fn apply_config_merges_global_and_run_end_to_end() {
+        use clap::{CommandFactory as _, Parser as _};
+
+        use super::apply_config;
+        use crate::cli::{Cli, Commands};
+
+        let toml = r#"
+[global]
+directory = "https://cfg.example/dir"
+connect_timeout = 22
+dns_check_mode = "cached"
+
+[run]
+domains = ["a.example.com"]
+challenge_type = "dns-01"
+challenge_timeout = 111
+pre_authorize = true
+eab_kid = "kid-from-config"
+"#;
+        let config: crate::config::Config = toml::from_str(toml).expect("fixture parses");
+
+        let argv = ["acme-client-rs", "run", "--account-key", "/tmp/k.pem"];
+        let matches = Cli::command()
+            .try_get_matches_from(argv)
+            .expect("argv parses");
+        let mut cli = Cli::try_parse_from(argv).expect("argv parses");
+
+        apply_config(&mut cli, &matches, &config, true).expect("merge succeeds");
+
+        assert_eq!(cli.directory, "https://cfg.example/dir");
+        assert_eq!(cli.connect_timeout, 22);
+        assert_eq!(cli.dns_check_mode, DnsCheckMode::Cached);
+
+        let Commands::Run(args) = &cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(args.domains, vec!["a.example.com".to_owned()]);
+        assert_eq!(args.challenge_type, "dns-01");
+        assert_eq!(args.challenge_timeout, 111);
+        assert!(args.pre_authorize);
+        assert_eq!(args.eab_kid.as_deref(), Some("kid-from-config"));
+    }
 
     // H1: an env-sourced safety toggle with no config override must reset to
     // the secure default in config mode (fail-closed); CLI and config still win.
