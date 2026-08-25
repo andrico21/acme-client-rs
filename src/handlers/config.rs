@@ -222,21 +222,22 @@ macro_rules! field {
 }
 
 fn build_global(ctx: &RenderContext<'_>) -> Vec<FieldEntry> {
+    let mut out = Vec::with_capacity(10);
+    global_push_identity(&mut out, ctx);
+    global_push_network(&mut out, ctx);
+    out
+}
+
+/// Endpoint / credential / output-shape fields, in render order.
+fn global_push_identity(out: &mut Vec<FieldEntry>, ctx: &RenderContext<'_>) {
     let cli = ctx.cli;
     let cfg_g = ctx.cfg_g();
-    let mut out = Vec::with_capacity(10);
     let src = |key: &'static str, has: bool| ctx.verbose.then(|| ctx.global_source(key, has));
 
     let dir_has = cfg_g.and_then(|c| c.directory.as_ref()).is_some();
     let key_has = cfg_g.and_then(|c| c.account_key.as_ref()).is_some();
     let url_has = cfg_g.and_then(|c| c.account_url.as_ref()).is_some();
     let fmt_has = cfg_g.and_then(|c| c.output_format.as_ref()).is_some();
-    let ins_has = cfg_g.and_then(|c| c.insecure).is_some();
-    let ct_has = cfg_g.and_then(|c| c.connect_timeout).is_some();
-    let apn_has = cfg_g.and_then(|c| c.allow_private_network).is_some();
-    let dcm_has = cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some();
-    let dcd_has = cfg_g.and_then(|c| c.dns_check_dnssec).is_some();
-    let uh_has = cfg_g.and_then(|c| c.unsafe_hooks).is_some();
 
     let dir = cli.directory.clone();
     let akey = cli.account_key.display().to_string();
@@ -245,9 +246,6 @@ fn build_global(ctx: &RenderContext<'_>) -> Vec<FieldEntry> {
     } else {
         "text"
     };
-    // Text mode renders Debug form ("Authoritative") — kept verbatim per byte-identity.
-    let dcm_text = format!("{:?}", cli.dns_check_mode);
-    let dcm_json = dcm_text.to_lowercase();
 
     field!(
         out,
@@ -285,6 +283,25 @@ fn build_global(ctx: &RenderContext<'_>) -> Vec<FieldEntry> {
         src("output_format", fmt_has),
         src("output_format", fmt_has)
     );
+}
+
+/// Network-policy and safety toggles, in render order.
+fn global_push_network(out: &mut Vec<FieldEntry>, ctx: &RenderContext<'_>) {
+    let cli = ctx.cli;
+    let cfg_g = ctx.cfg_g();
+    let src = |key: &'static str, has: bool| ctx.verbose.then(|| ctx.global_source(key, has));
+
+    let ins_has = cfg_g.and_then(|c| c.insecure).is_some();
+    let ct_has = cfg_g.and_then(|c| c.connect_timeout).is_some();
+    let apn_has = cfg_g.and_then(|c| c.allow_private_network).is_some();
+    let dcm_has = cfg_g.and_then(|c| c.dns_check_mode.as_ref()).is_some();
+    let dcd_has = cfg_g.and_then(|c| c.dns_check_dnssec).is_some();
+    let uh_has = cfg_g.and_then(|c| c.unsafe_hooks).is_some();
+
+    // Text mode renders Debug form ("Authoritative") — kept verbatim per byte-identity.
+    let dcm_text = format!("{:?}", cli.dns_check_mode);
+    let dcm_json = dcm_text.to_lowercase();
+
     field!(
         out,
         "insecure",
@@ -339,36 +356,47 @@ fn build_global(ctx: &RenderContext<'_>) -> Vec<FieldEntry> {
         src("unsafe_hooks", uh_has),
         src("unsafe_hooks", uh_has)
     );
-    out
 }
 
 fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<FieldEntry> {
     let mut out = Vec::with_capacity(24);
+    {
+        // Per-format source rules:
+        //   JSON: legacy quirk — compare the typed json_value against the
+        //   per-key default (`json_value_has_non_default`), preserving the
+        //   "default-valued config still annotates as (default)" behaviour.
+        //   Text: pure `Option::is_some` on the raw config field.
+        let mut push = |key: &'static str,
+                        text_label: &'static str,
+                        json_value: JsonValue,
+                        text_value: String,
+                        has_cfg_text: bool| {
+            let json_source = ctx
+                .verbose
+                .then(|| ctx.cfg_source(json_value_has_non_default(&json_value)));
+            let text_source = ctx.verbose.then(|| ctx.cfg_source(has_cfg_text));
+            out.push(FieldEntry {
+                key,
+                text_label,
+                json_value,
+                text_value,
+                json_source,
+                text_source,
+            });
+        };
 
-    // Per-format source rules:
-    //   JSON: legacy quirk — compare the typed json_value against the
-    //   per-key default (`json_value_has_non_default`), preserving the
-    //   "default-valued config still annotates as (default)" behaviour.
-    //   Text: pure `Option::is_some` on the raw config field.
-    let mut push = |key: &'static str,
-                    text_label: &'static str,
-                    json_value: JsonValue,
-                    text_value: String,
-                    has_cfg_text: bool| {
-        let json_source = ctx
-            .verbose
-            .then(|| ctx.cfg_source(json_value_has_non_default(&json_value)));
-        let text_source = ctx.verbose.then(|| ctx.cfg_source(has_cfg_text));
-        out.push(FieldEntry {
-            key,
-            text_label,
-            json_value,
-            text_value,
-            json_source,
-            text_source,
-        });
-    };
+        run_push_identifiers(&mut push, r);
+        run_push_challenge_settings(&mut push, r);
+        run_push_io_and_eab(&mut push, ctx, r);
+        run_push_misc(&mut push, r);
+    }
+    out
+}
 
+type RunPush<'a> = dyn FnMut(&'static str, &'static str, JsonValue, String, bool) + 'a;
+
+/// Certificate subject fields, in render order.
+fn run_push_identifiers(push: &mut RunPush<'_>, r: &crate::config::RunConfig) {
     // Legacy serde-derive shape: None → `null` for JSON; the text emitter
     // still renders `[]` because it goes through Debug formatting on the
     // dereffed slice. Kept asymmetric on purpose for byte-identity.
@@ -400,6 +428,10 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         challenge_type,
         r.challenge_type.is_some(),
     );
+}
+
+/// Challenge transport and timing fields, in render order.
+fn run_push_challenge_settings(push: &mut RunPush<'_>, r: &crate::config::RunConfig) {
     push(
         "http_port",
         "  http_port          = ",
@@ -451,6 +483,14 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         challenge_timeout.to_string(),
         r.challenge_timeout.is_some(),
     );
+}
+
+/// Output paths, hooks and EAB credentials, in render order.
+fn run_push_io_and_eab(
+    push: &mut RunPush<'_>,
+    ctx: &RenderContext<'_>,
+    r: &crate::config::RunConfig,
+) {
     let cert_output = r.cert_output.as_ref().map_or_else(
         || defaults::run::CERT_OUTPUT_FILE.to_owned(),
         |p| p.display().to_string(),
@@ -516,6 +556,10 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         ctx.opt_secret_string(&r.eab_hmac_key),
         r.eab_hmac_key.is_some(),
     );
+}
+
+/// Behaviour flags, persistence and algorithm selection, in render order.
+fn run_push_misc(push: &mut RunPush<'_>, r: &crate::config::RunConfig) {
     push(
         "pre_authorize",
         "  pre_authorize      = ",
@@ -577,8 +621,6 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         opt_str(&r.profile),
         r.profile.is_some(),
     );
-
-    out
 }
 
 /// JSON-side source quirk: the legacy renderer decided `(config|default)` by
