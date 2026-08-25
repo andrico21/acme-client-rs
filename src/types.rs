@@ -579,7 +579,7 @@ impl ChallengeToken {
                 );
             }
         }
-        Ok(Self(s.to_string()))
+        Ok(Self(s.to_owned()))
     }
 
     pub fn as_str(&self) -> &str {
@@ -912,7 +912,7 @@ mod tests {
             (ChallengeType::DnsPersist01, "dns-persist-01"),
         ] {
             assert_eq!(variant.as_str(), wire);
-            assert_eq!(ChallengeType::from(wire.to_string()), variant);
+            assert_eq!(ChallengeType::from(wire.to_owned()), variant);
             assert_eq!(ChallengeType::parse_strict(wire)?, variant);
         }
         Ok(())
@@ -922,10 +922,10 @@ mod tests {
     fn challenge_type_preserves_unknown_via_from_string() -> anyhow::Result<()> {
         // Wire-side MUST tolerate unknown variants (forward-compat with future
         // RFCs); strict parser MUST reject them.
-        let unknown = ChallengeType::from("custom-future-01".to_string());
+        let unknown = ChallengeType::from("custom-future-01".to_owned());
         assert_eq!(
             unknown,
-            ChallengeType::Unknown("custom-future-01".to_string())
+            ChallengeType::Unknown("custom-future-01".to_owned())
         );
         assert_eq!(unknown.as_str(), "custom-future-01");
         assert!(ChallengeType::parse_strict("custom-future-01").is_err());
@@ -939,7 +939,7 @@ mod tests {
         let parsed: ChallengeType = serde_json::from_str("\"dns-01\"")?;
         assert_eq!(parsed, ChallengeType::Dns01);
         let unknown: ChallengeType = serde_json::from_str("\"future-02\"")?;
-        assert_eq!(unknown, ChallengeType::Unknown("future-02".to_string()));
+        assert_eq!(unknown, ChallengeType::Unknown("future-02".to_owned()));
         Ok(())
     }
 

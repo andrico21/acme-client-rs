@@ -161,11 +161,11 @@ mod tests {
         let cfg = Config {
             global: GlobalConfig::default(),
             run: RunConfig {
-                eab_hmac_key: Some(SecretString::from(secret_value.to_string())),
+                eab_hmac_key: Some(SecretString::from(secret_value.to_owned())),
                 ..Default::default()
             },
             account: AccountConfig {
-                eab_hmac_key: Some(SecretString::from(secret_value.to_string())),
+                eab_hmac_key: Some(SecretString::from(secret_value.to_owned())),
                 ..Default::default()
             },
         };

@@ -100,8 +100,8 @@ impl RenderContext<'_> {
     /// Returns `Some("[REDACTED]" | "<value>")` or `None`.
     fn redact_secret(&self, v: &Option<SecretString>) -> Option<String> {
         match v {
-            Some(_) if !self.show_secrets => Some("[REDACTED]".to_string()),
-            Some(s) => Some(s.expose_secret().to_string()),
+            Some(_) if !self.show_secrets => Some("[REDACTED]".to_owned()),
+            Some(s) => Some(s.expose_secret().to_owned()),
             None => None,
         }
     }
@@ -109,9 +109,9 @@ impl RenderContext<'_> {
     /// Render an optional secret as a plain string for text output.
     fn opt_secret_string(&self, v: &Option<SecretString>) -> String {
         match v {
-            Some(_) if !self.show_secrets => "[REDACTED]".to_string(),
-            Some(s) => s.expose_secret().to_string(),
-            None => "(not set)".to_string(),
+            Some(_) if !self.show_secrets => "[REDACTED]".to_owned(),
+            Some(s) => s.expose_secret().to_owned(),
+            None => "(not set)".to_owned(),
         }
     }
 
@@ -127,17 +127,17 @@ impl RenderContext<'_> {
 
 // Stateless display helpers (pure, no context needed).
 fn opt_str(v: &Option<String>) -> String {
-    v.as_deref().unwrap_or("(not set)").to_string()
+    v.as_deref().unwrap_or("(not set)").to_owned()
 }
 fn opt_path(v: &Option<PathBuf>) -> String {
     v.as_ref()
-        .map_or("(not set)".to_string(), |p| p.display().to_string())
+        .map_or("(not set)".to_owned(), |p| p.display().to_string())
 }
 fn opt_u64(v: Option<u64>) -> String {
-    v.map_or("(not set)".to_string(), |v| v.to_string())
+    v.map_or("(not set)".to_owned(), |v| v.to_string())
 }
 fn opt_u32(v: Option<u32>) -> String {
-    v.map_or("(not set)".to_string(), |v| v.to_string())
+    v.map_or("(not set)".to_owned(), |v| v.to_string())
 }
 fn opt_u16(v: Option<u16>) -> String {
     v.map_or_else(|| defaults::run::HTTP_PORT.to_string(), |v| v.to_string())
@@ -281,7 +281,7 @@ fn build_global(ctx: &RenderContext<'_>) -> Vec<FieldEntry> {
         "output_format",
         "  output_format   = ",
         jstr(fmt),
-        fmt.to_string(),
+        fmt.to_owned(),
         src("output_format", fmt_has),
         src("output_format", fmt_has)
     );
@@ -392,7 +392,7 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         .challenge_type
         .as_deref()
         .unwrap_or(defaults::run::CHALLENGE_TYPE)
-        .to_string();
+        .to_owned();
     push(
         "challenge_type",
         "  challenge_type     = ",
@@ -452,7 +452,7 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         r.challenge_timeout.is_some(),
     );
     let cert_output = r.cert_output.as_ref().map_or_else(
-        || defaults::run::CERT_OUTPUT_FILE.to_string(),
+        || defaults::run::CERT_OUTPUT_FILE.to_owned(),
         |p| p.display().to_string(),
     );
     push(
@@ -463,7 +463,7 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         r.cert_output.is_some(),
     );
     let key_output = r.key_output.as_ref().map_or_else(
-        || defaults::run::KEY_OUTPUT_FILE.to_string(),
+        || defaults::run::KEY_OUTPUT_FILE.to_owned(),
         |p| p.display().to_string(),
     );
     push(
@@ -562,7 +562,7 @@ fn build_run(ctx: &RenderContext<'_>, r: &crate::config::RunConfig) -> Vec<Field
         .cert_key_algorithm
         .as_deref()
         .unwrap_or(defaults::run::CERT_KEY_ALGORITHM)
-        .to_string();
+        .to_owned();
     push(
         "cert_key_algorithm",
         "  cert_key_algorithm = ",
@@ -663,22 +663,22 @@ fn render_json(ctx: &RenderContext<'_>, ir: &Ir) -> Result<()> {
         let mut sec = serde_json::Map::with_capacity(entries.len());
         for e in entries {
             let mut field = serde_json::Map::with_capacity(2);
-            field.insert("value".to_string(), e.json_value.clone());
+            field.insert("value".to_owned(), e.json_value.clone());
             if let Some(src) = e.json_source {
-                field.insert("source".to_string(), jstr(src));
+                field.insert("source".to_owned(), jstr(src));
             }
-            sec.insert(e.key.to_string(), JsonValue::Object(field));
+            sec.insert(e.key.to_owned(), JsonValue::Object(field));
         }
         JsonValue::Object(sec)
     };
 
     if let Some(map) = obj.as_object_mut() {
-        map.insert("global".to_string(), section(&ir.global));
+        map.insert("global".to_owned(), section(&ir.global));
         if let Some(run) = &ir.run {
-            map.insert("run".to_string(), section(run));
+            map.insert("run".to_owned(), section(run));
         }
         if let Some(account) = &ir.account {
-            map.insert("account".to_string(), section(account));
+            map.insert("account".to_owned(), section(account));
         }
     }
     outln!("{}", serde_json::to_string_pretty(&obj)?);
@@ -759,7 +759,7 @@ mod tests {
         let cfg = Config {
             global: GlobalConfig::default(),
             run: RunConfig {
-                eab_hmac_key: Some(SecretString::from("PLAINTEXT-MUST-NOT-LEAK".to_string())),
+                eab_hmac_key: Some(SecretString::from("PLAINTEXT-MUST-NOT-LEAK".to_owned())),
                 ..Default::default()
             },
             account: AccountConfig::default(),
@@ -783,7 +783,7 @@ mod tests {
         assert_eq!(entry.text_value, "[REDACTED]");
         assert_eq!(
             entry.json_value,
-            serde_json::Value::String("[REDACTED]".to_string())
+            serde_json::Value::String("[REDACTED]".to_owned())
         );
         // Plaintext must not appear in either rendered shape.
         assert!(!entry.text_value.contains("PLAINTEXT-MUST-NOT-LEAK"));
@@ -828,7 +828,7 @@ mod tests {
         let cfg = Config {
             global: GlobalConfig::default(),
             run: RunConfig {
-                challenge_type: Some("dns-01".to_string()),
+                challenge_type: Some("dns-01".to_owned()),
                 ..Default::default()
             },
             account: AccountConfig::default(),

@@ -697,7 +697,7 @@ pub(crate) struct RunArgs {
 /// clap value parser that wraps a password argument in [`secrecy::SecretString`]
 /// so it is zeroized on drop and cannot be accidentally logged in full.
 fn parse_secret_string(raw: &str) -> Result<secrecy::SecretString, std::convert::Infallible> {
-    Ok(secrecy::SecretString::from(raw.to_string()))
+    Ok(secrecy::SecretString::from(raw.to_owned()))
 }
 
 /// Hand-written `Debug` so every secret-bearing field is rendered through

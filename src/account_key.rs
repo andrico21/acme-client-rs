@@ -31,7 +31,7 @@ pub(crate) async fn resolve_account_key_password(
     file: Option<&std::path::Path>,
 ) -> Result<Option<secrecy::SecretString>> {
     if let Some(pw) = inline {
-        return Ok(Some(secrecy::SecretString::from(pw.to_string())));
+        return Ok(Some(secrecy::SecretString::from(pw.to_owned())));
     }
     if let Some(path) = file {
         fs_secure::warn_if_world_readable_async(path, "password").await;
@@ -51,7 +51,7 @@ pub(crate) async fn resolve_account_key_password(
         let pw = content
             .lines()
             .next()
-            .map(|line| line.trim().to_string())
+            .map(|line| line.trim().to_owned())
             .filter(|s| !s.is_empty());
         return Ok(pw.map(secrecy::SecretString::from));
     }

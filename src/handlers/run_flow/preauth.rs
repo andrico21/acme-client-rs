@@ -213,7 +213,7 @@ pub(super) async fn preauthorize(ctx: &mut RunContext<'_>, client: &mut AcmeClie
                 let account_uri = client
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
-                    .to_string();
+                    .to_owned();
                 let txt_name = crate::challenge::dns_persist01::record_name(dns)?;
                 let txt_value = crate::challenge::dns_persist01::txt_record_value(
                     primary_issuer,

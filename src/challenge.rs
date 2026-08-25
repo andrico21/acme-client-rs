@@ -585,9 +585,9 @@ mod tests {
         assert!(
             super::dns_persist01::print_instructions(&domain, &too_many, uri, None, None).is_err()
         );
-        let bad = vec!["ca.example.org".to_string(), "bad issuer".to_string()];
+        let bad = vec!["ca.example.org".to_owned(), "bad issuer".to_owned()];
         assert!(super::dns_persist01::print_instructions(&domain, &bad, uri, None, None).is_err());
-        let ok = vec!["ca.example.org".to_string()];
+        let ok = vec!["ca.example.org".to_owned()];
         assert!(super::dns_persist01::print_instructions(&domain, &ok, uri, None, None).is_ok());
     }
 

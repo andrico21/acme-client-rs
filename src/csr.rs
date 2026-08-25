@@ -125,7 +125,7 @@ mod tests {
         let kp = rcgen::KeyPair::generate().context("generate keypair")?;
         std::fs::write(tmp.path(), kp.serialize_pem())?;
 
-        let domains = vec!["example.com".to_string()];
+        let domains = vec!["example.com".to_owned()];
 
         let kp_a = load_keypair_from_pem_file(tmp.path())?;
         let (csr_a, _) = build_csr_with_keypair(&domains, &kp_a)?;

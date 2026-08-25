@@ -97,7 +97,7 @@ pub(super) fn parse_eab(
                 .decode(key_b64)
                 .context("--eab-hmac-key is not valid base64url")?;
             Ok(Some((
-                kid.to_string(),
+                kid.to_owned(),
                 secrecy::SecretSlice::from(key_bytes),
             )))
         }
@@ -177,7 +177,7 @@ mod tests {
     fn make_error() -> AcmeError {
         AcmeError {
             error_type: Some(AcmeErrorType::Connection),
-            detail: Some("The server could not connect to validation target".to_string()),
+            detail: Some("The server could not connect to validation target".to_owned()),
             status: None,
             subproblems: None,
         }

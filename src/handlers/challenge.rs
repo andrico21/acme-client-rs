@@ -145,7 +145,7 @@ pub(crate) async fn cmd_show_dns_persist01(
     let account_uri = client
         .account_url()
         .context("account URL not known")?
-        .to_string();
+        .to_owned();
 
     let name = crate::challenge::dns_persist01::record_name(&domain)?;
     let value = crate::challenge::dns_persist01::txt_record_value(
@@ -172,7 +172,7 @@ pub(crate) async fn cmd_show_dns_persist01(
                 })
             );
         } else {
-            let issuer_names = vec![issuer_domain_name.to_string()];
+            let issuer_names = vec![issuer_domain_name.to_owned()];
             crate::challenge::dns_persist01::print_instructions(
                 &domain,
                 &issuer_names,

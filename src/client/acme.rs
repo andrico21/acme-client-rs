@@ -99,7 +99,7 @@ impl Transport {
             let (tls, net) = self.url_policies();
             validate_acme_url(new_nonce.as_str(), tls, net)
         }
-        .with_context(|| "newNonce URL failed validation".to_string())?;
+        .with_context(|| "newNonce URL failed validation".to_owned())?;
         debug!("Fetching fresh nonce via HEAD {new_nonce}");
         let resp = self
             .http
@@ -113,7 +113,7 @@ impl Transport {
             .context("server did not return Replay-Nonce header")?
             .to_str()
             .context("Replay-Nonce is not valid ASCII")?
-            .to_string();
+            .to_owned();
         // Log only the length: a Replay-Nonce is a single-use anti-replay
         // credential (RFC 8555 §6.5) and must not appear in logs.
         debug!(len = nonce.len(), "Obtained nonce");
@@ -133,7 +133,7 @@ impl Transport {
         if let Some(val) = headers.get("replay-nonce")
             && let Ok(s) = val.to_str()
         {
-            self.nonce = Some(s.to_string());
+            self.nonce = Some(s.to_owned());
         }
     }
 
@@ -294,11 +294,11 @@ impl AcmeClient {
         }
         if let Some(u) = directory.new_authz.as_ref() {
             validate_acme_url(u.as_str(), tls, network)
-                .with_context(|| "ACME directory advertises invalid newAuthz URL".to_string())?;
+                .with_context(|| "ACME directory advertises invalid newAuthz URL".to_owned())?;
         }
         if let Some(u) = directory.renewal_info.as_ref() {
             validate_acme_url(u.as_str(), tls, network)
-                .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_string())?;
+                .with_context(|| "ACME directory advertises invalid renewalInfo URL".to_owned())?;
         }
 
         Ok(Self {
@@ -907,8 +907,8 @@ mod regression_tests {
         let mut lines = header_text.split("\r\n");
         let request_line = lines.next().ok_or_else(|| anyhow!("no request line"))?;
         let mut parts = request_line.split_whitespace();
-        let method = parts.next().unwrap_or("").to_string();
-        let path = parts.next().unwrap_or("").to_string();
+        let method = parts.next().unwrap_or("").to_owned();
+        let path = parts.next().unwrap_or("").to_owned();
 
         let mut content_length: usize = 0;
         for line in lines {

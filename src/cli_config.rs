@@ -131,7 +131,7 @@ fn apply_global(
             cli.directory.clone_from(v);
         } else if config_mode && matches.value_source("directory") == Some(ValueSource::EnvVariable)
         {
-            cli.directory = crate::defaults::global::DIRECTORY_URL.to_string();
+            crate::defaults::global::DIRECTORY_URL.clone_into(&mut cli.directory);
         }
     }
 
@@ -566,11 +566,11 @@ mod tests {
         assert_eq!(
             config_or_env_reset(
                 Some(ValueSource::EnvVariable),
-                Some(Some("shortlived".to_string())),
+                Some(Some("shortlived".to_owned())),
                 true,
                 None,
             ),
-            Some(Some("shortlived".to_string())),
+            Some(Some("shortlived".to_owned())),
         );
         assert_eq!(
             config_or_env_reset::<Option<String>>(Some(ValueSource::CommandLine), None, true, None,),

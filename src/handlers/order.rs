@@ -216,7 +216,7 @@ pub(crate) async fn cmd_finalize(
         let pw: Option<String> = content
             .lines()
             .next()
-            .map(|line| line.trim().to_string())
+            .map(|line| line.trim().to_owned())
             .filter(|pw| !pw.is_empty());
         pw.map(secrecy::SecretString::from)
     } else {

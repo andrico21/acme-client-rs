@@ -182,7 +182,7 @@ pub(crate) fn validate_account_uri(s: &str) -> Result<String> {
     if parsed.fragment().is_some() {
         bail!("accounturi must not contain a fragment: {s:?}");
     }
-    Ok(s.to_string())
+    Ok(s.to_owned())
 }
 
 /// Validate a CAA-style parameter value per RFC 8659 §4.2:

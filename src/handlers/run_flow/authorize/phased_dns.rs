@@ -100,7 +100,7 @@ pub(super) async fn run_phased_dns(
                 let account_uri = client
                     .account_url()
                     .context("account URL not known - cannot construct dns-persist-01 record")?
-                    .to_string();
+                    .to_owned();
                 let name = crate::challenge::dns_persist01::record_name(dns)?;
                 let value = crate::challenge::dns_persist01::txt_record_value(
                     primary_issuer,
