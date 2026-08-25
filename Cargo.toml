@@ -3,6 +3,10 @@ name = "acme-client-rs"
 version = "2.3.4"
 edition = "2024"
 license = "Apache-2.0"
+# Minimum supported Rust version. The crate uses `str::strip_circumfix`
+# (stabilised in 1.98). Also serves as the `msrv` source for Clippy, which
+# falls back to `package.rust-version` when `clippy.toml` omits the key.
+rust-version = "1.98"
 
 [dependencies]
 anyhow = "1"

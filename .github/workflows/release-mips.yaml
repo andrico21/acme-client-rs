@@ -11,10 +11,10 @@ name: Release (MIPS)
 # fully self-contained and the main release.yaml stays byte-for-byte unchanged.
 #
 # WHY THE SOURCE IS PATCHED AT BUILD TIME: the committed repo keeps the full
-# aws-lc-rs stack on stable 1.97.1 (unchanged for all other targets). The ring-only
+# aws-lc-rs stack on stable (unchanged for all other targets). The ring-only
 # escape hatch (hickory dnssec-ring, reqwest rustls-no-provider + explicit
-# rustls{ring}) and the nightly toolchain pin are applied here, in-workflow, by a
-# drift-guarded patch script — the working tree is never mutated in git.
+# rustls{ring}) is applied here, in-workflow, by a drift-guarded patch script —
+# the working tree is never mutated in git.
 #
 # Both binaries are static, soft-float, stripped MIPS32r2 ELFs suitable for
 # dropping into /opt/bin on Entware devices (Keenetic, OpenWRT, etc.).
@@ -60,14 +60,15 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Apply ring-only crypto patch (build-time only, drift-guarded)
-        # Switches the crypto graph to ring-only for this MIPS build, and pins the
-        # toolchain to nightly + rust-src (for -Z build-std). Each edit asserts the
-        # expected upstream line exists first, so an unnoticed Cargo.toml bump fails
-        # the build loudly instead of silently producing the wrong crypto backend.
+        # Switches the crypto graph to ring-only for this MIPS build. Each edit
+        # asserts the expected upstream line exists first, so an unnoticed
+        # Cargo.toml bump fails the build loudly instead of silently producing
+        # the wrong crypto backend. The nightly toolchain needed for -Z build-std
+        # is installed explicitly in the build step, not via a toolchain file.
         run: |
-          python3 - Cargo.toml rust-toolchain.toml <<'PYEOF'
+          python3 - Cargo.toml <<'PYEOF'
           import sys
-          CARGO, TOOLCHAIN = sys.argv[1], sys.argv[2]
+          CARGO = sys.argv[1]
 
           def patch(path, edits, inserts=()):
               text = open(path, encoding="utf-8").read()
@@ -90,11 +91,9 @@ jobs:
           RUSTLS_LINE = 'rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }'
 
           patch(CARGO, edits=[(HICKORY_OLD, HICKORY_NEW), (REQWEST_OLD, REQWEST_NEW)], inserts=[(REQWEST_NEW, RUSTLS_LINE)])
-          patch(TOOLCHAIN, edits=[('channel = "1.97.1"', 'channel = "nightly"'), ('components = ["rustfmt", "clippy"]', 'components = ["rust-src"]')])
 
           cargo = open(CARGO, encoding="utf-8").read()
-          toolchain = open(TOOLCHAIN, encoding="utf-8").read()
-          for needle, where in [(HICKORY_NEW, cargo), (REQWEST_NEW, cargo), (RUSTLS_LINE, cargo), ('channel = "nightly"', toolchain), ('components = ["rust-src"]', toolchain)]:
+          for needle, where in [(HICKORY_NEW, cargo), (REQWEST_NEW, cargo), (RUSTLS_LINE, cargo)]:
               if needle not in where:
                   sys.exit(f"PATCH-VERIFY-FAILED: {needle}")
           print("PATCH-OK")
