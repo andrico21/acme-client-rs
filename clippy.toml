@@ -1,0 +1,16 @@
+# Clippy configuration, per RUST_GUIDELINES.md §9.
+#
+# Lint *levels* live in `[lints.clippy]` in Cargo.toml; lint *configuration*
+# has to live here, because Cargo's lint table has no way to express it.
+#
+# These values match Clippy's current defaults. They are pinned explicitly so a
+# future upstream default change cannot silently loosen the thresholds this
+# crate is held to.
+#
+# `msrv` is deliberately omitted: Clippy falls back to `package.rust-version`
+# in Cargo.toml, which is the single source of truth for the MSRV.
+
+cognitive-complexity-threshold = 25
+too-many-lines-threshold = 100
+max-fn-params-bools = 3
+enum-variant-size-threshold = 200
