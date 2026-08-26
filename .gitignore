@@ -35,6 +35,8 @@ Thumbs.db
 
 # Code review reports (local-only)
 /CODE_REVIEW.md
+# Ad-hoc external code-review reports (kept local, never committed)
+/*_CODE_REVIEW_*.md
 
 # Session/orchestration state (local-only)
 /.sisyphus/

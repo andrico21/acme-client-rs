@@ -10,6 +10,22 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+### Changed
+
+- **Minimum supported Rust version is now 1.98** (`rust-version` in `Cargo.toml`).
+  The crate adopts `str::strip_circumfix`, stabilised in 1.98.
+- The `rust-toolchain.toml` pin was removed; CI now builds on whatever `stable`
+  resolves to, per RUST_GUIDELINES §12.
+
+### Fixed
+
+- Unbalanced IPv6 brackets in an identifier (`[::1` or `::1]`) are now rejected
+  instead of being silently reinterpreted as a DNS name.
+- Moved blocking filesystem work off the async runtime: the world-readable
+  permission check and the HTTP-01 challenge-file write now run on the blocking
+  pool. HTTP-01 cleanup is registered before the file is written, so a
+  cancellation in that window cannot leak a challenge token.
+
 ## [2.3.4] - 2026-08-20
 
 ### Changed
