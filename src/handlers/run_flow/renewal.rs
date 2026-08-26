@@ -26,18 +26,29 @@ pub(super) enum RenewalDecision {
     Renew,
 }
 
-// cancel-safe: read-only — inspects existing cert + optional ARI HTTP GET.
-// No external mutation; drop has no side effects.
-// cognitive_complexity: ARI window + --days + mismatch checks form one
-// decision tree; splitting would hide the precedence between them.
-#[allow(clippy::cognitive_complexity)]
+// cancel-safe: orchestrates renewal pre-check phases only. Phase-local updates
+// touch in-process RunContext state; no filesystem or ACME server mutation.
 pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
     if !ctx.cert_output.exists() {
         return Ok(RenewalDecision::Renew);
     }
 
-    let mut skip_renewal_checks = false;
+    if let Some(decision) = check_domain_mismatch(ctx).await? {
+        return Ok(decision);
+    }
+    if let Some(decision) = check_ari_window(ctx).await? {
+        return Ok(decision);
+    }
+    if let Some(decision) = check_days_threshold(ctx).await? {
+        return Ok(decision);
+    }
 
+    Ok(RenewalDecision::Renew)
+}
+
+// cancel-safe: reads existing certificate SANs only. Cancellation leaves no
+// filesystem, ACME server, or RunContext mutation behind.
+async fn check_domain_mismatch(ctx: &RunContext<'_>) -> Result<Option<RenewalDecision>> {
     let requested: std::collections::BTreeSet<String> = ctx
         .domains
         .iter()
@@ -46,208 +57,248 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
 
     match cert_san_identifiers(ctx.cert_output).await {
         Ok(cert_sans) => {
-            if requested != cert_sans {
-                let added: Vec<&str> = requested
-                    .difference(&cert_sans)
-                    .map(String::as_str)
-                    .collect();
-                let removed: Vec<&str> = cert_sans
-                    .difference(&requested)
-                    .map(String::as_str)
-                    .collect();
-
-                if ctx.reissue_on_mismatch {
-                    if !ctx.silent {
-                        if ctx.json {
-                            outln!(
-                                "{}",
-                                serde_json::json!({
-                                    "command": "run",
-                                    "action": "reissue",
-                                    "reason": "domain_mismatch",
-                                    "cert_domains": cert_sans,
-                                    "requested_domains": requested,
-                                    "added": added,
-                                    "removed": removed,
-                                })
-                            );
-                        } else {
-                            outln!(
-                                "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
-                                added.join(", "),
-                                removed.join(", "),
-                            );
-                        }
-                    }
-                    // Skip ARI/days checks — proceed directly to issuance
-                    // (ari_cert_id stays None: this is reissuance, not renewal)
-                    skip_renewal_checks = true;
-                } else {
-                    if !ctx.silent {
-                        if ctx.json {
-                            outln!(
-                                "{}",
-                                serde_json::json!({
-                                    "command": "run",
-                                    "action": "skip",
-                                    "reason": "domain_mismatch",
-                                    "hint": "use --reissue-on-mismatch to override",
-                                    "cert_domains": cert_sans,
-                                    "requested_domains": requested,
-                                    "added": added,
-                                    "removed": removed,
-                                })
-                            );
-                        } else {
-                            outln!(
-                                "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
-                                 Use --reissue-on-mismatch to override.",
-                                cert_sans
-                                    .iter()
-                                    .map(String::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                                requested
-                                    .iter()
-                                    .map(String::as_str)
-                                    .collect::<Vec<_>>()
-                                    .join(", "),
-                                added.join(", "),
-                                removed.join(", "),
-                            );
-                        }
-                    }
-                    return Ok(RenewalDecision::Skip);
-                }
+            if requested == cert_sans {
+                return Ok(None);
             }
+            let added: Vec<&str> = requested
+                .difference(&cert_sans)
+                .map(String::as_str)
+                .collect();
+            let removed: Vec<&str> = cert_sans
+                .difference(&requested)
+                .map(String::as_str)
+                .collect();
+            Ok(Some(decide_domain_mismatch(
+                ctx, &cert_sans, &requested, &added, &removed,
+            )))
         }
         Err(e) => {
             tracing::warn!(
                 "Could not read SANs from {}: {e} — skipping domain mismatch check",
                 ctx.cert_output.display()
             );
+            Ok(None)
         }
     }
+}
 
-    if skip_renewal_checks {
-        return Ok(RenewalDecision::Reissue);
-    }
-
-    // ── 0a. ARI-based renewal check (RFC 9773 §4.2) ────────────────
-    //
-    // Per §4.2 step 2 we select a uniformly random instant inside the
-    // suggestedWindow and renew iff `now >= selected_instant` (step 3 says
-    // that if the selected time is already past, renew immediately —
-    // covered naturally by the `now >= instant` check).
-    //
-    // This is a *randomized stateless approximation* of the spec's
-    // schedulable-client algorithm: a fresh draw on every cron invocation
-    // still yields the intended fleet-wide load-spreading ramp (the
-    // probability of "renew now" rises linearly across the window), at the
-    // cost that repeated runs inside a spanning window may flap
-    // skip→renew→skip — tolerable for an idempotent cron client that does
-    // its own pre-issuance freshness checks.
-    if ctx.ari {
-        match tokio::fs::read_to_string(ctx.cert_output).await {
-            Ok(pem_data) => match pem_to_der(&pem_data) {
-                Ok(cert_der) => {
-                    // RFC 9773 §4.1+§6: ARI lookup is an unauthenticated GET,
-                    // so the directory-only client is sufficient and no
-                    // newAccount call may precede it (signing newAccount with
-                    // a stale account_url breaks RFC 8555 §6.2).
-                    let mut ari_client = build_client(ctx.cli).await?;
-
-                    if ari_client.supports_ari() {
-                        match ari_client.get_renewal_info(&cert_der).await {
-                            Ok((info, _retry_after)) => {
-                                match parse_ari_window(
-                                    &info.suggested_window.start,
-                                    &info.suggested_window.end,
-                                ) {
-                                    Ok((start, end)) => {
-                                        let selected = select_renewal_instant(
-                                            start,
-                                            end,
-                                            rand_core::OsRng.next_u64(),
-                                        );
-                                        let now = OffsetDateTime::now_utc();
-                                        if now < selected {
-                                            if !ctx.silent {
-                                                if ctx.json {
-                                                    outln!(
-                                                        "{}",
-                                                        serde_json::json!({
-                                                            "command": "run",
-                                                            "action": "skip",
-                                                            "reason": "ari",
-                                                            "window_start": info.suggested_window.start,
-                                                            "window_end": info.suggested_window.end,
-                                                            "selected_instant": format_rfc3339(selected),
-                                                            "cert_path": ctx.cert_output.display().to_string(),
-                                                        })
-                                                    );
-                                                } else {
-                                                    outln!(
-                                                        "ARI: window {} - {}, selected renewal instant {} - skipping renewal",
-                                                        info.suggested_window.start,
-                                                        info.suggested_window.end,
-                                                        format_rfc3339(selected),
-                                                    );
-                                                }
-                                            }
-                                            ctx.early_client = Some(ari_client);
-                                            return Ok(RenewalDecision::Skip);
-                                        }
-                                        if !ctx.json && !ctx.silent {
-                                            outln!(
-                                                "ARI: window {} - {}, selected renewal instant {} - renewing...",
-                                                info.suggested_window.start,
-                                                info.suggested_window.end,
-                                                format_rfc3339(selected),
-                                            );
-                                        }
-                                        if let Ok(cid) = compute_cert_id(&cert_der) {
-                                            ctx.ari_cert_id = Some(cid);
-                                        }
-                                    }
-                                    Err(reason) => {
-                                        tracing::warn!(
-                                            "ARI suggestedWindow invalid ({reason}: start={:?}, end={:?}) - falling back to --days check",
-                                            info.suggested_window.start,
-                                            info.suggested_window.end,
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "ARI check failed: {e} - falling back to --days check"
-                                );
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            "Server does not support ARI - falling back to --days check"
-                        );
-                    }
-                    ctx.early_client = Some(ari_client);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Could not parse certificate {}: {e}",
-                        ctx.cert_output.display()
-                    );
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    "Could not read certificate {}: {e}",
-                    ctx.cert_output.display()
+fn decide_domain_mismatch(
+    ctx: &RunContext<'_>,
+    cert_sans: &std::collections::BTreeSet<String>,
+    requested: &std::collections::BTreeSet<String>,
+    added: &[&str],
+    removed: &[&str],
+) -> RenewalDecision {
+    if ctx.reissue_on_mismatch {
+        if !ctx.silent {
+            if ctx.json {
+                outln!(
+                    "{}",
+                    serde_json::json!({
+                        "command": "run",
+                        "action": "reissue",
+                        "reason": "domain_mismatch",
+                        "cert_domains": cert_sans,
+                        "requested_domains": requested,
+                        "added": added,
+                        "removed": removed,
+                    })
+                );
+            } else {
+                outln!(
+                    "Domain mismatch detected (added: [{}], removed: [{}]), reissuing certificate...",
+                    added.join(", "),
+                    removed.join(", "),
                 );
             }
         }
+        // Skip ARI/days checks — proceed directly to issuance
+        // (ari_cert_id stays None: this is reissuance, not renewal)
+        RenewalDecision::Reissue
+    } else {
+        if !ctx.silent {
+            if ctx.json {
+                outln!(
+                    "{}",
+                    serde_json::json!({
+                        "command": "run",
+                        "action": "skip",
+                        "reason": "domain_mismatch",
+                        "hint": "use --reissue-on-mismatch to override",
+                        "cert_domains": cert_sans,
+                        "requested_domains": requested,
+                        "added": added,
+                        "removed": removed,
+                    })
+                );
+            } else {
+                outln!(
+                    "Domain mismatch: cert has [{}], requested [{}] (added: [{}], removed: [{}]). \
+                                 Use --reissue-on-mismatch to override.",
+                    cert_sans
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    requested
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    added.join(", "),
+                    removed.join(", "),
+                );
+            }
+        }
+        RenewalDecision::Skip
     }
+}
 
+// ── 0a. ARI-based renewal check (RFC 9773 §4.2) ────────────────
+//
+// Per §4.2 step 2 we select a uniformly random instant inside the
+// suggestedWindow and renew iff `now >= selected_instant` (step 3 says
+// that if the selected time is already past, renew immediately —
+// covered naturally by the `now >= instant` check).
+//
+// This is a *randomized stateless approximation* of the spec's
+// schedulable-client algorithm: a fresh draw on every cron invocation
+// still yields the intended fleet-wide load-spreading ramp (the
+// probability of "renew now" rises linearly across the window), at the
+// cost that repeated runs inside a spanning window may flap
+// skip→renew→skip — tolerable for an idempotent cron client that does
+// its own pre-issuance freshness checks.
+// cancel-safe: reads the existing certificate, performs directory/ARI GETs, and
+// mutates only ctx.early_client / ctx.ari_cert_id in memory. Dropping before
+// return leaves no ACME order, account, challenge, or filesystem state.
+async fn check_ari_window(ctx: &mut RunContext<'_>) -> Result<Option<RenewalDecision>> {
+    if !ctx.ari {
+        return Ok(None);
+    }
+    let Some((cert_der, mut ari_client)) = load_ari_certificate_and_client(ctx).await? else {
+        return Ok(None);
+    };
+    let decision = match fetch_ari_info(&mut ari_client, &cert_der).await {
+        Some(info) => apply_ari_info(ctx, &info, &cert_der),
+        None => None,
+    };
+    ctx.early_client = Some(ari_client);
+    Ok(decision)
+}
+
+// cancel-safe: reads the existing certificate and constructs a directory-only
+// client. No ACME account/order/challenge state or filesystem mutation occurs.
+async fn load_ari_certificate_and_client(
+    ctx: &RunContext<'_>,
+) -> Result<Option<(Vec<u8>, crate::client::AcmeClient)>> {
+    match tokio::fs::read_to_string(ctx.cert_output).await {
+        Ok(pem_data) => match pem_to_der(&pem_data) {
+            Ok(cert_der) => {
+                // RFC 9773 §4.1+§6: ARI lookup is an unauthenticated GET,
+                // so the directory-only client is sufficient and no
+                // newAccount call may precede it (signing newAccount with
+                // a stale account_url breaks RFC 8555 §6.2).
+                let ari_client = build_client(ctx.cli).await?;
+                Ok(Some((cert_der, ari_client)))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not parse certificate {}: {e}",
+                    ctx.cert_output.display()
+                );
+                Ok(None)
+            }
+        },
+        Err(e) => {
+            tracing::warn!(
+                "Could not read certificate {}: {e}",
+                ctx.cert_output.display()
+            );
+            Ok(None)
+        }
+    }
+}
+
+// cancel-safe: performs only unauthenticated ARI GETs. RFC 9773 renewalInfo
+// lookup does not mutate CA state or consume order/challenge state.
+async fn fetch_ari_info(
+    ari_client: &mut crate::client::AcmeClient,
+    cert_der: &[u8],
+) -> Option<crate::types::RenewalInfo> {
+    if !ari_client.supports_ari() {
+        tracing::warn!("Server does not support ARI - falling back to --days check");
+        return None;
+    }
+    match ari_client.get_renewal_info(cert_der).await {
+        Ok((info, _retry_after)) => Some(info),
+        Err(e) => {
+            tracing::warn!("ARI check failed: {e} - falling back to --days check");
+            None
+        }
+    }
+}
+
+fn apply_ari_info(
+    ctx: &mut RunContext<'_>,
+    info: &crate::types::RenewalInfo,
+    cert_der: &[u8],
+) -> Option<RenewalDecision> {
+    match parse_ari_window(&info.suggested_window.start, &info.suggested_window.end) {
+        Ok((start, end)) => {
+            let selected = select_renewal_instant(start, end, rand_core::OsRng.next_u64());
+            let now = OffsetDateTime::now_utc();
+            if now < selected {
+                if !ctx.silent {
+                    if ctx.json {
+                        outln!(
+                            "{}",
+                            serde_json::json!({
+                                "command": "run",
+                                "action": "skip",
+                                "reason": "ari",
+                                "window_start": info.suggested_window.start,
+                                "window_end": info.suggested_window.end,
+                                "selected_instant": format_rfc3339(selected),
+                                "cert_path": ctx.cert_output.display().to_string(),
+                            })
+                        );
+                    } else {
+                        outln!(
+                            "ARI: window {} - {}, selected renewal instant {} - skipping renewal",
+                            info.suggested_window.start,
+                            info.suggested_window.end,
+                            format_rfc3339(selected),
+                        );
+                    }
+                }
+                return Some(RenewalDecision::Skip);
+            }
+            if !ctx.json && !ctx.silent {
+                outln!(
+                    "ARI: window {} - {}, selected renewal instant {} - renewing...",
+                    info.suggested_window.start,
+                    info.suggested_window.end,
+                    format_rfc3339(selected),
+                );
+            }
+            if let Ok(cid) = compute_cert_id(cert_der) {
+                ctx.ari_cert_id = Some(cid);
+            }
+        }
+        Err(reason) => {
+            tracing::warn!(
+                "ARI suggestedWindow invalid ({reason}: start={:?}, end={:?}) - falling back to --days check",
+                info.suggested_window.start,
+                info.suggested_window.end,
+            );
+        }
+    }
+    None
+}
+
+// cancel-safe: reads certificate expiry only. Cancellation leaves no filesystem,
+// ACME server, or RunContext mutation behind.
+async fn check_days_threshold(ctx: &RunContext<'_>) -> Result<Option<RenewalDecision>> {
     // ── 0b. Days-based renewal check (fallback / standalone) ────────
     if ctx.ari_cert_id.is_none()
         && let Some(threshold) = ctx.days
@@ -274,7 +325,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
                         ctx.cert_output.display()
                     );
                 }
-                return Ok(RenewalDecision::Skip);
+                return Ok(Some(RenewalDecision::Skip));
             }
             Ok(remaining) => {
                 if !ctx.json && !ctx.silent {
@@ -293,7 +344,7 @@ pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
         }
     }
 
-    Ok(RenewalDecision::Renew)
+    Ok(None)
 }
 
 fn parse_ari_window(
