@@ -20,6 +20,7 @@ mod hook_check;
 mod jws;
 #[macro_use]
 mod output;
+mod run_dispatch;
 mod types;
 
 use anyhow::{Context, Result};
@@ -30,12 +31,7 @@ use crate::account_key::{load_account_key_with_password, resolve_account_key_pas
 use crate::cli::{Cli, Commands};
 use crate::cli_config::{apply_config, load_config};
 use crate::client::AcmeClient;
-use crate::handlers::{
-    cmd_account, cmd_deactivate, cmd_download_cert, cmd_finalize, cmd_generate_config,
-    cmd_generate_key, cmd_get_authz, cmd_key_rollover, cmd_list_profiles, cmd_order,
-    cmd_poll_order, cmd_pre_authorize, cmd_renewal_info, cmd_respond_challenge, cmd_revoke,
-    cmd_run, cmd_serve_http01, cmd_show_config, cmd_show_dns_persist01, cmd_show_dns01,
-};
+use crate::handlers::{cmd_run, cmd_show_config};
 
 // ── Entry point ─────────────────────────────────────────────────────────────
 
@@ -125,9 +121,7 @@ async fn run(
     config_mode: bool,
     cleanup_registry: &cleanup::CleanupRegistry,
 ) -> Result<()> {
-    let fmt = cli.output_format;
     match &cli.command {
-        Commands::GenerateConfig => cmd_generate_config(cli.silent),
         Commands::ShowConfig {
             verbose,
             show_secrets,
@@ -139,115 +133,32 @@ async fn run(
             *show_secrets,
             config_mode,
         ),
-        Commands::GenerateKey { algorithm, force } => {
-            let pw = resolve_account_key_password(
-                cli.account_key_password
-                    .as_ref()
-                    .map(secrecy::ExposeSecret::expose_secret),
-                cli.account_key_password_file.as_deref(),
-            )
-            .await?;
-            cmd_generate_key(
-                &cli.account_key,
-                *algorithm,
-                *force,
-                fmt,
-                cli.silent,
-                pw.as_ref(),
-            )
-            .await
-        }
-        Commands::Account {
-            contact,
-            agree_tos,
-            eab_kid,
-            eab_hmac_key,
-        } => {
-            cmd_account(
-                &cli,
-                contact.clone(),
-                *agree_tos,
-                eab_kid.as_deref(),
-                eab_hmac_key.clone(),
-            )
-            .await
-        }
-        Commands::Order { domains, profile } => {
-            cmd_order(&cli, domains.clone(), profile.clone()).await
-        }
-        Commands::GetAuthz { url } => cmd_get_authz(&cli, url).await,
-        Commands::RespondChallenge { url } => cmd_respond_challenge(&cli, url).await,
-        Commands::ServeHttp01 {
-            token,
-            port,
-            challenge_dir,
-        } => cmd_serve_http01(&cli, token, *port, challenge_dir.as_deref()).await,
-        Commands::ShowDns01 { domain, token } => cmd_show_dns01(&cli, domain, token).await,
-        Commands::ShowDnsPersist01 {
-            domain,
-            issuer_domain_name,
-            persist_policy,
-            persist_until,
-        } => {
-            cmd_show_dns_persist01(
-                &cli,
-                domain,
-                issuer_domain_name,
-                persist_policy.as_deref(),
-                *persist_until,
-            )
-            .await
-        }
-        Commands::Finalize {
-            finalize_url,
-            cert_key_algorithm,
-            key_output,
-            key_password,
-            key_password_file,
-            force,
-            domains,
-        } => {
-            cmd_finalize(
-                &cli,
-                finalize_url,
-                domains,
-                *cert_key_algorithm,
-                key_output,
-                key_password.clone(),
-                key_password_file.as_deref(),
-                *force,
-            )
-            .await
-        }
-        Commands::PollOrder { url } => cmd_poll_order(&cli, url).await,
-        Commands::DownloadCert { url, output } => cmd_download_cert(&cli, url, output).await,
-        Commands::DeactivateAccount => cmd_deactivate(&cli).await,
-        Commands::KeyRollover {
-            new_key,
-            new_key_password,
-            new_key_password_file,
-        } => {
-            cmd_key_rollover(
-                &cli,
-                new_key,
-                new_key_password.clone(),
-                new_key_password_file.as_deref(),
-            )
-            .await
-        }
-        Commands::RevokeCert { cert_path, reason } => cmd_revoke(&cli, cert_path, *reason).await,
-        Commands::RenewalInfo { cert_path } => cmd_renewal_info(&cli, cert_path).await,
-        Commands::ListProfiles => cmd_list_profiles(&cli).await,
-        Commands::PreAuthorize {
-            domain,
-            challenge_type,
-        } => cmd_pre_authorize(&cli, domain, challenge_type).await,
         Commands::Run(args) => {
             anyhow::ensure!(
                 !args.domains.is_empty(),
                 "at least one domain is required (pass on CLI or set [run].domains in config)"
             );
             cmd_run(&cli, args.as_ref(), cleanup_registry).await
+        }
+        command @ (Commands::GenerateConfig
+        | Commands::GenerateKey { .. }
+        | Commands::Account { .. }
+        | Commands::Order { .. }
+        | Commands::GetAuthz { .. }
+        | Commands::RespondChallenge { .. }
+        | Commands::ServeHttp01 { .. }
+        | Commands::ShowDns01 { .. }
+        | Commands::ShowDnsPersist01 { .. }
+        | Commands::Finalize { .. }
+        | Commands::PollOrder { .. }
+        | Commands::DownloadCert { .. }
+        | Commands::DeactivateAccount
+        | Commands::KeyRollover { .. }
+        | Commands::RevokeCert { .. }
+        | Commands::RenewalInfo { .. }
+        | Commands::ListProfiles
+        | Commands::PreAuthorize { .. }) => {
+            run_dispatch::handle_simple_command(&cli, command).await
         }
     }
 }
