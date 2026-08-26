@@ -114,11 +114,7 @@ missing_panics_doc = "allow"
 must_use_candidate = "allow"
 return_self_not_must_use = "allow"
 similar_names = "allow"
-# Deviation from RUST_GUIDELINES §9, which asks for `too_many_lines = "warn"`.
-# Ten functions currently exceed the 100-line threshold; enabling the lint now
-# would mean ten `#[expect]` attributes. Tracked in
-# .omo/plans/refactor-oversized-functions.md and re-enabled once that lands.
-too_many_lines = "allow"
+too_many_lines = "warn"
 struct_excessive_bools = "allow"
 multiple_crate_versions = "allow"
 # Nursery noise opt-outs (high false-positive rate for a binary crate)
