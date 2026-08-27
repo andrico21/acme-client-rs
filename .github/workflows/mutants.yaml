@@ -32,6 +32,11 @@ jobs:
       # Scoped to the modules where a surviving mutant is genuinely alarming:
       # boundary validation, the untrusted-text scrubber, and the ARI renewal
       # decision. Widening this to the whole crate makes the run unbounded.
+      #
+      # `cargo mutants` exits 2 when mutants survive — a finding count, not a
+      # failure — so the status is ignored and the summary is surfaced instead,
+      # exactly as the cargo-geiger step in rust.yaml does. Keying off the
+      # summary line means a run that fails to test anything is still visible.
       - name: Run mutation testing
         continue-on-error: true
         run: |
@@ -39,7 +44,14 @@ jobs:
             --file src/sanitize.rs \
             --file src/types.rs \
             --file src/cert_info.rs \
-            --file src/handlers/run_flow/renewal.rs
+            --file src/handlers/run_flow/renewal.rs \
+            > mutants-run.txt 2>&1 || true
+          tail -60 mutants-run.txt
+          if grep -qE '[0-9]+ mutants tested' mutants-run.txt; then
+            grep -E '[0-9]+ mutants tested' mutants-run.txt
+          else
+            echo "::warning::cargo-mutants produced no summary - the run failed rather than finding surviving mutants"
+          fi
 
       - name: Upload mutants report
         if: always()
