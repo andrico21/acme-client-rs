@@ -1,6 +1,6 @@
 [package]
 name = "acme-client-rs"
-version = "2.3.4"
+version = "3.0.0"
 edition = "2024"
 license = "Apache-2.0"
 # Minimum supported Rust version. The crate uses `str::strip_circumfix`

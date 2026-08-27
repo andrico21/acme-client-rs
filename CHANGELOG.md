@@ -10,6 +10,8 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-27
+
 ### Security
 
 - **Text supplied by the ACME server is now scrubbed before it reaches the
@@ -48,13 +50,10 @@ disk was never modified.
   validators, the output scrubber and the ARI renewal decision.
 - Property-based tests (`proptest`) over DNS/token validation, the scrubber and
   the ARI renewal-instant selector.
-
-### Changed
-
-- `show-dns-persist-01` and the TLS-ALPN-01 instructions now also print the
-  `acmeIdentifier` extension OID (`1.3.6.1.5.5.7.1.31`) alongside the hex value.
-- Interrupting with Ctrl-C now reports how many cleanup actions are pending and
-  that a second Ctrl-C aborts immediately, instead of a bare message.
+- Audit sets from Google, ISRG, Zcash and Embark Studios are imported into
+  `cargo vet`, replacing 24 of the blanket `cargo vet init` exemptions with
+  real review — including the `hmac`, `signature`, `rand_core`, `rand_chacha`
+  and `fiat-crypto` crates behind key generation and JWS signing.
 
 ### Changed
 
@@ -69,11 +68,14 @@ disk was never modified.
   `account` are unaffected — registration is their intent.
 - `--dns-propagation-concurrency` is now a non-zero integer. `0` is rejected by
   the CLI and by config-file parsing.
-
 - **Minimum supported Rust version is now 1.98** (`rust-version` in `Cargo.toml`).
   The crate adopts `str::strip_circumfix`, stabilised in 1.98.
 - The `rust-toolchain.toml` pin was removed; CI now builds on whatever `stable`
   resolves to, per RUST_GUIDELINES §12.
+- `show-dns-persist-01` and the TLS-ALPN-01 instructions now also print the
+  `acmeIdentifier` extension OID (`1.3.6.1.5.5.7.1.31`) alongside the hex value.
+- Interrupting with Ctrl-C now reports how many cleanup actions are pending and
+  that a second Ctrl-C aborts immediately, instead of a bare message.
 
 ### Fixed
 
@@ -225,7 +227,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/3.0.0...HEAD
+[3.0.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...3.0.0
 [2.3.4]: https://github.com/andrico21/acme-client-rs/compare/2.3.3...2.3.4
 [2.2.5]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...2.2.5
 [2.2.4]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...2.2.4
