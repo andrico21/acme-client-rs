@@ -519,11 +519,24 @@ mod tests {
     }
 
     impl TestCtx {
-        fn new(extra: &[&str]) -> Result<Self> {
+        fn new(extra: &[&str]) -> anyhow::Result<Self> {
             let tmp = tempfile::tempdir()?;
+            // A real account key inside the tempdir. Without this the CLI
+            // default resolves to a relative `account.key` in the working
+            // directory, which any path reaching `build_client` would read —
+            // passing locally only because an untracked one happens to exist.
+            let account_key = tmp.path().join("account.key");
+            std::fs::write(
+                &account_key,
+                crate::jws::AccountKey::generate(crate::jws::KeyAlgorithm::Es256)?
+                    .to_pkcs8_pem()?,
+            )?;
+
             let mut argv: Vec<String> = vec![
                 "acme-client-rs".to_owned(),
                 "run".to_owned(),
+                "--account-key".to_owned(),
+                account_key.display().to_string(),
                 "--cert-output".to_owned(),
                 tmp.path().join("cert.pem").display().to_string(),
                 "--key-output".to_owned(),
