@@ -58,8 +58,12 @@ jobs:
         run: cargo install cargo-geiger --locked
         continue-on-error: true
 
+      # `cargo geiger` exits non-zero when it *finds* `unsafe` in the tree, which
+      # is a finding count rather than a failure — every dependency graph with a
+      # crypto crate in it will trip that. Swallow the status so the census still
+      # prints without leaving a red annotation on every green run.
       - name: Census transitive `unsafe` usage
-        run: cargo geiger --all-features
+        run: cargo geiger --all-features || true
         continue-on-error: true
 
   lint:

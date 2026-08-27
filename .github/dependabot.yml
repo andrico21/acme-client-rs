@@ -5,6 +5,27 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # The RustCrypto crates share `digest`, `signature`, `elliptic-curve`,
+    # `pkcs8` and `rand_core`, so bumping any one of them alone splits the
+    # dependency graph and fails to compile — see the pin rationale in
+    # Cargo.toml. Grouping them means one coordinated PR that becomes
+    # mergeable the moment `rsa` 0.10 ships stable, instead of a standing
+    # queue of individually-red PRs.
+    groups:
+      rustcrypto:
+        patterns:
+          - "ecdsa"
+          - "ed25519-dalek"
+          - "elliptic-curve"
+          - "hmac"
+          - "p256"
+          - "p384"
+          - "p521"
+          - "pkcs8"
+          - "rand_core"
+          - "rsa"
+          - "sha2"
+          - "signature"
 
   - package-ecosystem: github-actions
     directory: "/"
