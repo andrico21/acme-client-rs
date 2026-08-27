@@ -5,6 +5,7 @@ use anyhow::{Context, Result, bail};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use crate::sanitize::untrusted_block;
 use crate::types::AcmeError;
 
 use super::net_policy::is_private_or_special_ip;
@@ -80,30 +81,6 @@ pub(crate) fn build_http_client(
         .context("failed to build HTTP client")
 }
 
-/// SEC-15: cap raw response bodies surfaced in error messages so an HTML 502
-/// page from an intermediate proxy doesn't flood the user's terminal / logs,
-/// and replace ASCII control bytes (except `\n` / `\t`) with `·` so binary or
-/// crafted payloads can't break log alignment with embedded CR / escape codes.
-const MAX_BODY_FOR_ERROR: usize = 1024;
-
-pub(crate) fn truncate_for_log(body: &[u8]) -> String {
-    let slice = body.get(..MAX_BODY_FOR_ERROR).unwrap_or(body);
-    let lossy = String::from_utf8_lossy(slice);
-    let mut out: String = lossy
-        .chars()
-        .map(|c| match c {
-            '\n' | '\t' => c,
-            c if (c as u32) < 0x20 || c == '\x7f' => '·',
-            c => c,
-        })
-        .collect();
-    if body.len() > MAX_BODY_FOR_ERROR {
-        use std::fmt::Write as _;
-        let _ = write!(&mut out, "… [truncated, {} bytes total]", body.len());
-    }
-    out
-}
-
 /// Parsed ACME response (status + headers + body bytes).
 pub(crate) struct AcmeResponse {
     pub(crate) status: reqwest::StatusCode,
@@ -116,7 +93,7 @@ impl AcmeResponse {
         serde_json::from_slice(&self.body).with_context(|| {
             format!(
                 "failed to parse response body: {}",
-                truncate_for_log(&self.body)
+                untrusted_block(&self.body)
             )
         })
     }
@@ -157,7 +134,7 @@ impl AcmeResponse {
             bail!(
                 "HTTP error {}: {}",
                 self.status,
-                truncate_for_log(&self.body)
+                untrusted_block(&self.body)
             );
         }
         Ok(())
@@ -168,36 +145,6 @@ impl AcmeResponse {
 mod tests {
     #![allow(clippy::expect_used)]
     use super::*;
-
-    #[test]
-    fn truncate_for_log_caps_oversize_bodies() {
-        let big = vec![b'A'; MAX_BODY_FOR_ERROR + 500];
-        let out = truncate_for_log(&big);
-        assert!(out.contains("truncated"));
-        assert!(out.contains(&format!("{} bytes total", MAX_BODY_FOR_ERROR + 500)));
-        assert!(out.len() < MAX_BODY_FOR_ERROR + 100);
-    }
-
-    #[test]
-    fn truncate_for_log_replaces_control_chars_but_keeps_newline_tab() {
-        let body = b"line1\nline2\r\x1b[31mred\x1b[0m\tend\x07\x00bell";
-        let out = truncate_for_log(body);
-        assert!(out.contains("line1\nline2"), "newline preserved: {out:?}");
-        assert!(out.contains("\tend"), "tab preserved: {out:?}");
-        assert!(!out.contains('\r'), "CR replaced: {out:?}");
-        assert!(!out.contains('\x1b'), "ESC replaced: {out:?}");
-        assert!(!out.contains('\x07'), "BEL replaced: {out:?}");
-        assert!(!out.contains('\x00'), "NUL replaced: {out:?}");
-        assert!(out.contains('·'), "replacement char present: {out:?}");
-    }
-
-    #[test]
-    fn truncate_for_log_handles_invalid_utf8() {
-        let body = b"valid\xff\xfeend";
-        let out = truncate_for_log(body);
-        assert!(out.contains("valid"));
-        assert!(out.contains("end"));
-    }
 
     fn response_with_location(loc: &str) -> AcmeResponse {
         let mut headers = reqwest::header::HeaderMap::new();

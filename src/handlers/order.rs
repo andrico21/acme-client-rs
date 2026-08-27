@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 
 use crate::cli::{CertKeyAlgorithm, Cli};
 use crate::csr::{encrypt_private_key, generate_csr};
+use crate::sanitize::{untrusted_block, untrusted_inline};
 use crate::types::Identifier;
 use crate::{build_client, outln};
 
@@ -25,8 +26,8 @@ pub(crate) async fn cmd_order(
         && !available.contains_key(p)
     {
         tracing::warn!(
-            "Profile \"{p}\" is not advertised by the server (available: {})",
-            available.keys().cloned().collect::<Vec<_>>().join(", ")
+            "Profile {p:?} is not advertised by the server (available: {})",
+            super::advertised_profile_names(available)
         );
     }
     let ids: Vec<Identifier> = domains
@@ -50,7 +51,7 @@ pub(crate) async fn cmd_order(
             outln!("Order URL:    {order_url}");
             outln!("Status:       {}", order.status);
             if let Some(ref p) = order.profile {
-                outln!("Profile:      {p}");
+                outln!("Profile:      {}", untrusted_inline(p));
             }
             outln!("Finalize URL: {}", order.finalize);
             for url in &order.authorizations {
@@ -77,10 +78,7 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
         .context("failed to fetch ACME directory")?;
     if !resp.status().is_success() {
         let body = resp.bytes().await.unwrap_or_default();
-        anyhow::bail!(
-            "ACME directory request failed: {}",
-            crate::client::truncate_for_log(&body)
-        );
+        anyhow::bail!("ACME directory request failed: {}", untrusted_block(&body));
     }
     let dir: crate::types::Directory = resp.json().await.context("failed to parse directory")?;
     let profiles = dir.meta.as_ref().and_then(|m| m.profiles.as_ref());
@@ -91,7 +89,11 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
             || {
                 outln!("Available certificate profiles:");
                 for (name, description) in profiles {
-                    outln!("  {name}: {description}");
+                    outln!(
+                        "  {}: {}",
+                        untrusted_inline(name),
+                        untrusted_inline(description)
+                    );
                 }
             },
         ),

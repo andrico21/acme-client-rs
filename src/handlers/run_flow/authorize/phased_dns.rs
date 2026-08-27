@@ -380,13 +380,13 @@ async fn poll_authorizations_until_valid(
     hook: &std::path::Path,
 ) -> Result<()> {
     for idx in 0..pending.len() {
-        let Some((authz_url, domain)) = pending
-            .get(idx)
-            .map(|p| (p.authz_url.clone(), p.domain.clone()))
-        else {
-            continue;
+        // The immutable borrow is confined to this block so it ends before the
+        // rollback below takes `&mut pending` — no per-iteration clone needed.
+        let outcome = {
+            let Some(p) = pending.get(idx) else { continue };
+            poll_one_authorization_until_valid(ctx, client, &p.authz_url, &p.domain).await
         };
-        if let Err(e) = poll_one_authorization_until_valid(ctx, client, &authz_url, &domain).await {
+        if let Err(e) = outcome {
             cleanup_pending_silent(hook, pending, ctx.cli.unsafe_hooks).await;
             return Err(e);
         }

@@ -26,7 +26,9 @@ pub(super) async fn run(cli: &Cli, args: &RunArgs) -> Result<()> {
         cli.unsafe_hooks,
     )?;
 
-    if args.generate_account_key_if_missing && !cli.account_key.exists() {
+    if args.generate_account_key_if_missing
+        && !crate::fs_secure::path_exists(&cli.account_key).await
+    {
         info!(
             "--generate-account-key-if-missing set and {} does not exist: generating {} account key",
             cli.account_key.display(),
@@ -53,8 +55,8 @@ pub(super) async fn run(cli: &Cli, args: &RunArgs) -> Result<()> {
     // existing keypair by user intent.
     if !args.force
         && args.reuse_key.is_none()
-        && !args.cert_output.exists()
-        && args.key_output.exists()
+        && !crate::fs_secure::path_exists(&args.cert_output).await
+        && crate::fs_secure::path_exists(&args.key_output).await
     {
         anyhow::bail!(
             "private key already exists at {} but no certificate found at {}: \

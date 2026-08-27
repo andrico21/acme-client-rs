@@ -108,6 +108,12 @@ impl CleanupRegistry {
         }
     }
 
+    /// Number of actions still awaiting cleanup.
+    #[must_use]
+    pub(crate) fn pending_count(&self) -> usize {
+        self.lock_recover().actions.len()
+    }
+
     /// Synchronously execute every registered action. Errors are swallowed —
     /// cleanup is best-effort by design (the original record may already be
     /// gone, the hook may exit non-zero, etc.).

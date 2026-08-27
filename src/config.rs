@@ -130,8 +130,10 @@ pub(crate) struct AccountConfig {
 impl Config {
     /// Load a config file from the given path. Returns an error if the file
     /// cannot be read or parsed.
-    pub(crate) fn load(path: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)
+    // cancel-safe: reads and parses a file; mutates no external state.
+    pub(crate) async fn load(path: &Path) -> Result<Self> {
+        let content = tokio::fs::read_to_string(path)
+            .await
             .with_context(|| format!("failed to read config file: {}", path.display()))?;
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("failed to parse config file: {}", path.display()))?;
@@ -139,8 +141,9 @@ impl Config {
     }
 
     /// Check whether the default config file exists in the current directory.
-    pub(crate) fn default_exists() -> bool {
-        Path::new(DEFAULT_CONFIG_FILE).exists()
+    // cancel-safe: metadata probe only.
+    pub(crate) async fn default_exists() -> bool {
+        crate::fs_secure::path_exists(Path::new(DEFAULT_CONFIG_FILE)).await
     }
 }
 

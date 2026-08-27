@@ -199,6 +199,13 @@ pub(crate) async fn warn_if_world_readable_async(path: &Path, kind: &str) {
     let _ = tokio::task::spawn_blocking(move || warn_if_world_readable(&path, &kind)).await;
 }
 
+/// Async `Path::exists()`, keeping the blocking `stat(2)` off a runtime worker.
+/// Mirrors std semantics, including reporting I/O errors as `false`.
+// cancel-safe: pure metadata probe; dropping the future has no side effect.
+pub(crate) async fn path_exists(path: &Path) -> bool {
+    tokio::fs::try_exists(path).await.unwrap_or(false)
+}
+
 /// Group/world-accessible `0o777` bits of `path`, or `None`. Uses
 /// `symlink_metadata` (NOT `metadata`) so a sensitive path that is itself a
 /// symlink is flagged via its own `0o777` mode instead of statting the target.

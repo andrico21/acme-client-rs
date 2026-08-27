@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::sanitize::untrusted_inline;
+
 // ── Challenge type (RFC 8555 §8) ────────────────────────────────────────────
 
 /// ACME challenge type — strongly-typed replacement for the prior
@@ -62,7 +64,14 @@ impl From<String> for ChallengeType {
 
 impl std::fmt::Display for ChallengeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
+        match self {
+            // Security: `as_str` stays lossless (equality + ACME_CHALLENGE_TYPE
+            // hook value); only the human-facing rendering is scrubbed.
+            Self::Unknown(s) => f.write_str(&untrusted_inline(s)),
+            Self::Http01 | Self::Dns01 | Self::TlsAlpn01 | Self::DnsPersist01 => {
+                f.write_str(self.as_str())
+            }
+        }
     }
 }
 
@@ -83,7 +92,6 @@ impl<'de> Deserialize<'de> for ChallengeType {
 /// ACME Directory resource - the entry-point for all ACME operations.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
 pub(crate) struct Directory {
     pub new_nonce: url::Url,
     pub new_account: url::Url,
@@ -97,7 +105,10 @@ pub(crate) struct Directory {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "RFC 8555 wire shape; unread fields kept for forward-compat"
+)]
 pub(crate) struct DirectoryMeta {
     pub terms_of_service: Option<String>,
     pub website: Option<String>,
@@ -242,7 +253,7 @@ impl Identifier {
     }
 
     /// `true` if this identifier is an IP literal.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn is_ip(&self) -> bool {
         matches!(self, Self::Ip(_))
     }
@@ -419,7 +430,10 @@ pub(crate) struct NewAccountRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "RFC 8555 wire shape; unread fields kept for forward-compat"
+)]
 pub(crate) struct Account {
     pub status: AccountStatus,
     pub contact: Option<Vec<String>>,
@@ -470,7 +484,10 @@ pub(crate) struct NewOrderRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "RFC 8555 wire shape; unread fields kept for forward-compat"
+)]
 pub(crate) struct Order {
     pub status: OrderStatus,
     pub expires: Option<String>,
@@ -510,7 +527,10 @@ impl std::fmt::Display for OrderStatus {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "RFC 8555 wire shape; unread fields kept for forward-compat"
+)]
 pub(crate) struct Authorization {
     pub identifier: Identifier,
     pub status: AuthorizationStatus,
@@ -614,7 +634,11 @@ impl From<ChallengeToken> for String {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[allow(dead_code, clippy::struct_field_names)]
+#[expect(
+    dead_code,
+    reason = "RFC 8555 wire shape; unread fields kept for forward-compat"
+)]
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Challenge {
     #[serde(rename = "type")]
     pub challenge_type: ChallengeType,
@@ -713,10 +737,12 @@ impl AcmeErrorType {
     pub fn is_bad_nonce(&self) -> bool {
         matches!(self, Self::BadNonce)
     }
-}
 
-impl std::fmt::Display for AcmeErrorType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    /// Verbatim wire URN — lossless, and what serialization emits.
+    ///
+    /// Must NOT route through `Display`: that scrubs `Unknown` and would make
+    /// the wire round-trip lossy.
+    fn wire(&self) -> std::borrow::Cow<'_, str> {
         let kind = match self {
             Self::AccountDoesNotExist => "accountDoesNotExist",
             Self::AlreadyRevoked => "alreadyRevoked",
@@ -742,15 +768,22 @@ impl std::fmt::Display for AcmeErrorType {
             Self::UnsupportedContact => "unsupportedContact",
             Self::UnsupportedIdentifier => "unsupportedIdentifier",
             Self::UserActionRequired => "userActionRequired",
-            Self::Unknown(s) => return f.write_str(s),
+            Self::Unknown(s) => return std::borrow::Cow::Borrowed(s),
         };
-        write!(f, "{ACME_ERROR_URN_PREFIX}{kind}")
+        std::borrow::Cow::Owned(format!("{ACME_ERROR_URN_PREFIX}{kind}"))
+    }
+}
+
+impl std::fmt::Display for AcmeErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Identity on the 24 known URNs (all printable ASCII); scrubs `Unknown`.
+        f.write_str(&untrusted_inline(&self.wire()))
     }
 }
 
 impl From<AcmeErrorType> for String {
     fn from(e: AcmeErrorType) -> Self {
-        e.to_string()
+        e.wire().into_owned()
     }
 }
 
@@ -787,7 +820,6 @@ impl From<String> for AcmeErrorType {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct AcmeError {
     #[serde(rename = "type")]
     pub error_type: Option<AcmeErrorType>,
@@ -796,10 +828,14 @@ pub(crate) struct AcmeError {
     pub subproblems: Option<Vec<Subproblem>>,
 }
 
+/// Cap on rendered subproblems: each carries CA-controlled text, so an
+/// unbounded list would defeat the per-field cap.
+const MAX_RENDERED_SUBPROBLEMS: usize = 10;
+
 impl std::fmt::Display for AcmeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(ref detail) = self.detail {
-            write!(f, "{detail}")?;
+            write!(f, "{}", untrusted_inline(detail))?;
         }
         if let Some(ref error_type) = self.error_type {
             write!(f, " ({error_type})")?;
@@ -811,15 +847,21 @@ impl std::fmt::Display for AcmeError {
             && !subs.is_empty()
         {
             write!(f, "; subproblems:")?;
-            for sp in subs {
+            for sp in subs.iter().take(MAX_RENDERED_SUBPROBLEMS) {
                 write!(f, " [{}", sp.error_type)?;
+                // Validated `DnsName` / `IpAddr` — safe verbatim, unlike its siblings.
                 if let Some(ref id) = sp.identifier {
                     write!(f, " {}={}", id.type_str(), id)?;
                 }
                 if let Some(ref d) = sp.detail {
-                    write!(f, ": {d}")?;
+                    write!(f, ": {}", untrusted_inline(d))?;
                 }
                 write!(f, "]")?;
+            }
+            if let Some(extra) = subs.len().checked_sub(MAX_RENDERED_SUBPROBLEMS)
+                && extra > 0
+            {
+                write!(f, " … and {extra} more")?;
             }
         }
         Ok(())
@@ -827,7 +869,6 @@ impl std::fmt::Display for AcmeError {
 }
 
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct Subproblem {
     #[serde(rename = "type")]
     pub error_type: AcmeErrorType,
@@ -1300,6 +1341,154 @@ mod tests {
         assert!(serde_json::from_str::<ChallengeToken>("\"bad/token\"").is_err());
         assert!(serde_json::from_str::<ChallengeToken>("\"\"").is_err());
         Ok(())
+    }
+
+    // ── E1 / E2 rendering guards ────────────────────────────────────────
+
+    const HOSTILE: &str = "\u{1b}[2J\u{1b}[31mSPOOFED\u{1b}[0m\rOVERWRITE\u{7}";
+
+    fn has_control_bytes(s: &str) -> bool {
+        s.bytes().any(|b| b < 0x20 || b == 0x7f)
+    }
+
+    #[test]
+    fn e1_unknown_challenge_type_display_is_scrubbed_but_as_str_is_lossless() {
+        let ct = ChallengeType::from(HOSTILE.to_owned());
+        assert!(
+            !has_control_bytes(&ct.to_string()),
+            "Display must scrub: {:?}",
+            ct.to_string()
+        );
+        // as_str feeds equality and the ACME_CHALLENGE_TYPE hook value, so it
+        // must keep the verbatim wire bytes.
+        assert_eq!(ct.as_str(), HOSTILE);
+        assert_eq!(
+            serde_json::to_string(&ct).unwrap_or_default(),
+            serde_json::to_string(HOSTILE).unwrap_or_default(),
+            "serialization stays lossless"
+        );
+    }
+
+    #[test]
+    fn e1_unknown_error_type_display_is_scrubbed_but_roundtrip_is_lossless() -> Result<()> {
+        let raw = format!("urn:ietf:params:acme:error:{HOSTILE}");
+        let ty = AcmeErrorType::from(raw.clone());
+        assert!(!has_control_bytes(&ty.to_string()), "Display must scrub");
+        assert_eq!(
+            serde_json::to_string(&ty)?,
+            serde_json::to_string(&raw)?,
+            "wire round-trip stays lossless"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn e2_acme_error_display_scrubs_and_caps_detail() {
+        let err = AcmeError {
+            error_type: Some(AcmeErrorType::Malformed),
+            detail: Some(format!("{HOSTILE}{}", "A".repeat(5000))),
+            status: Some(400),
+            subproblems: None,
+        };
+        let s = err.to_string();
+        assert!(!has_control_bytes(&s), "control bytes must not survive");
+        assert!(
+            s.contains("truncated"),
+            "oversize detail must be capped: {s}"
+        );
+        assert!(!s.contains(&"A".repeat(2000)), "flood must not be echoed");
+    }
+
+    #[test]
+    fn e2_acme_error_display_caps_the_subproblem_list() -> Result<()> {
+        let subproblems = (0..25)
+            .map(|i| Subproblem {
+                error_type: AcmeErrorType::Malformed,
+                detail: Some(format!("sub{i}{HOSTILE}")),
+                identifier: None,
+            })
+            .collect();
+        let err = AcmeError {
+            error_type: Some(AcmeErrorType::Compound),
+            detail: Some("many problems".to_owned()),
+            status: Some(400),
+            subproblems: Some(subproblems),
+        };
+        let s = err.to_string();
+        assert!(!has_control_bytes(&s));
+        assert!(
+            s.contains("… and 15 more"),
+            "list must be capped at 10: {s}"
+        );
+        assert!(s.contains("sub0"), "the first subproblems are kept: {s}");
+        assert!(!s.contains("sub10"), "beyond the cap is dropped: {s}");
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::{
+        AcmeErrorType, ChallengeToken, Identifier, validate_and_normalize_dns,
+        validate_and_normalize_record_name,
+    };
+    use proptest::prelude::*;
+
+    fn arb_string() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<char>(), 0..80).prop_map(|v| v.into_iter().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn dns_validation_never_panics(s in arb_string()) {
+            let _ = validate_and_normalize_dns(&s);
+            let _ = validate_and_normalize_record_name(&s);
+        }
+
+        #[test]
+        fn identifier_auto_detection_never_panics(s in arb_string()) {
+            let _ = Identifier::from_str_auto(&s);
+        }
+
+        #[test]
+        fn accepted_dns_is_idempotent(s in arb_string()) {
+            if let Ok(once) = validate_and_normalize_dns(&s) {
+                match validate_and_normalize_dns(&once) {
+                    Ok(twice) => prop_assert_eq!(once, twice),
+                    Err(e) => prop_assert!(false, "canonical form rejected: {}", e),
+                }
+            }
+        }
+
+        #[test]
+        fn accepted_dns_is_ldh_lowercase(s in arb_string()) {
+            if let Ok(out) = validate_and_normalize_dns(&s) {
+                let body = out.strip_prefix("*.").unwrap_or(&out);
+                prop_assert!(
+                    body.chars().all(|c| c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '.'
+                        || c == '-'),
+                    "unexpected character in {:?}", out
+                );
+            }
+        }
+
+        #[test]
+        fn challenge_token_accepts_exactly_the_base64url_alphabet(s in arb_string()) {
+            let expected = !s.is_empty()
+                && s.len() <= 128
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            prop_assert_eq!(ChallengeToken::parse(&s).is_ok(), expected);
+        }
+
+        // Locks the defect that the E2 work introduced and a unit test caught:
+        // routing serialization through the scrubbing `Display` made this lossy.
+        #[test]
+        fn acme_error_type_wire_roundtrip_is_lossless(s in arb_string()) {
+            let ty = AcmeErrorType::from(s.clone());
+            prop_assert_eq!(String::from(ty), s);
+        }
     }
 }
 

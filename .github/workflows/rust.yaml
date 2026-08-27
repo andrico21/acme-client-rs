@@ -33,6 +33,35 @@ jobs:
       - name: Audit RustSec advisories
         run: cargo audit
 
+      # RUST_GUIDELINES.md §10 lists `cargo vet` as a control, not an advisory:
+      # it answers "has a human looked at this code?", which `cargo audit`
+      # cannot. Blocking on purpose — after `cargo vet init` it passes by
+      # construction, so the only way to fail is introducing an unvetted
+      # dependency, and the fix (`cargo vet certify <crate>`) is self-documenting.
+      - name: Install cargo-vet
+        run: cargo install cargo-vet --locked
+
+      - name: Check supply-chain audits
+        run: cargo vet --locked
+
+      # §12 classifies the two below as *Recommended* — "warnings are
+      # informational, not blocking" — so they report without gating the merge.
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+        continue-on-error: true
+
+      - name: Check for unused dependencies
+        run: cargo machete
+        continue-on-error: true
+
+      - name: Install cargo-geiger
+        run: cargo install cargo-geiger --locked
+        continue-on-error: true
+
+      - name: Census transitive `unsafe` usage
+        run: cargo geiger --all-features
+        continue-on-error: true
+
   lint:
     name: Lint (fmt + clippy)
     runs-on: ubuntu-latest

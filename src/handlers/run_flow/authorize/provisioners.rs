@@ -139,7 +139,13 @@ pub(super) async fn provision_dns01(
     let txt_name = crate::challenge::dns01::record_name(dns)?;
     let txt_value = crate::challenge::dns01::txt_record_value(token, client.account_key())?;
 
-    // No hook: print instructions for manual setup
+    // Dispatcher invariant (see `authorize::authorize`): the sequential path is
+    // chosen for DNS challenges only when no --dns-hook is set; the hooked case
+    // goes to phased_dns. Asserted so a dispatcher change surfaces here.
+    debug_assert!(
+        ctx.dns_hook.is_none(),
+        "sequential dns-01 path reached with --dns-hook set"
+    );
     if !ctx.silent {
         crate::challenge::dns01::print_instructions(dns, token, client.account_key())?;
     }
@@ -210,7 +216,11 @@ pub(super) async fn provision_dns_persist01(
         ctx.persist_until,
     )?;
 
-    // No hook: print instructions for manual setup
+    // Same dispatcher invariant as `provision_dns01`.
+    debug_assert!(
+        ctx.dns_hook.is_none(),
+        "sequential dns-persist-01 path reached with --dns-hook set"
+    );
     if !ctx.silent {
         crate::challenge::dns_persist01::print_instructions(
             dns,

@@ -31,8 +31,8 @@ pub(super) async fn place(
         && !available.contains_key(p)
     {
         tracing::warn!(
-            "Profile \"{p}\" is not advertised by the server (available: {})",
-            available.keys().cloned().collect::<Vec<_>>().join(", ")
+            "Profile {p:?} is not advertised by the server (available: {})",
+            crate::handlers::advertised_profile_names(available)
         );
     }
 
@@ -54,7 +54,7 @@ pub(super) async fn place(
     if !ctx.json && !ctx.silent {
         outln!("Order URL:  {order_url}");
         if let Some(ref p) = order.profile {
-            outln!("Profile:    {p}");
+            outln!("Profile:    {}", crate::sanitize::untrusted_inline(p));
         }
         outln!("Order status: {}", order.status);
     }

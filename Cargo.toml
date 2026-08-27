@@ -9,6 +9,18 @@ license = "Apache-2.0"
 rust-version = "1.98"
 
 [dependencies]
+# ── RustCrypto version pin (reviewed 2026-08-27) ─────────────────────────────
+# `ecdsa` 0.16, `p256`/`p384`/`p521` 0.13, `sha2` 0.10, `hmac` 0.12,
+# `ed25519-dalek` 2 and `rand_core` 0.6 are one coordinated major behind latest.
+# They CANNOT be bumped yet: `rsa` 0.9 — the newest *stable* release — pins
+# `digest` 0.10 / `signature` 2 / `rand_core` 0.6 / `sha2` 0.10, so raising any
+# one of them splits the `digest` graph and `KeyInner::Rs256(SigningKey<Sha256>)`
+# in src/jws.rs stops unifying. Measured: the full bump resolves, then fails
+# `cargo check` with 47 errors, all rooted in "there are multiple different
+# versions of crate `digest` in the dependency graph".
+# `rsa` 0.10 would unblock it but ships only as 0.10.0-rc.18, and §11 forbids
+# pre-release dependencies. REVISIT when `rsa` 0.10 is stable, then bump the
+# whole set in one commit.
 anyhow = "1"
 base64 = "0.23"
 idna = "1"
@@ -111,7 +123,8 @@ nursery = { level = "warn", priority = -1 }
 module_name_repetitions = "allow"
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
-must_use_candidate = "allow"
+must_use_candidate = "warn"
+unneeded_field_pattern = "warn"
 return_self_not_must_use = "allow"
 similar_names = "allow"
 too_many_lines = "warn"
@@ -143,4 +156,5 @@ debug-assertions = false
 overflow-checks = true # Catch integer overflow → panic → abort (defense in depth)
 
 [dev-dependencies]
+proptest = "1.11.0"
 tempfile = "3.27.0"

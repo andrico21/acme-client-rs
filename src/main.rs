@@ -21,6 +21,7 @@ mod jws;
 #[macro_use]
 mod output;
 mod run_dispatch;
+mod sanitize;
 mod types;
 
 use anyhow::{Context, Result};
@@ -57,7 +58,7 @@ async fn main() {
     let (loaded_config, config_mode) = if matches!(cli.command, Commands::GenerateConfig) {
         (None, false)
     } else {
-        match load_config(&cli) {
+        match load_config(&cli).await {
             Ok(pair) => pair,
             Err(err) => {
                 error!("{err:#}");
@@ -77,7 +78,9 @@ async fn main() {
     } else {
         // No config file: CLI > env > defaults — clap already handled this.
         // Just warn if the default config file exists in CWD.
-        if !matches!(cli.command, Commands::GenerateConfig) && config::Config::default_exists() {
+        if !matches!(cli.command, Commands::GenerateConfig)
+            && config::Config::default_exists().await
+        {
             info!(
                 "Found {} in current directory but no --config or ACME_CONFIG was specified. \
                  Use --config {} or set ACME_CONFIG to load it.",
@@ -93,7 +96,16 @@ async fn main() {
     let sigint_registry = cleanup_registry.clone();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
-            error!("Interrupted — running challenge cleanup before exit...");
+            let pending = sigint_registry.pending_count();
+            if pending > 0 {
+                error!(
+                    "Interrupted — rolling back {pending} pending challenge action(s), \
+                     up to {}s each. Press Ctrl-C again to abort immediately.",
+                    defaults::hooks::HOOK_TIMEOUT.as_secs()
+                );
+            } else {
+                error!("Interrupted — nothing to clean up, exiting.");
+            }
             sigint_registry.run_all_sync();
             std::process::exit(130);
         }
@@ -120,7 +132,12 @@ async fn main() {
             // The SIGINT watcher is not the only path that must roll back
             // in-flight challenge state: an ordinary error return reaches
             // here with TXT records published and token files on disk.
-            cleanup_registry.run_all_sync();
+            // Drained on the blocking pool — it shells out to cleanup hooks and
+            // would otherwise stall a runtime worker for the hook timeout.
+            let drain = cleanup_registry.clone();
+            if let Err(join_err) = tokio::task::spawn_blocking(move || drain.run_all_sync()).await {
+                error!("challenge cleanup did not run to completion: {join_err}");
+            }
             std::process::exit(1);
         }
         // Succeeded, but the caller never received a result it explicitly

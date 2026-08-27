@@ -64,6 +64,17 @@ pub(super) fn emit_result(
     }
 }
 
+/// Scrubbed, comma-joined list of the profile names a CA advertises.
+pub(super) fn advertised_profile_names(
+    available: &std::collections::HashMap<String, String>,
+) -> String {
+    available
+        .keys()
+        .map(|name| crate::sanitize::untrusted_inline(name))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 // ── DNS TXT propagation check (hickory-resolver, see dns_check.rs) ─────────
 
 /// Check whether a DNS TXT record with the expected value exists, using the
@@ -238,5 +249,20 @@ mod tests {
         let ch = make_challenge(ChallengeStatus::Valid, None)?;
         assert!(!is_challenge_failed(&ch));
         Ok(())
+    }
+
+    #[test]
+    fn e1_advertised_profile_names_are_scrubbed() {
+        let mut available = std::collections::HashMap::new();
+        available.insert(
+            "\u{1b}[2Jtlsserver\rSPOOFED\u{7}".to_owned(),
+            "desc".to_owned(),
+        );
+        let rendered = advertised_profile_names(&available);
+        assert!(
+            !rendered.bytes().any(|b| b < 0x20 || b == 0x7f),
+            "CA-advertised names must be scrubbed: {rendered:?}"
+        );
+        assert!(rendered.contains("tlsserver"), "printable text survives");
     }
 }

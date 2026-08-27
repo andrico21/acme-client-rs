@@ -38,10 +38,12 @@ use crate::{config, fs_secure};
 /// `config_mode = true` means the user explicitly asked for a config file
 /// (via `--config` CLI flag or `ACME_CONFIG` env var) and env vars should be
 /// ignored for most fields.
-pub(crate) fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
+// cancel-safe: reads the config file and emits a permissions advisory; mutates
+// no external state.
+pub(crate) async fn load_config(cli: &Cli) -> Result<(Option<config::Config>, bool)> {
     if let Some(ref path) = cli.config {
-        fs_secure::warn_if_world_readable(path, "config");
-        Ok((Some(config::Config::load(path)?), true))
+        fs_secure::warn_if_world_readable_async(path, "config").await;
+        Ok((Some(config::Config::load(path).await?), true))
     } else {
         Ok((None, false))
     }

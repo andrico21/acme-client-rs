@@ -34,7 +34,7 @@ use crate::types::{
     NewOrderRequest, Order, RenewalInfo, RevokeCertRequest, validate_server_identifier,
 };
 
-use super::http_transport::{AcmeResponse, build_http_client, truncate_for_log};
+use super::http_transport::{AcmeResponse, build_http_client};
 use super::net_policy::{NetFlags, NetworkPolicy, TlsPolicy, policies_from_cli_flags};
 use super::url_validation::validate_acme_url;
 
@@ -294,7 +294,7 @@ impl AcmeClient {
             let body = resp.bytes().await.unwrap_or_default();
             bail!(
                 "ACME directory request failed (HTTP {status}): {}",
-                truncate_for_log(&body)
+                crate::sanitize::untrusted_block(&body)
             );
         }
 
@@ -347,11 +347,6 @@ impl AcmeClient {
 
     pub(crate) fn account_key(&self) -> &AccountKey {
         &self.transport.account_key
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn directory(&self) -> &Directory {
-        &self.directory
     }
 
     // ── Account operations (RFC 8555 §7.3) ──────────────────────────────
@@ -1290,6 +1285,62 @@ mod regression_tests {
             r#"{"suggestedWindow":{"start":"2026-01-01T00:00:00Z","end":"2026-01-02T00:00:00Z"}}"#;
         let info_absent: RenewalInfo = serde_json::from_str(json_absent)?;
         assert!(info_absent.explanation_url.is_none());
+        Ok(())
+    }
+
+    // ── E2 ──────────────────────────────────────────────────────────────
+    // A hostile CA problem document must reach the operator scrubbed and
+    // capped. Pre-fix this rendered 5832 bytes of stderr with raw CR intact.
+    #[tokio::test]
+    async fn e2_hostile_problem_detail_is_scrubbed_and_capped() -> Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+
+        let hostile_detail = format!(
+            "\u{1b}[2J\u{1b}[31mHACKED-BY-CA\u{1b}[0m\rSPOOFED-LINE\u{7} {}",
+            "A".repeat(5000)
+        );
+        let body = serde_json::to_vec(&serde_json::json!({
+            "type": "urn:ietf:params:acme:error:malformed",
+            "detail": hostile_detail,
+            "status": 400,
+        }))?;
+
+        let mut routes = account_routes(port, false);
+        routes.retain(|r| r.path_prefix != "/new-account");
+        routes.push(Route {
+            method: "POST",
+            path_prefix: "/new-account",
+            status_line: "HTTP/1.1 400 Bad Request",
+            extra_headers: vec![("content-type".into(), "application/problem+json".into())],
+            body,
+        });
+        let _captured = spawn_mock(listener, routes);
+
+        let mut client = build_client(port).await?;
+        let err = client
+            .create_account(None, true, None)
+            .await
+            .err()
+            .ok_or_else(|| anyhow!("a 400 problem document must surface as an error"))?;
+        let rendered = format!("{err:#}");
+
+        assert!(
+            !rendered.bytes().any(|b| b < 0x20 || b == 0x7f),
+            "no raw control byte may reach the operator: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("truncated"),
+            "an oversize detail must be capped: {rendered}"
+        );
+        assert!(
+            !rendered.contains(&"A".repeat(2000)),
+            "the 5000-byte flood must not be echoed in full"
+        );
+        assert!(
+            rendered.contains("HACKED-BY-CA"),
+            "printable diagnostic text must survive: {rendered}"
+        );
         Ok(())
     }
 }

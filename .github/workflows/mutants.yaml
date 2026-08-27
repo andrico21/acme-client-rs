@@ -1,0 +1,50 @@
+name: Mutation Testing
+
+# RUST_GUIDELINES.md §12 classes `cargo-mutants` as a *Recommended* tool whose
+# output is informational. A full-crate mutation run is far too slow for the
+# per-PR critical path, so it runs on a schedule and never gates a merge.
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants (informational)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      # Scoped to the modules where a surviving mutant is genuinely alarming:
+      # boundary validation, the untrusted-text scrubber, and the ARI renewal
+      # decision. Widening this to the whole crate makes the run unbounded.
+      - name: Run mutation testing
+        continue-on-error: true
+        run: |
+          cargo mutants --no-shuffle \
+            --file src/sanitize.rs \
+            --file src/types.rs \
+            --file src/cert_info.rs \
+            --file src/handlers/run_flow/renewal.rs
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mutants-report
+          path: mutants.out/
+          retention-days: 14

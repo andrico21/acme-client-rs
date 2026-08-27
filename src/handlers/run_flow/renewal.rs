@@ -29,7 +29,7 @@ pub(super) enum RenewalDecision {
 // cancel-safe: orchestrates renewal pre-check phases only. Phase-local updates
 // touch in-process RunContext state; no filesystem or ACME server mutation.
 pub(super) async fn check(ctx: &mut RunContext<'_>) -> Result<RenewalDecision> {
-    if !ctx.cert_output.exists() {
+    if !crate::fs_secure::path_exists(ctx.cert_output).await {
         return Ok(RenewalDecision::Renew);
     }
 
@@ -476,6 +476,38 @@ mod tests {
         for r in [0_u64, 1, u64::MAX / 3, u64::MAX] {
             let inst = select_renewal_instant(start, end, r);
             assert!(now < inst, "now {now} should be < selected {inst} (r={r})");
+        }
+    }
+}
+
+#[cfg(test)]
+mod proptests {
+    use super::{parse_ari_window, select_renewal_instant};
+    use proptest::prelude::*;
+    use time::macros::datetime;
+
+    proptest! {
+        #[test]
+        fn selected_instant_always_lands_inside_the_window(
+            span_secs in 1_i64..=(400 * 24 * 3600),
+            random in any::<u64>(),
+        ) {
+            let start = datetime!(2026-01-01 00:00:00 UTC);
+            let end = start + time::Duration::seconds(span_secs);
+            let inst = select_renewal_instant(start, end, random);
+            prop_assert!(inst >= start, "instant {} < start {}", inst, start);
+            prop_assert!(inst < end, "instant {} >= end {}", inst, end);
+        }
+
+        #[test]
+        fn degenerate_windows_collapse_to_start(random in any::<u64>()) {
+            let start = datetime!(2026-01-01 00:00:00 UTC);
+            prop_assert_eq!(select_renewal_instant(start, start, random), start);
+        }
+
+        #[test]
+        fn window_parsing_never_panics(start in ".*", end in ".*") {
+            let _ = parse_ari_window(&start, &end);
         }
     }
 }

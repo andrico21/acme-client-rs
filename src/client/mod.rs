@@ -31,7 +31,7 @@ mod net_policy;
 mod url_validation;
 
 pub(crate) use acme::{AcmeClient, compute_cert_id};
-pub(crate) use http_transport::{build_http_client, truncate_for_log};
+pub(crate) use http_transport::build_http_client;
 pub(crate) use net_policy::{NetFlags, policies_from_cli_flags};
 pub(crate) use url_validation::{
     validate_account_uri, validate_acme_url, validate_caa_parameter_value, validate_directory_url,

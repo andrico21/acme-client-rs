@@ -78,7 +78,7 @@ pub(crate) async fn cmd_renewal_info(cli: &Cli, cert_path: &Path) -> Result<()> 
             outln!("  Start:  {}", info.suggested_window.start);
             outln!("  End:    {}", info.suggested_window.end);
             if let Some(ref url) = info.explanation_url {
-                outln!("  Explanation: {url}");
+                outln!("  Explanation: {}", crate::sanitize::untrusted_inline(url));
             }
 
             // Show whether renewal is due

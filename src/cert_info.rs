@@ -85,12 +85,10 @@ fn decode_san_ip(bytes: &[u8]) -> Option<std::net::IpAddr> {
 
 /// Normalize a domain/IP string for comparison (lowercase, canonical IP form).
 pub(crate) fn normalize_identifier(value: &str) -> String {
-    // Strip brackets for IPv6 literals like [::1]
-    let candidate = if value.starts_with('[') && value.ends_with(']') {
-        &value[1..value.len() - 1]
-    } else {
-        value
-    };
+    // Total by contract, so §10's fallible `strip_circumfix` form is deliberately
+    // not used: an unbalanced bracket is not an IP, falls through to the DNS
+    // branch, and compares unequal — a malformed SAN must not abort a renewal.
+    let candidate = value.strip_circumfix("[", "]").unwrap_or(value);
     if let Ok(ip) = candidate.parse::<std::net::IpAddr>() {
         ip.to_string()
     } else {
@@ -129,5 +127,25 @@ mod tests {
         assert!(decode_san_ip(&[0; 15]).is_none());
         assert!(decode_san_ip(&[0; 17]).is_none());
         Ok(())
+    }
+
+    #[test]
+    fn w2_normalize_identifier_handles_brackets_without_panicking() {
+        use super::normalize_identifier;
+
+        assert_eq!(normalize_identifier("[::1]"), "::1");
+        assert_eq!(normalize_identifier("[2001:db8::1]"), "2001:db8::1");
+        assert_eq!(normalize_identifier("EXAMPLE.com"), "example.com");
+        assert_eq!(normalize_identifier("192.0.2.1"), "192.0.2.1");
+
+        // Unbalanced / degenerate inputs must fall through untouched rather
+        // than panic on a byte-range slice.
+        for odd in ["[", "]", "[]", "[::1", "::1]", "[example.com]", ""] {
+            assert_eq!(
+                normalize_identifier(odd),
+                odd.to_lowercase(),
+                "input {odd:?}"
+            );
+        }
     }
 }

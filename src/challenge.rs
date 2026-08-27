@@ -94,12 +94,15 @@ pub(crate) mod http01 {
     }
 
     /// Remove a previously written challenge file (best-effort).
+    ///
+    /// Stays synchronous: the SIGINT cleanup registry drains outside the runtime.
     pub(crate) fn cleanup_challenge_file(path: &Path) {
-        if path.exists() {
-            if let Err(e) = std::fs::remove_file(path) {
+        match std::fs::remove_file(path) {
+            Ok(()) => info!("HTTP-01: cleaned up {}", path.display()),
+            // Never written, or already removed — cleanup is idempotent by design.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
                 tracing::warn!("failed to clean up challenge file {}: {e}", path.display());
-            } else {
-                info!("HTTP-01: cleaned up {}", path.display());
             }
         }
     }
@@ -143,9 +146,37 @@ pub(crate) mod http01 {
         }
     }
 
+    /// OWASP response headers (§10), shared so the 200 and 404 paths cannot drift.
+    /// A macro, not a `const`: `concat!` accepts only literals.
+    ///
+    /// Omitted by design: HSTS (RFC 6797 §7.2 — UAs MUST ignore it over the
+    /// plaintext that HTTP-01 mandates) and COEP/COOP (document/worker isolation;
+    /// this serves an octet-stream to a non-browser validator).
+    macro_rules! security_headers {
+        () => {
+            concat!(
+                "X-Content-Type-Options: nosniff\r\n",
+                "X-Frame-Options: deny\r\n",
+                "Content-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n",
+                "Referrer-Policy: no-referrer\r\n",
+                "Permissions-Policy: accelerometer=(), camera=(), geolocation=(), microphone=()\r\n",
+                "Cross-Origin-Resource-Policy: same-origin\r\n",
+                "X-Permitted-Cross-Domain-Policies: none\r\n",
+                "X-DNS-Prefetch-Control: off\r\n",
+                "Cache-Control: no-store, max-age=0\r\n",
+            )
+        };
+    }
+
     /// 404 response for non-matching paths. Static — no per-connection allocation.
     /// Security: no `Server` header to avoid identifying the ACME client.
-    const NOT_FOUND_RESPONSE: &[u8] = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store, max-age=0\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n";
+    const NOT_FOUND_RESPONSE: &[u8] = concat!(
+        "HTTP/1.1 404 Not Found\r\n",
+        "Content-Length: 0\r\n",
+        security_headers!(),
+        "Connection: close\r\n\r\n",
+    )
+    .as_bytes();
 
     /// Serve a single accepted TCP connection: read one request, reply with
     /// the key-authorization body when the path matches, else 404. Errors
@@ -199,15 +230,15 @@ pub(crate) mod http01 {
             if request_line.starts_with(&expected_prefix) {
                 info!("HTTP-01: serving challenge response to {addr}");
                 let resp = format!(
-                    "HTTP/1.1 200 OK\r\n\
-                     Content-Type: application/octet-stream\r\n\
-                     Content-Length: {}\r\n\
-                     X-Content-Type-Options: nosniff\r\n\
-                     Cache-Control: no-store, max-age=0\r\n\
-                     Referrer-Policy: no-referrer\r\n\
-                     Connection: close\r\n\r\n{}",
-                    auth.len(),
-                    auth
+                    concat!(
+                        "HTTP/1.1 200 OK\r\n",
+                        "Content-Type: application/octet-stream\r\n",
+                        "Content-Length: {content_length}\r\n",
+                        security_headers!(),
+                        "Connection: close\r\n\r\n{body}",
+                    ),
+                    content_length = auth.len(),
+                    body = auth
                 );
                 stream.write_all(resp.as_bytes()).await?;
             } else {
@@ -427,11 +458,9 @@ pub(crate) mod tlsalpn01 {
     use crate::outln;
 
     /// ALPN protocol identifier.
-    #[allow(dead_code)]
     pub(crate) const ACME_TLS_ALPN_PROTOCOL: &[u8] = b"acme-tls/1";
 
     /// OID for the `acmeIdentifier` certificate extension (1.3.6.1.5.5.7.1.31).
-    #[allow(dead_code)]
     pub(crate) const ACME_IDENTIFIER_OID: &[u64] = &[1, 3, 6, 1, 5, 5, 7, 1, 31];
 
     /// Compute the DER-encoded `acmeIdentifier` extension value.
@@ -466,10 +495,17 @@ pub(crate) mod tlsalpn01 {
                     let _ = write!(&mut acc, "{b:02x}");
                     acc
                 });
+        let alpn = String::from_utf8_lossy(ACME_TLS_ALPN_PROTOCOL);
+        let oid = ACME_IDENTIFIER_OID
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
         outln!();
         outln!("=== TLS-ALPN-01 Challenge ===");
         outln!("Domain: {domain}");
-        outln!("ALPN protocol: acme-tls/1");
+        outln!("ALPN protocol: {alpn}");
+        outln!("acmeIdentifier extension OID: {oid}");
         outln!("acmeIdentifier extension (hex): {hex}");
         outln!();
         outln!("Configure a TLS server on port 443 with a self-signed");
@@ -591,6 +627,24 @@ mod tests {
         assert!(super::dns_persist01::print_instructions(&domain, &ok, uri, None, None).is_ok());
     }
 
+    #[test]
+    fn i4_tlsalpn_constants_render_the_documented_values() -> anyhow::Result<()> {
+        use super::tlsalpn01::{ACME_IDENTIFIER_OID, ACME_TLS_ALPN_PROTOCOL};
+
+        assert_eq!(
+            String::from_utf8_lossy(ACME_TLS_ALPN_PROTOCOL),
+            "acme-tls/1",
+            "RFC 8737 §3 ALPN protocol id"
+        );
+        let oid = ACME_IDENTIFIER_OID
+            .iter()
+            .map(u64::to_string)
+            .collect::<Vec<_>>()
+            .join(".");
+        assert_eq!(oid, "1.3.6.1.5.5.7.1.31", "acmeIdentifier extension OID");
+        Ok(())
+    }
+
     async fn http01_roundtrip(request: &str) -> anyhow::Result<String> {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
@@ -613,24 +667,38 @@ mod tests {
         Ok(resp)
     }
 
+    const EXPECTED_SECURITY_HEADERS: &[&str] = &[
+        "X-Content-Type-Options: nosniff",
+        "X-Frame-Options: deny",
+        "Content-Security-Policy: default-src 'none'; frame-ancestors 'none'",
+        "Referrer-Policy: no-referrer",
+        "Permissions-Policy: accelerometer=(), camera=(), geolocation=(), microphone=()",
+        "Cross-Origin-Resource-Policy: same-origin",
+        "X-Permitted-Cross-Domain-Policies: none",
+        "X-DNS-Prefetch-Control: off",
+        "Cache-Control: no-store, max-age=0",
+    ];
+
+    fn assert_security_headers(resp: &str) {
+        for header in EXPECTED_SECURITY_HEADERS {
+            assert!(resp.contains(header), "missing {header:?} in: {resp}");
+        }
+        assert!(
+            !resp.contains("Server:"),
+            "fingerprint header leaked: {resp}"
+        );
+        assert!(
+            !resp.contains("Strict-Transport-Security"),
+            "HSTS is meaningless over plaintext and must not be sent: {resp}"
+        );
+    }
+
     #[tokio::test]
     async fn w10_http01_200_response_carries_security_headers() -> anyhow::Result<()> {
         let resp =
             http01_roundtrip("GET /.well-known/acme-challenge/token HTTP/1.1\r\n\r\n").await?;
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
-        assert!(
-            resp.contains("X-Content-Type-Options: nosniff"),
-            "got: {resp}"
-        );
-        assert!(
-            resp.contains("Cache-Control: no-store, max-age=0"),
-            "got: {resp}"
-        );
-        assert!(resp.contains("Referrer-Policy: no-referrer"), "got: {resp}");
-        assert!(
-            !resp.contains("Server:"),
-            "fingerprint header leaked: {resp}"
-        );
+        assert_security_headers(&resp);
         assert!(resp.ends_with("token.thumbprint"), "got: {resp}");
         Ok(())
     }
@@ -639,15 +707,7 @@ mod tests {
     async fn w10_http01_404_response_carries_security_headers() -> anyhow::Result<()> {
         let resp = http01_roundtrip("GET /other HTTP/1.1\r\n\r\n").await?;
         assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "got: {resp}");
-        assert!(
-            resp.contains("X-Content-Type-Options: nosniff"),
-            "got: {resp}"
-        );
-        assert!(
-            resp.contains("Cache-Control: no-store, max-age=0"),
-            "got: {resp}"
-        );
-        assert!(resp.contains("Referrer-Policy: no-referrer"), "got: {resp}");
+        assert_security_headers(&resp);
         assert!(
             !resp.contains("token.thumbprint"),
             "key auth leaked on 404: {resp}"
