@@ -35,6 +35,68 @@ pub(crate) const MAX_UNTRUSTED_TEXT: usize = 1024;
 /// Stand-in for a character that must not reach the terminal verbatim.
 const REPLACEMENT: char = '·';
 
+/// Cap for terminal-rendered certificate text (`--print-cert`).
+///
+/// A Let's Encrypt leaf+intermediate chain is ~3.5 KB, so this is ~300x the
+/// largest realistic input; it exists only to bound a hostile CA flooding the
+/// operator's terminal or log pipeline.
+pub(crate) const MAX_CERT_TEXT: usize = 1024 * 1024;
+
+/// Whether `c` may reach the terminal, given the character that follows it.
+///
+/// `\r` is permitted **only** as the leading half of a CRLF pair. That keeps
+/// CRLF-encoded PEM byte-identical (some CAs emit it, and `openssl` accepts
+/// both) while still neutralising a standalone `CR`, which is the character
+/// that actually overwrites the line just printed.
+fn passes_terminal_policy(c: char, next: Option<char>) -> bool {
+    match c {
+        '\n' | '\t' => true,
+        '\r' => next == Some('\n'),
+        _ => !steers_terminal(c),
+    }
+}
+
+/// `true` if every character in `s` is safe to emit to a terminal.
+///
+/// The `out!`/`outln!` sink asserts this in debug builds, so an unsanitized
+/// sink fails loudly in tests rather than silently reintroducing
+/// terminal-escape injection. Debug-only: release enforces nothing here, since
+/// the fix belongs at the source sink.
+#[cfg(debug_assertions)]
+pub(crate) fn is_terminal_safe(s: &str) -> bool {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !passes_terminal_policy(c, chars.peek().copied()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Scrub a CA-supplied certificate body for terminal rendering.
+///
+/// Preserves `\n`, `\t` and CRLF pairs, so any legitimate PEM — LF or CRLF —
+/// round-trips byte-identically and still pipes into `openssl x509`. Capped at
+/// [`MAX_CERT_TEXT`].
+pub(crate) fn untrusted_certificate(cert: &str) -> String {
+    let mut out = String::with_capacity(cert.len().min(MAX_CERT_TEXT));
+    let mut chars = cert.chars().peekable();
+    let mut kept = 0usize;
+    while let Some(c) = chars.next() {
+        if kept == MAX_CERT_TEXT {
+            append_truncation_note(&mut out, cert.len());
+            return out;
+        }
+        out.push(if passes_terminal_policy(c, chars.peek().copied()) {
+            c
+        } else {
+            REPLACEMENT
+        });
+        kept += 1;
+    }
+    out
+}
+
 /// Whether `\n` and `\t` are meaningful in the destination context.
 ///
 /// An enum rather than a `bool` parameter so the two call sites read as
@@ -234,6 +296,75 @@ mod tests {
     fn empty_input_is_empty_output() {
         assert_eq!(untrusted_inline(""), "");
         assert_eq!(untrusted_block(b""), "");
+    }
+
+    // ── --print-cert path ───────────────────────────────────────────────
+
+    fn pem(line_ending: &str) -> String {
+        let le = line_ending;
+        let body: String = std::iter::repeat_n("MIIFazCCA1OgAwIBAgIRAKc", 60)
+            .collect::<Vec<_>>()
+            .join(le);
+        format!("-----BEGIN CERTIFICATE-----{le}{body}{le}-----END CERTIFICATE-----{le}")
+    }
+
+    #[test]
+    fn certificate_lf_pem_round_trips_byte_identically() {
+        let input = pem("\n");
+        assert!(input.len() > 1000, "fixture is a realistic multi-KB chain");
+        assert_eq!(untrusted_certificate(&input), input);
+    }
+
+    // Some CAs emit CRLF PEM and `openssl` accepts it; a naive scrubber turns
+    // each line ending into `·\n` and breaks `--print-cert | openssl x509`.
+    #[test]
+    fn certificate_crlf_pem_round_trips_byte_identically() {
+        let input = pem("\r\n");
+        assert!(input.contains("\r\n"));
+        assert_eq!(untrusted_certificate(&input), input);
+    }
+
+    #[test]
+    fn certificate_scrubs_standalone_cr_but_keeps_crlf() {
+        let out = untrusted_certificate("keep\r\nkill\rtail");
+        assert_eq!(out, format!("keep\r\nkill{REPLACEMENT}tail"));
+    }
+
+    #[test]
+    fn certificate_neutralises_a_hostile_body() {
+        let hostile =
+            "-----BEGIN CERTIFICATE-----\n\u{1b}[2JSPOOF\u{7}\r-----END CERTIFICATE-----\n";
+        let out = untrusted_certificate(hostile);
+        assert!(
+            !out.bytes()
+                .any(|b| (b < 0x20 && b != b'\n' && b != b'\t') || b == 0x7f),
+            "no steering bytes may survive: {out:?}"
+        );
+        assert!(out.contains("SPOOF"), "printable text preserved");
+    }
+
+    #[test]
+    fn certificate_caps_a_flood() {
+        let flood = "A".repeat(MAX_CERT_TEXT + 10);
+        let out = untrusted_certificate(&flood);
+        assert!(out.contains("truncated"));
+        assert_eq!(out.chars().filter(|c| *c == 'A').count(), MAX_CERT_TEXT);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    fn terminal_safety_predicate_matches_the_scrubbers() {
+        assert!(is_terminal_safe("plain text"));
+        assert!(is_terminal_safe("multi\nline\twith tabs"));
+        assert!(is_terminal_safe("crlf\r\nis fine"));
+        assert!(!is_terminal_safe("bare\rcarriage"));
+        assert!(!is_terminal_safe("esc\u{1b}[31m"));
+        assert!(!is_terminal_safe("bell\u{7}"));
+        assert!(!is_terminal_safe("c1\u{9b}31m"));
+        assert!(is_terminal_safe(&untrusted_certificate(
+            "hostile\u{1b}\rmix"
+        )));
+        assert!(is_terminal_safe(&untrusted_inline("hostile\u{1b}\rmix")));
     }
 }
 

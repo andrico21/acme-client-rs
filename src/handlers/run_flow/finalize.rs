@@ -276,7 +276,7 @@ fn report_certificate(ctx: &RunContext<'_>, cert: &str, key_encrypted: bool) {
     } else if !ctx.silent {
         outln!("Certificate saved to {}", ctx.cert_output.display());
         if ctx.print_cert {
-            outln!("{cert}");
+            outln!("{}", crate::sanitize::untrusted_certificate(cert));
         }
     }
 }

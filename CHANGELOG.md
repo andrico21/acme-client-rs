@@ -10,6 +10,52 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+### Security
+
+- **Text supplied by the ACME server is now scrubbed before it reaches the
+  terminal.** A hostile or compromised CA controls the bytes in problem-document
+  `detail` fields, directory profile names and descriptions, the ARI
+  `explanationURL`, unknown challenge/error type strings, and the certificate
+  body printed by `--print-cert`. Those were rendered verbatim, so a CA could
+  emit ANSI escape sequences and carriage returns that drive the operator's
+  terminal or overwrite log lines. Control characters are now replaced with `·`
+  in text output. JSON output was never affected (`serde_json` escapes them).
+- **Error output from ACME problem documents is now bounded.** The structured
+  branch bypassed the existing 1 KB response-body cap, so a CA could flood
+  stderr with an arbitrarily large `detail`. Both the field and the rendered
+  subproblem list (max 10) are now capped.
+- **The built-in HTTP-01 challenge server sends the full OWASP header set** —
+  adding `X-Frame-Options`, `Content-Security-Policy`, `Permissions-Policy`,
+  `Cross-Origin-Resource-Policy`, `X-Permitted-Cross-Domain-Policies` and
+  `X-DNS-Prefetch-Control` to the headers already sent. HSTS is deliberately
+  omitted: RFC 6797 §7.2 requires user agents to ignore it over the plaintext
+  that HTTP-01 mandates.
+- Debug builds now assert that no terminal-steering bytes reach stdout, so a
+  future unsanitized output site fails in tests rather than silently shipping.
+
+`--print-cert` output is unchanged for any legitimate certificate: scrubbing
+preserves `\n`, `\t` and CRLF pairs, so both LF- and CRLF-encoded PEM remain
+byte-identical and still pipe into `openssl x509`. The certificate written to
+disk was never modified.
+
+### Added
+
+- `cargo vet` runs in CI as a blocking supply-chain gate, with the
+  `supply-chain/` audit configuration committed. `cargo machete` (unused
+  dependencies) and `cargo geiger` (transitive `unsafe` census) run as
+  informational, non-blocking steps.
+- A scheduled, non-blocking `cargo-mutants` workflow covering the boundary
+  validators, the output scrubber and the ARI renewal decision.
+- Property-based tests (`proptest`) over DNS/token validation, the scrubber and
+  the ARI renewal-instant selector.
+
+### Changed
+
+- `show-dns-persist-01` and the TLS-ALPN-01 instructions now also print the
+  `acmeIdentifier` extension OID (`1.3.6.1.5.5.7.1.31`) alongside the hex value.
+- Interrupting with Ctrl-C now reports how many cleanup actions are pending and
+  that a second Ctrl-C aborts immediately, instead of a bare message.
+
 ### Changed
 
 - **BREAKING: `revoke-cert`, `pre-authorize`, `show-dns-persist-01` and

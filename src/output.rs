@@ -52,19 +52,58 @@ pub(crate) fn stdout_dead() -> bool {
 
 /// Internal helper: write to stdout, latching `STDOUT_DEAD` on a broken pipe
 /// and ignoring every other error.
+///
+/// In debug builds this asserts the rendered text is terminal-safe, so a sink
+/// that forgets to scrub CA-supplied bytes fails loudly in tests. Compiled out
+/// entirely in release, where the fix belongs at the source sink instead.
 #[doc(hidden)]
 pub(crate) fn __write(args: std::fmt::Arguments<'_>, newline: bool) {
-    use std::io::Write as _;
     if is_silent() || stdout_dead() {
         return;
     }
+
+    #[cfg(debug_assertions)]
+    {
+        // Rendered once and reused: `Display` impls may have side effects, so
+        // formatting twice would not be semantics-preserving.
+        let rendered = args.to_string();
+        debug_assert!(
+            crate::sanitize::is_terminal_safe(&rendered),
+            "terminal-unsafe bytes reached the stdout sink; scrub untrusted \
+             text at its source (see crate::sanitize)"
+        );
+        write_rendered(&rendered, newline);
+    }
+
+    #[cfg(not(debug_assertions))]
+    write_args(args, newline);
+}
+
+#[cfg(debug_assertions)]
+fn write_rendered(rendered: &str, newline: bool) {
+    use std::io::Write as _;
     let stdout = std::io::stdout();
     let mut h = stdout.lock();
-    let res = if newline {
+    latch_broken_pipe(if newline {
+        writeln!(h, "{rendered}")
+    } else {
+        write!(h, "{rendered}")
+    });
+}
+
+#[cfg(not(debug_assertions))]
+fn write_args(args: std::fmt::Arguments<'_>, newline: bool) {
+    use std::io::Write as _;
+    let stdout = std::io::stdout();
+    let mut h = stdout.lock();
+    latch_broken_pipe(if newline {
         writeln!(h, "{args}")
     } else {
         write!(h, "{args}")
-    };
+    });
+}
+
+fn latch_broken_pipe(res: std::io::Result<()>) {
     if let Err(e) = res
         && e.kind() == std::io::ErrorKind::BrokenPipe
     {
@@ -116,5 +155,22 @@ mod tests {
         super::__write(format_args!("dropped"), true);
         STDOUT_DEAD.store(false, Ordering::Relaxed);
         assert!(!stdout_dead());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "terminal-unsafe bytes reached the stdout sink")]
+    fn e1_guard_rejects_unscrubbed_terminal_escapes() {
+        set_silent(false);
+        STDOUT_DEAD.store(false, Ordering::Relaxed);
+        super::__write(format_args!("\u{1b}[2Jhostile\r"), true);
+    }
+
+    #[test]
+    fn e1_guard_accepts_legitimate_multiline_and_crlf_output() {
+        set_silent(true);
+        super::__write(format_args!("plain\nlines\twith tabs"), true);
+        super::__write(format_args!("crlf\r\npem\r\n"), false);
+        set_silent(false);
     }
 }
