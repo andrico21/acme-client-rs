@@ -38,14 +38,30 @@ use super::http_transport::{AcmeResponse, build_http_client, truncate_for_log};
 use super::net_policy::{NetFlags, NetworkPolicy, TlsPolicy, policies_from_cli_flags};
 use super::url_validation::validate_acme_url;
 
-/// Parse RFC 9110 `Retry-After` delta-seconds into a `Duration`.
-/// Returns `None` if absent, unparseable, or in HTTP-date form (uncommon for ACME).
+/// Parse a `Retry-After` header (RFC 9110 §10.2.3) into a `Duration`.
+///
+/// Accepts both wire forms: delta-seconds, and the IMF-fixdate HTTP-date that
+/// §5.6.7 also permits. A date already in the past yields `None` rather than
+/// `Duration::ZERO`, so a server stuck on a stale date cannot drive a polling
+/// loop into repeated zero-length sleeps.
 fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std::time::Duration> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
-    raw.trim()
-        .parse::<u64>()
-        .ok()
-        .map(std::time::Duration::from_secs)
+    let raw = raw.trim();
+    if let Ok(secs) = raw.parse::<u64>() {
+        return Some(std::time::Duration::from_secs(secs));
+    }
+    let fmt = time::macros::format_description!(
+        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT"
+    );
+    let when = time::PrimitiveDateTime::parse(raw, fmt).ok()?.assume_utc();
+    let delta = when - time::OffsetDateTime::now_utc();
+    if delta.is_positive() {
+        u64::try_from(delta.whole_seconds())
+            .ok()
+            .map(std::time::Duration::from_secs)
+    } else {
+        None
+    }
 }
 
 const JOSE_CONTENT_TYPE: &str = "application/jose+json";
@@ -259,6 +275,11 @@ impl AcmeClient {
         connect_timeout_secs: u64,
         network: NetworkPolicy,
     ) -> Result<Self> {
+        // Self-protecting boundary: every caller today pre-validates, but the
+        // connect-time resolver only screens IPs — it would not catch an
+        // http:// downgrade, userinfo, or an over-long URL.
+        validate_acme_url(directory_url, tls, network)
+            .with_context(|| format!("invalid directory URL {directory_url:?}"))?;
         let http = build_http_client(tls, connect_timeout_secs, network)?;
 
         info!("Fetching ACME directory from {}", directory_url);
@@ -373,9 +394,10 @@ impl AcmeClient {
         };
 
         let payload = serde_json::to_string(&NewAccountRequest {
-            terms_of_service_agreed,
+            terms_of_service_agreed: Some(terms_of_service_agreed),
             contact,
             external_account_binding: eab_binding,
+            only_return_existing: None,
         })?;
         let resp = self
             .transport
@@ -385,6 +407,58 @@ impl AcmeClient {
                 &payload,
             )
             .await?;
+        resp.ensure_success()?;
+
+        let account_url = {
+            let (tls, net) = self.transport.url_policies();
+            resp.validated_location(tls, net)?
+        };
+        info!("Account URL: {account_url}");
+        self.transport.account_url = Some(account_url);
+
+        resp.json()
+    }
+
+    /// Look up the existing account for this key without ever creating one
+    /// (RFC 8555 §7.3.1 `onlyReturnExisting`).
+    ///
+    /// Unlike [`AcmeClient::create_account`] this sends no `termsOfServiceAgreed`,
+    /// so it cannot accept a CA's terms on the operator's behalf. Commands whose
+    /// intent is read or maintenance use this; registration stays explicit.
+    // NOT cancel-safe: nonce-consuming POST. No account is created either way,
+    // so a cancelled lookup is safe to retry.
+    pub(crate) async fn lookup_account(&mut self) -> Result<Account> {
+        info!("Looking up existing ACME account");
+        let payload = serde_json::to_string(&NewAccountRequest {
+            terms_of_service_agreed: None,
+            contact: None,
+            external_account_binding: None,
+            only_return_existing: Some(true),
+        })?;
+        let resp = self
+            .transport
+            .signed_request_force_jwk(
+                &self.directory.new_account,
+                &self.directory.new_nonce,
+                &payload,
+            )
+            .await?;
+
+        // Must run before `ensure_success`, which flattens the typed problem
+        // document into an opaque string and loses the variant we key on.
+        if resp.status.is_client_error()
+            && let Ok(err) = serde_json::from_slice::<AcmeError>(&resp.body)
+            && err
+                .error_type
+                .as_ref()
+                .is_some_and(|t| *t == AcmeErrorType::AccountDoesNotExist)
+        {
+            bail!(
+                "no ACME account is registered for this key. \
+                 Pass --account-url <URL> if you already know it, or --agree-tos \
+                 to register a new account now (this accepts the CA's terms of service)"
+            );
+        }
         resp.ensure_success()?;
 
         let account_url = {
@@ -534,15 +608,27 @@ impl AcmeClient {
     /// Fetch an authorization object (POST-as-GET).
     // NOT cancel-safe: nonce-consuming POST-as-GET; authz state read-only.
     pub(crate) async fn get_authorization(&mut self, authz_url: &Url) -> Result<Authorization> {
+        Ok(self.get_authorization_with_retry_after(authz_url).await?.0)
+    }
+
+    /// Fetch an authorization, returning the server-suggested `Retry-After`
+    /// delay (RFC 8555 §7.5.1) if present. Mirrors the `poll_order` /
+    /// `poll_order_with_retry_after` pair.
+    // NOT cancel-safe: nonce-consuming POST-as-GET; authz state read-only.
+    pub(crate) async fn get_authorization_with_retry_after(
+        &mut self,
+        authz_url: &Url,
+    ) -> Result<(Authorization, Option<std::time::Duration>)> {
         debug!("Fetching authorization: {authz_url}");
         let resp = self
             .transport
             .signed_request(authz_url, &self.directory.new_nonce, "")
             .await?;
         resp.ensure_success()?;
+        let retry_after = parse_retry_after(&resp.headers);
         let authz: Authorization = resp.json()?;
         validate_server_identifier(&authz.identifier)?;
-        Ok(authz)
+        Ok((authz, retry_after))
     }
 
     /// Indicate to the server that a challenge is ready (RFC 8555 §7.5.1).
@@ -1205,5 +1291,58 @@ mod regression_tests {
         let info_absent: RenewalInfo = serde_json::from_str(json_absent)?;
         assert!(info_absent.explanation_url.is_none());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod retry_after_tests {
+    #![allow(clippy::expect_used)]
+
+    use super::parse_retry_after;
+    use reqwest::header::{HeaderMap, HeaderValue, RETRY_AFTER};
+
+    fn headers_with(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Ok(v) = HeaderValue::from_str(value) {
+            h.insert(RETRY_AFTER, v);
+        }
+        h
+    }
+
+    #[test]
+    fn w2_parses_delta_seconds() {
+        let got = parse_retry_after(&headers_with("30"));
+        assert_eq!(got, Some(std::time::Duration::from_secs(30)));
+    }
+
+    #[test]
+    fn w2_parses_imf_fixdate_in_the_future() {
+        let future = time::OffsetDateTime::now_utc() + time::Duration::hours(1);
+        let fmt = time::macros::format_description!(
+            "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT"
+        );
+        let Ok(rendered) = future.format(&fmt) else {
+            return;
+        };
+        let got = parse_retry_after(&headers_with(&rendered));
+        let got = got.expect("future HTTP-date must parse");
+        assert!(
+            got.as_secs() > 3500 && got.as_secs() <= 3600,
+            "expected ~1h, got {got:?}"
+        );
+    }
+
+    #[test]
+    fn w2_past_http_date_yields_none_not_zero() {
+        // A stale date must not become Duration::ZERO: that would spin the
+        // polling loop instead of falling back to the default cadence.
+        let got = parse_retry_after(&headers_with("Sun, 06 Nov 1994 08:49:37 GMT"));
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn w2_absent_or_garbage_header_yields_none() {
+        assert_eq!(parse_retry_after(&HeaderMap::new()), None);
+        assert_eq!(parse_retry_after(&headers_with("not-a-date")), None);
     }
 }

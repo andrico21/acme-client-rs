@@ -15,23 +15,27 @@ use crate::client::AcmeClient;
 use crate::outln;
 use crate::types::{Authorization, ChallengeToken};
 
-use super::super::super::run_hook;
+use super::super::super::{run_hook, wait_for_enter};
 use super::super::RunContext;
 
 /// Teardown state produced by a provisioner.
 ///
 /// Only HTTP-01 standalone mode populates `serve_task`; only HTTP-01 file mode
 /// populates `challenge_file`. Other provisioners return `Default::default()`.
+/// `cleanup_handle` de-registers the SIGINT fallback once teardown has run, so
+/// a later Ctrl-C does not re-fire an action for a resource already released.
 #[derive(Default)]
 pub(super) struct ProvisionResult {
     pub challenge_file: Option<std::path::PathBuf>,
     pub serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
+    pub cleanup_handle: Option<crate::cleanup::CleanupHandle>,
 }
 
 // NOT cancel-safe: spawns HTTP-01 server task, writes challenge file, and
-// signals CA via respond_to_challenge. Drop mid-flow may leave a registered
-// JoinHandle/file in CleanupRegistry which still runs on Drop, but the CA
-// may already be polling. Caller (sequential.rs) must run to completion.
+// signals CA via respond_to_challenge. Drop mid-flow leaves a registered
+// JoinHandle/file in CleanupRegistry, which is drained only on SIGINT or the
+// top-level error path — not on Drop — and the CA may already be polling.
+// Caller (sequential.rs) must run to completion.
 // HTTP-01 file cleanup is registered before the file is written, so a
 // cancellation in that window cannot leak a token file.
 pub(super) async fn provision_http01(
@@ -57,11 +61,9 @@ pub(super) async fn provision_http01(
         // tolerates a path that does not exist yet.
         let auth = crate::challenge::http01::response_body(token, client.account_key())?;
         let file = crate::challenge::http01::challenge_file_path(dir, token);
-        let _ = ctx
-            .cleanup_registry
-            .register(crate::cleanup::CleanupAction::HttpChallengeFile(
-                file.clone(),
-            ));
+        result.cleanup_handle = Some(ctx.cleanup_registry.register(
+            crate::cleanup::CleanupAction::HttpChallengeFile(file.clone()),
+        ));
         let write_path = file.clone();
         tokio::task::spawn_blocking(move || {
             crate::challenge::http01::write_challenge_file_blocking(&write_path, &auth)
@@ -92,11 +94,9 @@ pub(super) async fn provision_http01(
         let task = tokio::spawn(crate::challenge::http01::run_accept_loop(
             listener, auth, path,
         ));
-        let _ = ctx
-            .cleanup_registry
-            .register(crate::cleanup::CleanupAction::ServerTask(
-                task.abort_handle(),
-            ));
+        result.cleanup_handle = Some(ctx.cleanup_registry.register(
+            crate::cleanup::CleanupAction::ServerTask(task.abort_handle()),
+        ));
         result.serve_task = Some(task);
     }
 
@@ -149,8 +149,7 @@ pub(super) async fn provision_dns01(
     } else if !ctx.silent {
         // Interactive: wait for Enter
         outln!("Press Enter once the record has propagated...");
-        let _ =
-            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        wait_for_enter().await?;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
@@ -226,8 +225,7 @@ pub(super) async fn provision_dns_persist01(
         wait_for_dns_propagation(ctx, &txt_name, &txt_value, timeout_secs).await?;
     } else if !ctx.silent {
         outln!("Press Enter once the record has propagated...");
-        let _ =
-            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        wait_for_enter().await?;
     }
 
     if let Some(script) = ctx.on_challenge_ready {
@@ -264,8 +262,7 @@ pub(super) async fn provision_tlsalpn01(
             client.account_key(),
         )?;
         outln!("Press Enter once the TLS server is configured...");
-        let _ =
-            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        wait_for_enter().await?;
     }
 
     if let Some(script) = ctx.on_challenge_ready {

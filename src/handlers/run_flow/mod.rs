@@ -39,7 +39,7 @@ pub(super) struct RunContext<'a> {
     pub challenge_dir: Option<&'a std::path::Path>,
     pub dns_hook: Option<&'a std::path::Path>,
     pub dns_wait: Option<u64>,
-    pub dns_propagation_concurrency: usize,
+    pub dns_propagation_concurrency: std::num::NonZeroUsize,
     pub challenge_timeout: u64,
     pub cert_output: &'a std::path::Path,
     pub key_output: &'a std::path::Path,
@@ -160,12 +160,32 @@ impl<'a> RunContext<'a> {
     }
 }
 
+/// Sleep length before the next ACME resource re-poll.
+///
+/// Honors the server's `Retry-After` (RFC 8555 §7.5.1) but bounds it twice:
+/// by `ACME_RESOURCE_POLL_MAX`, so a misconfigured or hostile CA cannot stall
+/// a renewal job for hours, and by the caller's remaining challenge-timeout
+/// budget, so honoring the header can never overshoot `--challenge-timeout`.
+/// Unlike order polling there is no outer `timeout` wrapper here to catch an
+/// overshoot, which is why the remaining-budget term is load-bearing.
+fn next_poll_delay(
+    retry_after: Option<std::time::Duration>,
+    remaining: std::time::Duration,
+) -> std::time::Duration {
+    retry_after
+        .unwrap_or(crate::defaults::polling::ACME_RESOURCE_POLL)
+        .min(crate::defaults::polling::ACME_RESOURCE_POLL_MAX)
+        .min(remaining)
+}
+
 // ── Full automated flow ─────────────────────────────────────────────────────
 
 // NOT cancel-safe: top-level end-to-end flow. Inherits NOT-cancel-safe
-// contract from authorize, finalize, and hook calls. CleanupRegistry runs
-// on Drop to best-effort rollback (challenge files, DNS records, server
-// task) but the issued certificate (if finalize completed) is lost.
+// contract from authorize, finalize, and hook calls. Rollback of challenge
+// files, DNS records and the server task runs on the explicit error branches,
+// on SIGINT via the cleanup registry, and on the top-level error path in
+// `main`; there is no `Drop` impl. An issued certificate (if finalize
+// completed) is still lost.
 pub(crate) async fn cmd_run(
     cli: &Cli,
     args: &RunArgs,
@@ -198,4 +218,42 @@ pub(crate) async fn cmd_run(
     finalize::finalize(&mut ctx, &mut client, order, &order_url).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod poll_delay_tests {
+    use super::next_poll_delay;
+    use crate::defaults::polling::{ACME_RESOURCE_POLL, ACME_RESOURCE_POLL_MAX};
+    use std::time::Duration;
+
+    #[test]
+    fn w2_absent_retry_after_falls_back_to_default_cadence() {
+        let remaining = Duration::from_secs(300);
+        assert_eq!(next_poll_delay(None, remaining), ACME_RESOURCE_POLL);
+    }
+
+    #[test]
+    fn w2_server_retry_after_is_honored_when_within_bounds() {
+        let remaining = Duration::from_secs(300);
+        let got = next_poll_delay(Some(Duration::from_secs(30)), remaining);
+        assert_eq!(got, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn w2_absurd_retry_after_is_capped() {
+        let remaining = Duration::from_hours(24);
+        let got = next_poll_delay(Some(Duration::from_secs(99_999)), remaining);
+        assert_eq!(got, ACME_RESOURCE_POLL_MAX);
+    }
+
+    #[test]
+    fn w2_sleep_never_overshoots_the_remaining_challenge_timeout() {
+        let remaining = Duration::from_secs(7);
+        let got = next_poll_delay(Some(Duration::from_secs(30)), remaining);
+        assert_eq!(
+            got, remaining,
+            "honoring Retry-After must not exceed --challenge-timeout"
+        );
+        assert!(got < ACME_RESOURCE_POLL_MAX);
+    }
 }

@@ -99,7 +99,14 @@ async fn main() {
         }
     });
 
-    if let Err(err) = run(
+    // Captured before `run` consumes `cli`: only these two modes promise the
+    // caller a payload on stdout. Text-mode output is deliberately excluded —
+    // `acme-client-rs … | head` is the ergonomic case the broken-pipe policy
+    // exists to serve.
+    let stdout_carries_result = cli.output_format == cli::OutputFormat::Json
+        || matches!(&cli.command, Commands::Run(args) if args.print_cert);
+
+    match run(
         cli,
         loaded_config.as_ref(),
         &matches,
@@ -108,8 +115,21 @@ async fn main() {
     )
     .await
     {
-        error!("{err:#}");
-        std::process::exit(1);
+        Err(err) => {
+            error!("{err:#}");
+            // The SIGINT watcher is not the only path that must roll back
+            // in-flight challenge state: an ordinary error return reaches
+            // here with TXT records published and token files on disk.
+            cleanup_registry.run_all_sync();
+            std::process::exit(1);
+        }
+        // Succeeded, but the caller never received a result it explicitly
+        // asked for. Reporting 0 here would be silent data loss in a pipeline.
+        Ok(()) if output::stdout_dead() && stdout_carries_result => {
+            error!("stdout closed before the result could be written");
+            std::process::exit(1);
+        }
+        Ok(()) => {}
     }
 }
 

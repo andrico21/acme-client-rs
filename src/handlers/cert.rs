@@ -10,13 +10,22 @@ use crate::csr::pem_to_der;
 use crate::{build_client, outln};
 
 // NOT cancel-safe: revokes certificate on CA — irreversible side effect.
-pub(crate) async fn cmd_revoke(cli: &Cli, cert_path: &Path, reason: Option<u8>) -> Result<()> {
+pub(crate) async fn cmd_revoke(
+    cli: &Cli,
+    cert_path: &Path,
+    reason: Option<u8>,
+    agree_tos: bool,
+) -> Result<()> {
     let mut client = build_client(cli).await?;
 
     // Revocation with an account key requires KID signing (RFC 8555 §7.6).
     // If no --account-url was provided, look up the existing account first.
     if client.account_url().is_none() {
-        client.create_account(None, true, None).await?;
+        if agree_tos {
+            client.create_account(None, true, None).await?;
+        } else {
+            client.lookup_account().await?;
+        }
     }
 
     let pem_data = tokio::fs::read_to_string(cert_path)

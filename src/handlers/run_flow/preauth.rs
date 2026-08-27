@@ -14,12 +14,14 @@ use crate::types::{AuthorizationStatus, ChallengeType, Identifier};
 
 use super::super::{
     dns_txt_check, is_challenge_failed, run_dns_hook_cleanup_logged, run_dns_hook_create, run_hook,
+    wait_for_enter,
 };
 use super::RunContext;
 
 #[derive(Default)]
 struct ChallengeCleanup {
     dns_cleanup_handle: Option<crate::cleanup::CleanupHandle>,
+    http_cleanup_handle: Option<crate::cleanup::CleanupHandle>,
     dns_cleanup: Option<DnsChallengeCleanup>,
     serve_task: Option<tokio::task::JoinHandle<Result<(), anyhow::Error>>>,
     challenge_file: Option<std::path::PathBuf>,
@@ -148,11 +150,9 @@ async fn provision_preauth_http01(
         // `cleanup_challenge_file` tolerates a missing path.
         let auth = crate::challenge::http01::response_body(token, client.account_key())?;
         let file = crate::challenge::http01::challenge_file_path(dir, token);
-        let _ = ctx
-            .cleanup_registry
-            .register(crate::cleanup::CleanupAction::HttpChallengeFile(
-                file.clone(),
-            ));
+        cleanup.http_cleanup_handle = Some(ctx.cleanup_registry.register(
+            crate::cleanup::CleanupAction::HttpChallengeFile(file.clone()),
+        ));
         let write_path = file.clone();
         tokio::task::spawn_blocking(move || {
             crate::challenge::http01::write_challenge_file_blocking(&write_path, &auth)
@@ -176,11 +176,9 @@ async fn provision_preauth_http01(
         let task = tokio::spawn(crate::challenge::http01::run_accept_loop(
             listener, auth, path,
         ));
-        let _ = ctx
-            .cleanup_registry
-            .register(crate::cleanup::CleanupAction::ServerTask(
-                task.abort_handle(),
-            ));
+        cleanup.http_cleanup_handle = Some(ctx.cleanup_registry.register(
+            crate::cleanup::CleanupAction::ServerTask(task.abort_handle()),
+        ));
         cleanup.serve_task = Some(task);
     }
     client.respond_to_challenge(challenge_url).await?;
@@ -205,7 +203,7 @@ async fn provision_preauth_dns01(
     })?;
     let txt_name = crate::challenge::dns01::record_name(dns)?;
     let txt_value = crate::challenge::dns01::txt_record_value(token, client.account_key())?;
-    let dns_cleanup_handle = if let Some(hook) = ctx.dns_hook {
+    let mut dns_cleanup_handle = if let Some(hook) = ctx.dns_hook {
         run_dns_hook_create(hook, dns, &txt_name, &txt_value, ctx.cli.unsafe_hooks).await?;
         Some(
             ctx.cleanup_registry
@@ -222,7 +220,7 @@ async fn provision_preauth_dns01(
         }
         None
     };
-    wait_for_dns_txt_propagation(ctx, dns, &txt_name, &txt_value).await?;
+    wait_for_dns_txt_propagation(ctx, dns, &txt_name, &txt_value, &mut dns_cleanup_handle).await?;
     if let Some(script) = ctx.on_challenge_ready {
         let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
         run_hook(
@@ -247,6 +245,7 @@ async fn provision_preauth_dns01(
     client.respond_to_challenge(challenge_url).await?;
     Ok(ChallengeCleanup {
         dns_cleanup_handle,
+        http_cleanup_handle: None,
         dns_cleanup,
         serve_task: None,
         challenge_file: None,
@@ -288,7 +287,7 @@ async fn provision_preauth_dns_persist01(
         ctx.persist_policy,
         ctx.persist_until,
     )?;
-    let dns_cleanup_handle = if let Some(hook) = ctx.dns_hook {
+    let mut dns_cleanup_handle = if let Some(hook) = ctx.dns_hook {
         run_dns_hook_create(hook, dns, &txt_name, &txt_value, ctx.cli.unsafe_hooks).await?;
         Some(
             ctx.cleanup_registry
@@ -311,7 +310,7 @@ async fn provision_preauth_dns_persist01(
         }
         None
     };
-    wait_for_dns_txt_propagation(ctx, dns, &txt_name, &txt_value).await?;
+    wait_for_dns_txt_propagation(ctx, dns, &txt_name, &txt_value, &mut dns_cleanup_handle).await?;
     if let Some(script) = ctx.on_challenge_ready {
         run_hook(
             script,
@@ -333,6 +332,7 @@ async fn provision_preauth_dns_persist01(
     client.respond_to_challenge(challenge_url).await?;
     Ok(ChallengeCleanup {
         dns_cleanup_handle,
+        http_cleanup_handle: None,
         dns_cleanup,
         serve_task: None,
         challenge_file: None,
@@ -355,8 +355,7 @@ async fn provision_preauth_tlsalpn01(
             client.account_key(),
         )?;
         outln!("Press Enter once the TLS server is configured...");
-        let _ =
-            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        wait_for_enter().await?;
     }
     if let Some(script) = ctx.on_challenge_ready {
         let key_auth = crate::challenge::key_authorization(token, client.account_key())?;
@@ -377,9 +376,10 @@ async fn provision_preauth_tlsalpn01(
 }
 
 // NOT cancel-safe: polls authorization with nonce-consuming POST-as-GET calls.
-// On validation failure or timeout, this performs only the current HTTP cleanup
-// behavior; DNS hook cleanup is intentionally left to the success path or the
-// existing DNS propagation-timeout branch.
+// Every failure path — timeout, challenge failure, terminal authz status —
+// runs the full `cleanup_preauth_challenge` rollback before bailing, so DNS
+// records and HTTP artifacts are both released and their registry handles
+// completed. Cancellation is the one path that skips this.
 async fn poll_preauth_until_valid(
     ctx: &RunContext<'_>,
     client: &mut AcmeClient,
@@ -390,22 +390,22 @@ async fn poll_preauth_until_valid(
     // Poll authorization until valid (max ctx.challenge_timeout)
     let poll_deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(ctx.challenge_timeout);
+    let mut retry_after: Option<std::time::Duration> = None;
     loop {
-        if std::time::Instant::now() > poll_deadline {
-            if let Some(handle) = cleanup.serve_task.take() {
-                handle.abort();
-            }
-            if let Some(ref f) = cleanup.challenge_file {
-                crate::challenge::http01::cleanup_challenge_file(f);
-            }
+        let remaining = poll_deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|r| !r.is_zero());
+        let Some(remaining) = remaining else {
+            cleanup_preauth_challenge(ctx, cleanup).await;
             anyhow::bail!(
                 "pre-authorization for {} did not complete within {}s",
                 domain_display,
                 ctx.challenge_timeout
             );
-        }
-        tokio::time::sleep(crate::defaults::polling::ACME_RESOURCE_POLL).await;
-        let a = client.get_authorization(authz_url).await?;
+        };
+        tokio::time::sleep(super::next_poll_delay(retry_after, remaining)).await;
+        let (a, next_retry_after) = client.get_authorization_with_retry_after(authz_url).await?;
+        retry_after = next_retry_after;
         if !ctx.json && !ctx.silent {
             outln!("  Authorization status: {}", a.status);
         }
@@ -415,12 +415,7 @@ async fn poll_preauth_until_valid(
             .find(|c| c.challenge_type == ctx.challenge_type)
         {
             if is_challenge_failed(ch) {
-                if let Some(handle) = cleanup.serve_task.take() {
-                    handle.abort();
-                }
-                if let Some(ref f) = cleanup.challenge_file {
-                    crate::challenge::http01::cleanup_challenge_file(f);
-                }
+                cleanup_preauth_challenge(ctx, cleanup).await;
                 let detail = ch
                     .error
                     .as_ref()
@@ -441,12 +436,7 @@ async fn poll_preauth_until_valid(
             | AuthorizationStatus::Deactivated
             | AuthorizationStatus::Expired
             | AuthorizationStatus::Revoked => {
-                if let Some(handle) = cleanup.serve_task.take() {
-                    handle.abort();
-                }
-                if let Some(ref f) = cleanup.challenge_file {
-                    crate::challenge::http01::cleanup_challenge_file(f);
-                }
+                cleanup_preauth_challenge(ctx, cleanup).await;
                 let detail = a
                     .challenges
                     .iter()
@@ -491,15 +481,19 @@ async fn cleanup_preauth_challenge(ctx: &RunContext<'_>, cleanup: &mut Challenge
     if let Some(ref f) = cleanup.challenge_file {
         crate::challenge::http01::cleanup_challenge_file(f);
     }
+    if let Some(handle) = cleanup.http_cleanup_handle.take() {
+        handle.complete();
+    }
 }
 
 // NOT cancel-safe: loops over DNS TXT lookups and may run the logged DNS cleanup
-// hook on timeout. The cleanup handle is intentionally not completed on error.
+// hook on timeout, completing the registry handle once the record is released.
 async fn wait_for_dns_txt_propagation(
     ctx: &RunContext<'_>,
     dns: &crate::types::DnsName,
     txt_name: &crate::types::DnsName,
     txt_value: &str,
+    dns_cleanup_handle: &mut Option<crate::cleanup::CleanupHandle>,
 ) -> Result<()> {
     if let Some(timeout_secs) = ctx.dns_wait {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
@@ -515,13 +509,15 @@ async fn wait_for_dns_txt_propagation(
             if let Some(hook) = ctx.dns_hook {
                 run_dns_hook_cleanup_logged(hook, dns, txt_name, txt_value, ctx.cli.unsafe_hooks)
                     .await;
+                if let Some(handle) = dns_cleanup_handle.take() {
+                    handle.complete();
+                }
             }
             anyhow::bail!("DNS TXT record for {txt_name} not found within {timeout_secs}s");
         }
     } else if ctx.dns_hook.is_none() && !ctx.silent {
         outln!("Press Enter once the record has propagated...");
-        let _ =
-            tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+        wait_for_enter().await?;
     }
     Ok(())
 }

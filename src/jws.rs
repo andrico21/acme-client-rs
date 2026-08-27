@@ -66,6 +66,26 @@ pub(crate) struct AccountKey {
     inner: KeyInner,
 }
 
+/// Compile-time proof that every stored key type still zeroizes its secret on
+/// drop. `AccountKey` deliberately does not wrap `KeyInner` in `Zeroizing` —
+/// that would require `KeyInner: Zeroize`, which these opaque key types cannot
+/// cheaply provide — so the guarantee is delegated to the crypto crates and
+/// pinned here, where losing it becomes a compile error rather than a silent
+/// downgrade. Ed25519's impl is feature-gated, hence the explicit `zeroize`
+/// entry in Cargo.toml.
+///
+/// ES512 is asserted through the inner `ecdsa::SigningKey`: `p521 0.13` wraps
+/// it in a newtype that does not itself implement `ZeroizeOnDrop`, so the
+/// wrapper zeroizes only transitively, via its field's drop glue.
+const _: fn() = || {
+    fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    assert_zeroize_on_drop::<P256SigningKey>();
+    assert_zeroize_on_drop::<P384SigningKey>();
+    assert_zeroize_on_drop::<ecdsa::SigningKey<p521::NistP521>>();
+    assert_zeroize_on_drop::<ed25519_dalek::SigningKey>();
+    assert_zeroize_on_drop::<rsa::pkcs1v15::SigningKey<Sha256>>();
+};
+
 // ── JWS serialization helpers ───────────────────────────────────────────────
 
 /// Account authentication for the JWS protected header (RFC 8555 §6.2).

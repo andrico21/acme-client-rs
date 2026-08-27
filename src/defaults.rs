@@ -19,11 +19,18 @@ pub(crate) mod global {
 }
 
 pub(crate) mod run {
+    use std::num::NonZeroUsize;
+
     pub(crate) const CHALLENGE_TYPE: &str = "http-01";
 
     pub(crate) const HTTP_PORT: u16 = 80;
 
-    pub(crate) const DNS_PROPAGATION_CONCURRENCY: usize = 5;
+    /// Max concurrent DNS propagation checks. `NonZeroUsize` because this
+    /// becomes a `Semaphore` permit count, and zero permits deadlock every
+    /// propagation task forever — after the TXT records are already published.
+    /// Built from `MIN` because `unwrap`/`expect` are denied project-wide.
+    pub(crate) const DNS_PROPAGATION_CONCURRENCY: NonZeroUsize =
+        NonZeroUsize::MIN.saturating_add(4);
 
     pub(crate) const CHALLENGE_TIMEOUT_SECS: u64 = 300;
 

@@ -404,11 +404,17 @@ pub(crate) fn validate_server_identifier(_id: &Identifier) -> Result<()> {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NewAccountRequest {
-    pub terms_of_service_agreed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terms_of_service_agreed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub contact: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_account_binding: Option<serde_json::Value>,
+    /// RFC 8555 §7.3.1: forbids the server from creating an account, turning
+    /// `newAccount` into a pure lookup that returns `accountDoesNotExist`
+    /// instead of registering. Omitted entirely for real registrations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub only_return_existing: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1293,6 +1299,62 @@ mod tests {
         assert_eq!(parsed.as_str(), "abc-DEF_123");
         assert!(serde_json::from_str::<ChallengeToken>("\"bad/token\"").is_err());
         assert!(serde_json::from_str::<ChallengeToken>("\"\"").is_err());
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod new_account_request_tests {
+    #![allow(clippy::expect_used)]
+
+    use super::NewAccountRequest;
+
+    #[test]
+    fn i6_registration_wire_format_is_unchanged() -> anyhow::Result<()> {
+        // Locks the `Option<bool>` migration: existing callers must serialize
+        // byte-identically to the pre-change `terms_of_service_agreed: bool`.
+        let req = NewAccountRequest {
+            terms_of_service_agreed: Some(true),
+            contact: None,
+            external_account_binding: None,
+            only_return_existing: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&req)?,
+            r#"{"termsOfServiceAgreed":true}"#
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn i6_lookup_omits_tos_and_sets_only_return_existing() -> anyhow::Result<()> {
+        let req = NewAccountRequest {
+            terms_of_service_agreed: None,
+            contact: None,
+            external_account_binding: None,
+            only_return_existing: Some(true),
+        };
+        let json = serde_json::to_string(&req)?;
+        assert_eq!(json, r#"{"onlyReturnExisting":true}"#);
+        assert!(
+            !json.contains("termsOfServiceAgreed"),
+            "a lookup must never assert ToS agreement: {json}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn i6_registration_with_contact_keeps_field_order() -> anyhow::Result<()> {
+        let req = NewAccountRequest {
+            terms_of_service_agreed: Some(true),
+            contact: Some(vec!["mailto:a@example.com".to_owned()]),
+            external_account_binding: None,
+            only_return_existing: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&req)?,
+            r#"{"termsOfServiceAgreed":true,"contact":["mailto:a@example.com"]}"#
+        );
         Ok(())
     }
 }

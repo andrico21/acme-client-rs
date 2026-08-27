@@ -12,6 +12,18 @@ are documented only in git history and GitHub releases.
 
 ### Changed
 
+- **BREAKING: `revoke-cert`, `pre-authorize`, `show-dns-persist-01` and
+  `key-rollover` no longer register an ACME account implicitly.** These
+  commands previously called `newAccount` to resolve the account URL, which
+  both created an account for an unregistered key and asserted
+  `termsOfServiceAgreed: true` on the operator's behalf. They now use an
+  `onlyReturnExisting` lookup (RFC 8555 §7.3.1) and fail with a directive
+  error if no account exists. Pass `--account-url` if you already know it, or
+  the new per-command `--agree-tos` flag to opt in to registration. `run` and
+  `account` are unaffected — registration is their intent.
+- `--dns-propagation-concurrency` is now a non-zero integer. `0` is rejected by
+  the CLI and by config-file parsing.
+
 - **Minimum supported Rust version is now 1.98** (`rust-version` in `Cargo.toml`).
   The crate adopts `str::strip_circumfix`, stabilised in 1.98.
 - The `rust-toolchain.toml` pin was removed; CI now builds on whatever `stable`
@@ -19,6 +31,39 @@ are documented only in git history and GitHub releases.
 
 ### Fixed
 
+- **`--dns-propagation-concurrency 0` deadlocked the client permanently.** The
+  value became a `Semaphore` permit count, so every propagation task waited
+  forever — after the DNS TXT records had already been published, and with no
+  timeout on that path. The type now makes zero unrepresentable.
+- **Challenge cleanup no longer depends on Ctrl-C.** The cleanup registry was
+  drained only by the SIGINT handler, so an ordinary error return exited
+  without rolling back published TXT records or on-disk challenge files. Four
+  comments claimed a `Drop`-based rollback that never existed; all are
+  corrected. Pre-authorization failure paths now route through the shared
+  cleanup helper, so a failed dns-01 pre-authorization removes its TXT record
+  on the spot instead of relying on the process-exit drain.
+- **A broken stdout pipe no longer reports success for a failed issuance.**
+  `… | head` triggered `exit(0)` mid-flow, skipping cleanup and returning 0
+  for an issuance that never completed. Writes are now suppressed after a
+  broken pipe and the flow runs to its real conclusion; `--output-format json`
+  and `--print-cert` exit non-zero if their payload was lost.
+- Authorization and challenge polling now honor the server's `Retry-After`
+  (RFC 8555 §7.5.1), bounded by both the 5-minute cap and the remaining
+  `--challenge-timeout` budget. `Retry-After` in HTTP-date form is now parsed;
+  a stale date falls back to the default cadence instead of busy-polling.
+- Cleanup handles are now completed after teardown on both the HTTP-01 and DNS
+  paths, so a later SIGINT or the process-exit drain cannot re-fire cleanup for
+  a resource that was already released.
+- An invalid `dns_check_mode` in a config file is now a hard error instead of a
+  warning that silently fell back to the default.
+- `list-profiles` error bodies are sanitized through `truncate_for_log`,
+  matching every other error path; ANSI escapes in a proxy error page can no
+  longer reach the terminal.
+- `AcmeClient::new` validates its own directory URL instead of relying on
+  callers, and the account key's zeroization guarantee is now pinned by a
+  compile-time assertion.
+- Corrected three `cancel-safe` annotations on `order`, `get-authz` and
+  `poll-order`, which called methods documented as NOT cancel-safe.
 - Unbalanced IPv6 brackets in an identifier (`[::1` or `::1]`) are now rejected
   instead of being silently reinterpreted as a DNS name.
 - Moved blocking filesystem work off the async runtime: the world-readable

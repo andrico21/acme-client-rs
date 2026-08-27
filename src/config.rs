@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -65,8 +66,9 @@ pub(crate) struct RunConfig {
     pub dns_hook: Option<PathBuf>,
     /// Wait up to N seconds for DNS TXT propagation.
     pub dns_wait: Option<u64>,
-    /// Max concurrent DNS propagation checks.
-    pub dns_propagation_concurrency: Option<usize>,
+    /// Max concurrent DNS propagation checks. Must be non-zero: zero permits
+    /// deadlock the propagation phase after TXT records are published.
+    pub dns_propagation_concurrency: Option<NonZeroUsize>,
     /// Max seconds to wait for challenge validation.
     pub challenge_timeout: Option<u64>,
     /// Save the certificate to this file.

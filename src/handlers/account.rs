@@ -148,6 +148,7 @@ pub(crate) async fn cmd_key_rollover(
     new_key_path: &Path,
     new_key_password: Option<secrecy::SecretString>,
     new_key_password_file: Option<&Path>,
+    agree_tos: bool,
 ) -> Result<()> {
     use secrecy::ExposeSecret;
     let pw = resolve_account_key_password(
@@ -162,7 +163,11 @@ pub(crate) async fn cmd_key_rollover(
 
     // key-change requires KID signing; look up account if URL not provided
     if client.account_url().is_none() {
-        client.create_account(None, true, None).await?;
+        if agree_tos {
+            client.create_account(None, true, None).await?;
+        } else {
+            client.lookup_account().await?;
+        }
     }
 
     client.key_change(&new_key).await?;

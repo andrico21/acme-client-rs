@@ -1075,7 +1075,7 @@ Global options can be placed before or after the subcommand.
 | `--challenge-dir <PATH>` | - | Write HTTP-01 challenge files here instead of starting a server |
 | `--dns-hook <SCRIPT>` | - | Path to a DNS-01 hook script (called with `ACME_ACTION=create\|cleanup`) |
 | `--dns-wait <SECONDS>` | - | Wait up to N seconds for DNS TXT propagation (polls every 5s) |
-| `--dns-propagation-concurrency <N>` | `5` | Max concurrent DNS propagation checks with `--dns-hook` across domains |
+| `--dns-propagation-concurrency <N>` | `5` | Max concurrent DNS propagation checks with `--dns-hook` across domains. Must be non-zero |
 | `--challenge-timeout <SECONDS>` | `300` | Max seconds to wait for challenge validation (polls every 2s) |
 | `--cert-output <PATH>` | `certificate.pem` | Save the certificate to this file |
 | `--key-output <PATH>` | `private.key` | Save the private key to this file |

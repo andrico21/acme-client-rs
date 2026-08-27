@@ -104,7 +104,7 @@ fn apply_global(
     }
     apply_global_identity(cli, matches, cfg, config_mode)?;
     apply_global_safety_and_timeouts(cli, matches, cfg, config_mode);
-    apply_global_dns(cli, matches, cfg, config_mode);
+    apply_global_dns(cli, matches, cfg, config_mode)?;
     Ok(())
 }
 
@@ -241,18 +241,17 @@ fn apply_global_dns(
     matches: &clap::ArgMatches,
     cfg: &config::GlobalConfig,
     config_mode: bool,
-) {
-    let cfg_dns_mode = cfg.dns_check_mode.as_ref().and_then(|s| {
-        <DnsCheckMode as clap::ValueEnum>::from_str(s, true).map_or_else(
-            |_| {
-                tracing::warn!(
-                    "config: dns_check_mode must be one of: authoritative, cached, system (got {s:?}); using CLI default"
-                );
-                None
-            },
-            Some,
-        )
-    });
+) -> Result<()> {
+    let cfg_dns_mode = match cfg.dns_check_mode.as_ref() {
+        Some(s) => Some(
+            <DnsCheckMode as clap::ValueEnum>::from_str(s, true).map_err(|_| {
+                anyhow::anyhow!(
+                    "config: dns_check_mode must be one of: authoritative, cached, system (got {s:?})"
+                )
+            })?,
+        ),
+        None => None,
+    };
     if let Some(m) = config_or_env_reset(
         matches.value_source("dns_check_mode"),
         cfg_dns_mode,
@@ -270,6 +269,7 @@ fn apply_global_dns(
     ) {
         cli.dns_check_dnssec = v;
     }
+    Ok(())
 }
 
 /// Parse a config-file `output_format` strictly: unknown values are a hard

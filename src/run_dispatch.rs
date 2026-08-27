@@ -59,6 +59,7 @@ pub(crate) async fn handle_simple_command(cli: &Cli, command: &Commands) -> Resu
             issuer_domain_name,
             persist_policy,
             persist_until,
+            agree_tos,
         } => {
             handle_show_dns_persist01(
                 cli,
@@ -66,6 +67,7 @@ pub(crate) async fn handle_simple_command(cli: &Cli, command: &Commands) -> Resu
                 issuer_domain_name,
                 persist_policy.as_deref(),
                 *persist_until,
+                *agree_tos,
             )
             .await
         }
@@ -94,29 +96,64 @@ pub(crate) async fn handle_simple_command(cli: &Cli, command: &Commands) -> Resu
         }
         Commands::PollOrder { url } => cmd_poll_order(cli, url).await,
         Commands::DownloadCert { url, output } => cmd_download_cert(cli, url, output).await,
+        command @ (Commands::DeactivateAccount
+        | Commands::KeyRollover { .. }
+        | Commands::RevokeCert { .. }
+        | Commands::RenewalInfo { .. }
+        | Commands::ListProfiles
+        | Commands::PreAuthorize { .. }
+        | Commands::ShowConfig { .. }
+        | Commands::Run(_)) => handle_account_lifecycle_command(cli, command).await,
+    }
+}
+
+// NOT cancel-safe: routes to account-lifecycle and certificate-maintenance
+// commands; inherits each one's contract. Split from `handle_simple_command`
+// only to keep both under the 100-line ceiling.
+async fn handle_account_lifecycle_command(cli: &Cli, command: &Commands) -> Result<()> {
+    match command {
         Commands::DeactivateAccount => cmd_deactivate(cli).await,
         Commands::KeyRollover {
             new_key,
             new_key_password,
             new_key_password_file,
+            agree_tos,
         } => {
             handle_key_rollover(
                 cli,
                 new_key.as_path(),
                 new_key_password.as_ref(),
                 new_key_password_file.as_deref(),
+                *agree_tos,
             )
             .await
         }
-        Commands::RevokeCert { cert_path, reason } => cmd_revoke(cli, cert_path, *reason).await,
+        Commands::RevokeCert {
+            cert_path,
+            reason,
+            agree_tos,
+        } => cmd_revoke(cli, cert_path, *reason, *agree_tos).await,
         Commands::RenewalInfo { cert_path } => cmd_renewal_info(cli, cert_path).await,
         Commands::ListProfiles => cmd_list_profiles(cli).await,
         Commands::PreAuthorize {
             domain,
             challenge_type,
-        } => cmd_pre_authorize(cli, domain, challenge_type).await,
+            agree_tos,
+        } => cmd_pre_authorize(cli, domain, challenge_type, *agree_tos).await,
         Commands::ShowConfig { .. } => unexpected_context_command("show-config"),
         Commands::Run(_) => unexpected_context_command("run"),
+        Commands::GenerateConfig
+        | Commands::GenerateKey { .. }
+        | Commands::Account { .. }
+        | Commands::Order { .. }
+        | Commands::GetAuthz { .. }
+        | Commands::RespondChallenge { .. }
+        | Commands::ServeHttp01 { .. }
+        | Commands::ShowDns01 { .. }
+        | Commands::ShowDnsPersist01 { .. }
+        | Commands::Finalize { .. }
+        | Commands::PollOrder { .. }
+        | Commands::DownloadCert { .. } => unexpected_context_command("account-lifecycle dispatch"),
     }
 }
 
@@ -177,6 +214,7 @@ pub(crate) async fn handle_show_dns_persist01(
     issuer_domain_name: &str,
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
+    agree_tos: bool,
 ) -> Result<()> {
     cmd_show_dns_persist01(
         cli,
@@ -184,6 +222,7 @@ pub(crate) async fn handle_show_dns_persist01(
         issuer_domain_name,
         persist_policy,
         persist_until,
+        agree_tos,
     )
     .await
 }
@@ -227,12 +266,14 @@ pub(crate) async fn handle_key_rollover(
     new_key: &Path,
     new_key_password: Option<&SecretString>,
     new_key_password_file: Option<&Path>,
+    agree_tos: bool,
 ) -> Result<()> {
     cmd_key_rollover(
         cli,
         new_key,
         new_key_password.cloned(),
         new_key_password_file,
+        agree_tos,
     )
     .await
 }

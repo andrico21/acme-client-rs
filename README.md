@@ -1304,16 +1304,16 @@ Global options can be placed before or after the subcommand.
 | `respond-challenge <url>` | Tell the server a challenge is ready |
 | `serve-http-01` | Serve an HTTP-01 challenge response (`--token`, `--port`; `--challenge-dir` writes the response file instead of serving) |
 | `show-dns-01` | Show DNS-01 TXT record setup instructions |
-| `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions |
+| `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions. `--agree-tos` (default `false`) permits registering an account if this key has none |
 | `finalize` | Finalize an order with a new CSR (`--key-output` required; `--cert-key-algorithm`, `--key-password`/`--key-password-file`, `--force`) |
 | `poll-order <url>` | Poll an order's current status |
 | `download-cert <url>` | Download the issued certificate (`--output`, default `certificate.pem`) |
 | `deactivate-account` | Deactivate the current account |
-| `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5). `--new-key` required; `--new-key-password`/`--new-key-password-file` encrypt the new key |
-| `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1) |
+| `key-rollover` | Rotate the account key (RFC 8555 Section 7.3.5). `--new-key` required; `--new-key-password`/`--new-key-password-file` encrypt the new key; `--agree-tos` (default `false`) permits registering an account if this key has none |
+| `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1). `--agree-tos` (default `false`) permits registering an account if this key has none |
 | `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9773) |
 | `list-profiles` | List certificate profiles advertised by the ACME server (draft-ietf-acme-profiles-01) |
-| `revoke-cert <path>` | Revoke a certificate |
+| `revoke-cert <path>` | Revoke a certificate. `--agree-tos` (default `false`) permits registering an account if this key has none |
 | `run <domains...>` | Run the full ACME flow end-to-end |
 
 ### `run` Options
@@ -1326,7 +1326,7 @@ Global options can be placed before or after the subcommand.
 | `--challenge-dir <PATH>` | - | Write HTTP-01 challenge files here instead of starting a server |
 | `--dns-hook <SCRIPT>` | - | Path to a DNS-01 hook script (called with `ACME_ACTION=create\|cleanup`) |
 | `--dns-wait <SECONDS>` | - | Wait up to N seconds for DNS TXT propagation (polls every 5s) |
-| `--dns-propagation-concurrency <N>` | `5` | Max concurrent DNS propagation checks when using `--dns-hook` with multiple domains |
+| `--dns-propagation-concurrency <N>` | `5` | Max concurrent DNS propagation checks when using `--dns-hook` with multiple domains. Must be non-zero |
 | `--challenge-timeout <SECONDS>` | `300` | Max seconds to wait for challenge validation after responding (polls every 2s) |
 | `--cert-output <PATH>` | `certificate.pem` | Save the certificate to this file |
 | `--key-output <PATH>` | `private.key` | Save the private key to this file |

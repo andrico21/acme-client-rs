@@ -54,12 +54,14 @@ pub(crate) async fn cmd_serve_http01(
         // Keep serving until shutdown regardless of --silent: the challenge
         // file must outlive the wait or the CA cannot validate. Gate only the
         // interactive prompt on output suppression.
-        if crate::output::is_silent() {
+        // A dead stdout is handled like --silent rather than as an error: the
+        // challenge file must keep existing for the CA to validate, so killing
+        // the server would be worse than waiting. Ctrl-C remains the exit.
+        if crate::output::is_silent() || crate::output::stdout_dead() {
             let _ = tokio::signal::ctrl_c().await;
         } else {
             outln!("Press Enter after validation to clean up...");
-            let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new()))
-                .await;
+            super::wait_for_enter().await?;
         }
         let file_for_cleanup = file.clone();
         let _ = tokio::task::spawn_blocking(move || {
@@ -125,6 +127,7 @@ pub(crate) async fn cmd_show_dns_persist01(
     issuer_domain_name: &str,
     persist_policy: Option<&str>,
     persist_until: Option<u64>,
+    agree_tos: bool,
 ) -> Result<()> {
     use crate::cli::OutputFormat;
 
@@ -140,7 +143,11 @@ pub(crate) async fn cmd_show_dns_persist01(
 
     // Need account URL for the accounturi parameter
     if client.account_url().is_none() {
-        client.create_account(None, true, None).await?;
+        if agree_tos {
+            client.create_account(None, true, None).await?;
+        } else {
+            client.lookup_account().await?;
+        }
     }
     let account_uri = client
         .account_url()
@@ -186,7 +193,12 @@ pub(crate) async fn cmd_show_dns_persist01(
 }
 
 // NOT cancel-safe: creates newAuthz on CA. Drop after POST cannot undo.
-pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &str) -> Result<()> {
+pub(crate) async fn cmd_pre_authorize(
+    cli: &Cli,
+    domain: &str,
+    challenge_type: &str,
+    agree_tos: bool,
+) -> Result<()> {
     let challenge_type = crate::types::ChallengeType::parse_strict(challenge_type)?;
     check_wildcard_compatible(&[domain], &challenge_type)?;
     let identifier = Identifier::from_str_auto(domain)?;
@@ -195,7 +207,11 @@ pub(crate) async fn cmd_pre_authorize(cli: &Cli, domain: &str, challenge_type: &
 
     // Pre-authorization requires KID signing; look up account if URL not provided
     if client.account_url().is_none() {
-        client.create_account(None, true, None).await?;
+        if agree_tos {
+            client.create_account(None, true, None).await?;
+        } else {
+            client.lookup_account().await?;
+        }
     }
 
     let (authz, authz_url) = client.new_authorization(identifier).await?;

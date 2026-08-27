@@ -10,8 +10,9 @@ use crate::csr::{encrypt_private_key, generate_csr};
 use crate::types::Identifier;
 use crate::{build_client, outln};
 
-// cancel-safe: client request only; CA-side order created on POST is
-// recoverable via account URL but no local state is mutated.
+// NOT cancel-safe: calls `new_order`, which creates a rate-limit-consuming
+// order on the CA. Cancellation cannot undo it; the order is only recoverable
+// by listing the account's orders.
 pub(crate) async fn cmd_order(
     cli: &Cli,
     domains: Vec<String>,
@@ -75,9 +76,11 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
         .await
         .context("failed to fetch ACME directory")?;
     if !resp.status().is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        let truncated: String = body.chars().take(512).collect();
-        anyhow::bail!("ACME directory request failed: {truncated}");
+        let body = resp.bytes().await.unwrap_or_default();
+        anyhow::bail!(
+            "ACME directory request failed: {}",
+            crate::client::truncate_for_log(&body)
+        );
     }
     let dir: crate::types::Directory = resp.json().await.context("failed to parse directory")?;
     let profiles = dir.meta.as_ref().and_then(|m| m.profiles.as_ref());
@@ -101,7 +104,8 @@ pub(crate) async fn cmd_list_profiles(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-// cancel-safe: single signed POST-as-GET to authz URL.
+// NOT cancel-safe: signed POST-as-GET consumes a nonce; cancellation mid-flight
+// leaks it. Authorization state itself is read-only, so retry is safe.
 pub(crate) async fn cmd_get_authz(cli: &Cli, url: &str) -> Result<()> {
     let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
         insecure: cli.insecure,
@@ -280,7 +284,8 @@ pub(crate) async fn cmd_finalize(
     Ok(())
 }
 
-// cancel-safe: single POST-as-GET; pure read of order state.
+// NOT cancel-safe: signed POST-as-GET consumes a nonce; cancellation mid-flight
+// leaks it. Order state itself is read-only, so retry is safe.
 pub(crate) async fn cmd_poll_order(cli: &Cli, url: &str) -> Result<()> {
     let (tls, net) = crate::client::policies_from_cli_flags(crate::client::NetFlags {
         insecure: cli.insecure,

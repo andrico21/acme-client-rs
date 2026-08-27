@@ -149,8 +149,10 @@ fn run_one(action: &CleanupAction) {
 
 /// Spawn `cmd` and wait at most `timeout` for it to exit. If the deadline
 /// passes, kill the child and reap it; if spawn or wait fails, log and
-/// continue. Synchronous by design: this runs from the SIGINT cleanup path,
-/// which executes outside the tokio runtime after a Ctrl-C.
+/// continue. Synchronous by design: it runs from the registry drain, which
+/// happens either outside the runtime after a Ctrl-C or on a runtime thread
+/// from the top-level error path. In the latter case it blocks that thread
+/// for the duration of the hook, which is acceptable at process exit.
 fn run_hook_bounded(cmd: &mut std::process::Command, timeout: std::time::Duration) {
     let mut child = match cmd.spawn() {
         Ok(c) => c,

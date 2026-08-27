@@ -5,6 +5,7 @@
 //! access happens from main.rs; everything declared here is therefore
 //! `pub(crate)` (or contains `pub(crate)` fields) rather than fully `pub`.
 
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -355,6 +356,11 @@ Examples:
         /// Unix timestamp after which the record should not be used for new validations
         #[arg(long)]
         persist_until: Option<u64>,
+        /// Register a new account (and accept the CA's terms of service) if
+        /// this key has none. Off by default: this command's intent is
+        /// lookup, so account creation must be asked for explicitly.
+        #[arg(long)]
+        agree_tos: bool,
     },
 
     /// Finalize an order with a new CSR
@@ -465,6 +471,11 @@ Examples:
             conflicts_with = "new_key_password"
         )]
         new_key_password_file: Option<PathBuf>,
+        /// Register a new account (and accept the CA's terms of service) if
+        /// this key has none. Off by default: this command's intent is
+        /// lookup, so account creation must be asked for explicitly.
+        #[arg(long)]
+        agree_tos: bool,
     },
 
     /// Pre-authorize an identifier before creating an order (RFC 8555 Section 7.4.1)
@@ -487,6 +498,11 @@ Note: Not all ACME servers support pre-authorization.
         /// Challenge type to use (http-01 | dns-01 | tls-alpn-01 | dns-persist-01)
         #[arg(long, default_value = crate::defaults::run::CHALLENGE_TYPE)]
         challenge_type: String,
+        /// Register a new account (and accept the CA's terms of service) if
+        /// this key has none. Off by default: this command's intent is
+        /// lookup, so account creation must be asked for explicitly.
+        #[arg(long)]
+        agree_tos: bool,
     },
 
     /// Revoke a certificate
@@ -508,6 +524,11 @@ Examples:
         /// Revocation reason code (RFC 5280 §5.3.1)
         #[arg(long)]
         reason: Option<u8>,
+        /// Register a new account (and accept the CA's terms of service) if
+        /// this key has none. Off by default: this command's intent is
+        /// lookup, so account creation must be asked for explicitly.
+        #[arg(long)]
+        agree_tos: bool,
     },
 
     /// Query ACME Renewal Information for a certificate (RFC 9773)
@@ -610,9 +631,9 @@ pub(crate) struct RunArgs {
     /// Wait up to N seconds for DNS TXT propagation (polls every 5s)
     #[arg(long)]
     pub(crate) dns_wait: Option<u64>,
-    /// Max concurrent DNS propagation checks (default: 5)
+    /// Max concurrent DNS propagation checks (default: 5, must be non-zero)
     #[arg(long, default_value_t = crate::defaults::run::DNS_PROPAGATION_CONCURRENCY)]
-    pub(crate) dns_propagation_concurrency: usize,
+    pub(crate) dns_propagation_concurrency: NonZeroUsize,
     /// Max seconds to wait for challenge validation (default: 300)
     #[arg(long, default_value_t = crate::defaults::run::CHALLENGE_TIMEOUT_SECS)]
     pub(crate) challenge_timeout: u64,

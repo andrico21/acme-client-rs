@@ -469,7 +469,7 @@ fn run_push_challenge_settings(push: &mut RunPush<'_>, r: &crate::config::RunCon
         // Legacy: serializes the raw Option (so None → null), even though
         // the text emitter substitutes the default value when None.
         r.dns_propagation_concurrency
-            .map_or(JsonValue::Null, |v| JsonValue::Number(v.into())),
+            .map_or(JsonValue::Null, |v| JsonValue::Number(v.get().into())),
         dns_concurrency.to_string(),
         r.dns_propagation_concurrency.is_some(),
     );

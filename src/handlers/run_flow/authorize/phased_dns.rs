@@ -20,9 +20,9 @@ use super::super::RunContext;
 use super::DnsPending;
 
 // NOT cancel-safe: creates DNS records via external hook in Phase 1 and
-// signals CAs in Phase 3. Drop mid-pipeline leaves unfinished TXT records
-// (cleanup registered in CleanupRegistry runs on Drop, but rollback is
-// best-effort and may itself be cancelled). Caller must run to completion.
+// signals CAs in Phase 3. Drop mid-pipeline leaves published TXT records
+// behind: the registry is drained on SIGINT or the top-level error path, not
+// on Drop, and that rollback is best-effort. Caller must run to completion.
 // The phase helpers below are immediately awaited in sequence, never spawned
 // or raced, so extracting them adds no cancellation point the inline awaits
 // did not already have.
@@ -40,9 +40,9 @@ pub(super) async fn run_phased_dns(
         return Ok(());
     }
 
-    wait_for_propagation(ctx, &pending, hook).await?;
+    wait_for_propagation(ctx, &mut pending, hook).await?;
     run_hooks_and_respond(ctx, client, &pending).await?;
-    poll_authorizations_until_valid(ctx, client, &pending, hook).await?;
+    poll_authorizations_until_valid(ctx, client, &mut pending, hook).await?;
     cleanup_records(ctx, &mut pending, hook).await;
     Ok(())
 }
@@ -68,7 +68,7 @@ async fn provision_records(
     let mut pending: Vec<DnsPending> = Vec::new();
     for authz_url in &order.authorizations {
         if let Some(entry) =
-            provision_record_for_authz(ctx, client, authz_url, hook, &pending).await?
+            provision_record_for_authz(ctx, client, authz_url, hook, &mut pending).await?
         {
             pending.push(entry);
         }
@@ -83,7 +83,7 @@ async fn provision_record_for_authz(
     client: &mut AcmeClient,
     authz_url: &url::Url,
     hook: &std::path::Path,
-    pending: &[DnsPending],
+    pending: &mut [DnsPending],
 ) -> Result<Option<DnsPending>> {
     let authz = client.get_authorization(authz_url).await?;
     if !ctx.json && !ctx.silent {
@@ -216,11 +216,30 @@ fn dns_record_material(
 // behind and cleanup handles incomplete.
 async fn cleanup_pending_silent(
     hook: &std::path::Path,
-    pending: &[DnsPending],
+    pending: &mut [DnsPending],
     unsafe_hooks: bool,
 ) {
     for q in pending {
         run_dns_hook_cleanup_silent(hook, &q.domain, &q.txt_name, &q.txt_value, unsafe_hooks).await;
+        if let Some(handle) = q.cleanup_handle.take() {
+            handle.complete();
+        }
+    }
+}
+
+// NOT cancel-safe: same contract as `cleanup_pending_silent`, but surfaces
+// hook failures to the operator. Used where the run is about to abort for a
+// reason the operator needs to see.
+async fn cleanup_pending_logged(
+    hook: &std::path::Path,
+    pending: &mut [DnsPending],
+    unsafe_hooks: bool,
+) {
+    for q in pending {
+        run_dns_hook_cleanup_logged(hook, &q.domain, &q.txt_name, &q.txt_value, unsafe_hooks).await;
+        if let Some(handle) = q.cleanup_handle.take() {
+            handle.complete();
+        }
     }
 }
 
@@ -228,7 +247,7 @@ async fn cleanup_pending_silent(
 // rollback; DNS records remain registered only for best-effort registry cleanup.
 async fn wait_for_propagation(
     ctx: &RunContext<'_>,
-    pending: &[DnsPending],
+    pending: &mut [DnsPending],
     hook: &std::path::Path,
 ) -> Result<()> {
     let domain_count = pending.len();
@@ -241,11 +260,12 @@ async fn wait_for_propagation(
             info!("Waiting up to {timeout_secs}s for DNS TXT propagation...");
         }
 
-        let semaphore =
-            std::sync::Arc::new(tokio::sync::Semaphore::new(ctx.dns_propagation_concurrency));
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(
+            ctx.dns_propagation_concurrency.get(),
+        ));
         let mut set: tokio::task::JoinSet<Result<(crate::types::DnsName, bool)>> =
             tokio::task::JoinSet::new();
-        for p in pending {
+        for p in pending.iter() {
             let name = p.txt_name.clone();
             let value = p.txt_value.clone();
             let domain = p.domain.clone();
@@ -286,17 +306,7 @@ async fn wait_for_propagation(
         }
 
         if !failed.is_empty() {
-            // Clean up ALL created records before bailing
-            for p in pending {
-                run_dns_hook_cleanup_logged(
-                    hook,
-                    &p.domain,
-                    &p.txt_name,
-                    &p.txt_value,
-                    ctx.cli.unsafe_hooks,
-                )
-                .await;
-            }
+            cleanup_pending_logged(hook, pending, ctx.cli.unsafe_hooks).await;
             anyhow::bail!(
                 "DNS TXT records not found within {timeout_secs}s for: {}",
                 failed
@@ -360,54 +370,58 @@ async fn run_hooks_and_respond(
     Ok(())
 }
 
-// NOT cancel-safe: cancellation skips immediate failure cleanup and final
-// DNS cleanup; registry cleanup remains best-effort only.
+// NOT cancel-safe: owns the failure-cleanup decision for the whole pending
+// set. Cancellation here skips the rollback of every published TXT record;
+// only the SIGINT registry remains.
 async fn poll_authorizations_until_valid(
     ctx: &RunContext<'_>,
     client: &mut AcmeClient,
-    pending: &[DnsPending],
+    pending: &mut [DnsPending],
     hook: &std::path::Path,
 ) -> Result<()> {
-    for p in pending {
-        poll_one_authorization_until_valid(ctx, client, pending, p, hook).await?;
+    for idx in 0..pending.len() {
+        let Some((authz_url, domain)) = pending
+            .get(idx)
+            .map(|p| (p.authz_url.clone(), p.domain.clone()))
+        else {
+            continue;
+        };
+        if let Err(e) = poll_one_authorization_until_valid(ctx, client, &authz_url, &domain).await {
+            cleanup_pending_silent(hook, pending, ctx.cli.unsafe_hooks).await;
+            return Err(e);
+        }
     }
     Ok(())
 }
 
-// NOT cancel-safe: cancellation during polling skips this failure path's
-// immediate cleanup of all pending DNS records.
+// cancel-safe: pure polling of one authorization. Every failure path is a
+// plain `bail!` with no external side effect; rollback of published TXT
+// records is owned by the caller, which holds the whole pending set.
 async fn poll_one_authorization_until_valid(
     ctx: &RunContext<'_>,
     client: &mut AcmeClient,
-    pending: &[DnsPending],
-    p: &DnsPending,
-    hook: &std::path::Path,
+    authz_url: &url::Url,
+    domain: &crate::types::DnsName,
 ) -> Result<()> {
     let poll_deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(ctx.challenge_timeout);
+    let mut retry_after: Option<std::time::Duration> = None;
     loop {
-        if std::time::Instant::now() > poll_deadline {
-            // Clean up remaining records
-            for q in pending {
-                run_dns_hook_cleanup_silent(
-                    hook,
-                    &q.domain,
-                    &q.txt_name,
-                    &q.txt_value,
-                    ctx.cli.unsafe_hooks,
-                )
-                .await;
-            }
+        let remaining = poll_deadline
+            .checked_duration_since(std::time::Instant::now())
+            .filter(|r| !r.is_zero());
+        let Some(remaining) = remaining else {
             anyhow::bail!(
                 "authorization for {} did not complete within {}s",
-                p.domain,
+                domain,
                 ctx.challenge_timeout
             );
-        }
-        tokio::time::sleep(crate::defaults::polling::ACME_RESOURCE_POLL).await;
-        let a = client.get_authorization(&p.authz_url).await?;
+        };
+        tokio::time::sleep(super::super::next_poll_delay(retry_after, remaining)).await;
+        let (a, next_retry_after) = client.get_authorization_with_retry_after(authz_url).await?;
+        retry_after = next_retry_after;
         if !ctx.json && !ctx.silent {
-            outln!("  Authorization status for {}: {}", p.domain, a.status);
+            outln!("  Authorization status for {}: {}", domain, a.status);
         }
 
         if let Some(ch) = a
@@ -416,22 +430,12 @@ async fn poll_one_authorization_until_valid(
             .find(|c| c.challenge_type == ctx.challenge_type)
         {
             if is_challenge_failed(ch) {
-                for q in pending {
-                    run_dns_hook_cleanup_silent(
-                        hook,
-                        &q.domain,
-                        &q.txt_name,
-                        &q.txt_value,
-                        ctx.cli.unsafe_hooks,
-                    )
-                    .await;
-                }
                 let detail = ch
                     .error
                     .as_ref()
                     .map(|e| format!(": {e}"))
                     .unwrap_or_default();
-                anyhow::bail!("challenge validation failed for {}{detail}", p.domain);
+                anyhow::bail!("challenge validation failed for {domain}{detail}");
             } else if let Some(ref err) = ch.error {
                 tracing::debug!(
                     "Challenge has error but status is {} (will keep polling): {err}",
@@ -447,16 +451,6 @@ async fn poll_one_authorization_until_valid(
             | AuthorizationStatus::Deactivated
             | AuthorizationStatus::Expired
             | AuthorizationStatus::Revoked => {
-                for q in pending {
-                    run_dns_hook_cleanup_silent(
-                        hook,
-                        &q.domain,
-                        &q.txt_name,
-                        &q.txt_value,
-                        ctx.cli.unsafe_hooks,
-                    )
-                    .await;
-                }
                 let detail = a
                     .challenges
                     .iter()
@@ -466,7 +460,7 @@ async fn poll_one_authorization_until_valid(
                     .unwrap_or_default();
                 anyhow::bail!(
                     "authorization failed for {} (status: {}){detail}",
-                    p.domain,
+                    domain,
                     a.status
                 );
             }

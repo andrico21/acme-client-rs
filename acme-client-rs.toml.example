@@ -140,6 +140,7 @@
 # Maximum number of concurrent DNS propagation checks when using --dns-hook
 # with multiple domains. Each domain's TXT record is polled in parallel,
 # capped at this limit to avoid overwhelming DNS servers.
+# Must be non-zero: 0 permits would deadlock the propagation phase.
 # CLI: --dns-propagation-concurrency
 # Default: 5
 # dns_propagation_concurrency = 5

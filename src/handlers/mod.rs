@@ -152,6 +152,23 @@ pub(super) fn is_challenge_failed(ch: &Challenge) -> bool {
     ch.status == ChallengeStatus::Invalid
 }
 
+/// Block until the operator presses Enter, refusing to wait invisibly.
+///
+/// Every caller prints its prompt through `outln!`. If stdout is a closed pipe
+/// that prompt was silently dropped, so waiting on stdin would hang forever
+/// with nothing on screen explaining why. Fail with a directive error instead.
+// NOT cancel-safe: parks on a blocking stdin read; cancellation abandons the
+// spawn_blocking task, which stays parked until the process exits.
+pub(super) async fn wait_for_enter() -> Result<()> {
+    anyhow::ensure!(
+        !crate::output::stdout_dead(),
+        "stdout closed, so the interactive prompt could not be shown; \
+         interactive challenge modes need a terminal — use --dns-hook or --dns-wait"
+    );
+    let _ = tokio::task::spawn_blocking(|| std::io::stdin().read_line(&mut String::new())).await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

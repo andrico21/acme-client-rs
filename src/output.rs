@@ -5,12 +5,15 @@
 //! this module — making it impossible to accidentally bypass a future
 //! `--quiet` flag, JSON-output mode, or test capture.
 //!
-//! On a broken pipe (e.g. `acme-client-rs ... | head`) the process exits
-//! cleanly with code 0. This is a deliberate policy choice — closing the
-//! reader is normal in shell pipelines, not an error — and differs from the
-//! POSIX SIGPIPE default (exit 128+13=141), which Rust suppresses on stdout
-//! anyway. Other write failures are also silently swallowed (writing to
-//! stdout that cannot be written to has no useful recovery path for a CLI).
+//! On a broken pipe (e.g. `acme-client-rs ... | head`) the sink latches a
+//! process-global "stdout is dead" flag and every later `out!`/`outln!`
+//! becomes a no-op. The ACME flow then runs to completion through its normal
+//! success/error paths, so in-flight challenge state is still torn down and
+//! the exit status still reflects what actually happened. This replaces an
+//! earlier `exit(0)`, which skipped cleanup and reported success for an
+//! issuance that never finished. Other write failures are silently swallowed
+//! (writing to stdout that cannot be written to has no useful recovery path
+//! for a CLI).
 //!
 //! Use `tracing::{warn, error}` for stderr — this module is stdout-only.
 
@@ -36,11 +39,23 @@ pub(crate) fn is_silent() -> bool {
     SILENT.load(Ordering::Relaxed)
 }
 
-/// Internal helper: write to stdout, exit(0) on broken pipe, ignore other errors.
+/// Latched once stdout returns `BrokenPipe`. Every later write is dropped at
+/// the sink instead of retried, and `main` consults it to decide whether a
+/// successful run still lost a result the caller explicitly asked for.
+static STDOUT_DEAD: AtomicBool = AtomicBool::new(false);
+
+/// `true` once a write has failed with `BrokenPipe` — the reader is gone.
+#[must_use]
+pub(crate) fn stdout_dead() -> bool {
+    STDOUT_DEAD.load(Ordering::Relaxed)
+}
+
+/// Internal helper: write to stdout, latching `STDOUT_DEAD` on a broken pipe
+/// and ignoring every other error.
 #[doc(hidden)]
-pub(crate) fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
+pub(crate) fn __write(args: std::fmt::Arguments<'_>, newline: bool) {
     use std::io::Write as _;
-    if is_silent() {
+    if is_silent() || stdout_dead() {
         return;
     }
     let stdout = std::io::stdout();
@@ -53,19 +68,19 @@ pub(crate) fn __write_or_exit(args: std::fmt::Arguments<'_>, newline: bool) {
     if let Err(e) = res
         && e.kind() == std::io::ErrorKind::BrokenPipe
     {
-        std::process::exit(0);
+        STDOUT_DEAD.store(true, Ordering::Relaxed);
     }
 }
 
-/// Writes a line to stdout unless `--silent` is active; exits 0 when stdout
-/// is a closed pipe (e.g. piped to `head`).
+/// Writes a line to stdout unless `--silent` is active or stdout is a closed
+/// pipe (e.g. piped to `head`).
 #[macro_export]
 macro_rules! outln {
     () => {{
-        $crate::output::__write_or_exit(::std::format_args!(""), true);
+        $crate::output::__write(::std::format_args!(""), true);
     }};
     ($($arg:tt)*) => {{
-        $crate::output::__write_or_exit(::std::format_args!($($arg)*), true);
+        $crate::output::__write(::std::format_args!($($arg)*), true);
     }};
 }
 
@@ -73,13 +88,14 @@ macro_rules! outln {
 #[macro_export]
 macro_rules! out {
     ($($arg:tt)*) => {{
-        $crate::output::__write_or_exit(::std::format_args!($($arg)*), false);
+        $crate::output::__write(::std::format_args!($($arg)*), false);
     }};
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_silent, set_silent};
+    use super::{STDOUT_DEAD, is_silent, set_silent, stdout_dead};
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn m7_set_silent_toggles_global_suppression() {
@@ -87,5 +103,18 @@ mod tests {
         assert!(is_silent());
         set_silent(false);
         assert!(!is_silent());
+    }
+
+    #[test]
+    fn w1_stdout_dead_latch_suppresses_writes_without_exiting() {
+        assert!(!stdout_dead());
+        STDOUT_DEAD.store(true, Ordering::Relaxed);
+        assert!(stdout_dead());
+        // The whole point of the latch: reaching a write after a broken pipe
+        // must return normally instead of terminating the process, so the
+        // ACME flow keeps running and its cleanup paths still execute.
+        super::__write(format_args!("dropped"), true);
+        STDOUT_DEAD.store(false, Ordering::Relaxed);
+        assert!(!stdout_dead());
     }
 }
