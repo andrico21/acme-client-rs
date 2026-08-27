@@ -345,14 +345,14 @@ cargo build --release
 
 #### Linux (GNU/musl)
 
-**Предварительные требования:** Крейт `native-tls` использует OpenSSL на Linux. Сначала установите заголовочные файлы:
+**Предварительные требования:** TLS обеспечивается крейтом `rustls` с криптопровайдером `aws-lc-rs` - OpenSSL и системные TLS-библиотеки не требуются. Нужен только рабочий C-тулчейн (скрипт сборки `aws-lc-sys` вызывает `cc` для компиляции исходников AWS-LC):
 
 | Дистрибутив | Команда установки |
 |---|---|
-| Debian / Ubuntu | `sudo apt install pkg-config libssl-dev` |
-| RHEL / Fedora | `sudo dnf install pkg-config openssl-devel` |
-| Alpine (musl) | `apk add pkgconf openssl-dev openssl-libs-static` |
-| Arch | `sudo pacman -S pkg-config openssl` |
+| Debian / Ubuntu | `sudo apt install build-essential pkg-config` |
+| RHEL / Fedora | `sudo dnf install gcc make pkg-config` |
+| Alpine (musl) | `apk add musl-dev pkgconf` |
+| Arch | `sudo pacman -S base-devel pkg-config` |
 
 ```sh
 RUSTFLAGS="-C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" cargo build --release
@@ -407,9 +407,9 @@ file target/release/acme-client-rs  # should say "ELF 64-bit ... dynamically lin
 
 ### Сборка с Podman (или Docker)
 
-Можно собрать полностью статический бинарник для Linux внутри контейнера - локальный Rust-тулчейн или заголовки OpenSSL не нужны.
+Можно собрать полностью статический бинарник для Linux внутри контейнера - локальный Rust-тулчейн не нужен.
 
-Пример ниже использует многоэтапную сборку: первый этап компилирует против musl с вендоренным OpenSSL 3.5.x, второй этап извлекает бинарник.
+Пример ниже использует многоэтапную сборку: первый этап компилирует против musl с `rustls` + `aws-lc-rs` (без OpenSSL), второй этап извлекает бинарник.
 
 Создайте `Containerfile` (работает как с `podman`, так и с `docker`):
 
@@ -417,13 +417,12 @@ file target/release/acme-client-rs  # should say "ELF 64-bit ... dynamically lin
 # -- Stage 1: Build --
 FROM docker.io/library/rust:alpine AS builder
 
-RUN apk add --no-cache musl-dev pkgconf openssl-dev openssl-libs-static perl make
+RUN apk add --no-cache musl-dev pkgconf
 
 WORKDIR /src
 COPY . .
 
 # Static musl build with full security hardening
-ENV OPENSSL_STATIC=1
 ENV RUSTFLAGS="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"
 
 RUN cargo build --release && strip target/release/acme-client-rs
@@ -461,13 +460,36 @@ podman run --rm acme-client-rs --help
 podman run --rm -v ./certs:/certs:Z acme-client-rs --directory https://acme-server/directory --account-key /certs/account.key run --contact you@example.com your.domain.com
 ```
 
-> **Примечание:** Пакет `openssl-dev` в Alpine содержит OpenSSL 3.5.x (3.5.5 на момент написания). Переменная окружения `OPENSSL_STATIC=1` указывает скрипту сборки `openssl-sys` линковать OpenSSL статически, создавая полностью самодостаточный бинарник без зависимостей времени выполнения. Базовый образ `rust:alpine` использует musl libc нативно, поэтому кросс-компиляция не требуется.
+#### Запуск одной командой в контейнере (автосоздание ключа аккаунта)
+
+Для одноразовых запусков в контейнере / CI / автоматизации передайте
+`--generate-account-key-if-missing` (или задайте
+`ACME_GENERATE_ACCOUNT_KEY_IF_MISSING=1`), чтобы свернуть шаг `generate-key`
+внутрь `run`. Если файла по пути `--account-key` нет, по этому пути создаётся
+новый ключ ES256, после чего продолжается выпуск сертификата. Существующий
+ключ используется без изменений.
+
+```sh
+mkdir -p ./acme-data && sudo chown 65532:65532 ./acme-data
+podman run --rm -v ./acme-data:/data:Z acme-client-rs \
+  --directory https://acme-staging-v02.api.letsencrypt.org/directory \
+  run \
+    --contact you@example.com \
+    --generate-account-key-if-missing \
+    your.domain.com
+```
+
+Алгоритм автоматически создаваемого ключа переопределяется флагом
+`--account-key-algorithm` (`es256` | `es384` | `es512` | `rsa2048` | `rsa4096` |
+`ed25519`) или переменной `ACME_ACCOUNT_KEY_ALGORITHM`.
+
+> **Примечание:** TLS обеспечивается крейтом `rustls` с криптопровайдером `aws-lc-rs` и крейтом `rustls-platform-verifier`, который делегирует проверку цепочки сертификатов операционной системе - Windows CryptoAPI, Security framework на macOS или `/etc/ssl/certs` на Linux. Корпоративные / приватные CA, установленные в системном хранилище доверия, учитываются автоматически. Базовый образ `rust:alpine` использует musl libc нативно, поэтому кросс-компиляция не требуется.
 
 Для использования Docker вместо Podman просто замените `podman` на `docker` во всех командах выше.
 
 ### Сравнение размеров
 
-Типичные размеры бинарника (x86_64 Linux, gnu, со статически вендоренным OpenSSL 3.5.x):
+Типичные размеры бинарника (x86_64 Linux, gnu, с rustls + aws-lc-rs):
 
 | Профиль | Примерный размер |
 |---|---|
@@ -1327,6 +1349,8 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--print-cert` | `false` | Вывести PEM выпущенного сертификата в stdout после сохранения в файл |
 | `--profile <NAME>` | - | Профиль сертификата (draft-ietf-acme-profiles-01). Используйте `list-profiles` для просмотра доступных вариантов. |
 | `--force` | `false` | Перезаписать файл `--key-output`, если он уже существует (по умолчанию: не затирать существующий закрытый ключ) |
+| `--generate-account-key-if-missing` | `false` | Создать ключ аккаунта по пути `--account-key`, если такого файла нет, и продолжить выпуск. Позволяет свернуть шаг `generate-key` в одну команду для контейнеров и CI. Существующий ключ используется без изменений. |
+| `--account-key-algorithm <ALG>` | `es256` | Алгоритм ключа, создаваемого через `--generate-account-key-if-missing`: `es256`, `es384`, `es512`, `rsa2048`, `rsa4096`, `ed25519`. Игнорируется, если ключ уже существует. |
 
 <details>
 <summary><strong>Ротация ключей (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1399,6 +1423,8 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_EAB_KID` | EAB Key ID (альтернатива `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC-ключ, base64url-кодировка (альтернатива `--eab-hmac-key`) |
 | `ACME_PROFILE` | Профиль сертификата (альтернатива `--profile`) |
+| `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING` | Создать ключ аккаунта, если он отсутствует (альтернатива `--generate-account-key-if-missing`) |
+| `ACME_ACCOUNT_KEY_ALGORITHM` | Алгоритм автоматически создаваемого ключа аккаунта (альтернатива `--account-key-algorithm`) |
 | `RUST_LOG` | Фильтр уровня логирования (например, `debug`, `info`, `warn`) |
 
 ### Переменные окружения DNS-хука

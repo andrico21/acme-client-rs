@@ -1351,6 +1351,8 @@ Global options can be placed before or after the subcommand.
 | `--print-cert` | `false` | Print the issued certificate PEM to stdout after saving to file |
 | `--profile <NAME>` | - | Certificate profile to request (draft-ietf-acme-profiles-01). Use `list-profiles` to see available options. |
 | `--force` | `false` | Overwrite the `--key-output` file if it already exists (default: refuse to clobber an existing private key) |
+| `--generate-account-key-if-missing` | `false` | Generate the account key at `--account-key` if that file does not exist, then proceed with issuance. Folds the `generate-key` bootstrap into a single command for containers and CI. An existing key is reused unchanged. |
+| `--account-key-algorithm <ALG>` | `es256` | Algorithm for the key created by `--generate-account-key-if-missing`: `es256`, `es384`, `es512`, `rsa2048`, `rsa4096`, `ed25519`. Ignored if the key already exists. |
 
 <details>
 <summary><strong>Key Rollover (RFC 8555 Section 7.3.5)</strong></summary>
@@ -1423,6 +1425,8 @@ acme-client-rs --directory https://acme-server/directory run --contact admin@exa
 | `ACME_EAB_KID` | EAB Key ID (alternative to `--eab-kid`) |
 | `ACME_EAB_HMAC_KEY` | EAB HMAC key, base64url-encoded (alternative to `--eab-hmac-key`) |
 | `ACME_PROFILE` | Certificate profile (alternative to `--profile`) |
+| `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING` | Generate the account key if missing (alternative to `--generate-account-key-if-missing`) |
+| `ACME_ACCOUNT_KEY_ALGORITHM` | Algorithm for the auto-generated account key (alternative to `--account-key-algorithm`) |
 | `RUST_LOG` | Log level filter (e.g., `debug`, `info`, `warn`) |
 
 ### DNS Hook Environment Variables
