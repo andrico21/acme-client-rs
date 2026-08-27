@@ -54,6 +54,14 @@ disk was never modified.
   `cargo vet`, replacing 24 of the blanket `cargo vet init` exemptions with
   real review — including the `hmac`, `signature`, `rand_core`, `rand_chacha`
   and `fiat-crypto` crates behind key generation and JWS signing.
+- A blocking documentation lint (`tests/lint-docs.py`) checks README.md,
+  README.RUS.md and the Docker Hub description against the binary, the release
+  workflows and each other: example flags must exist, subcommand rows must list
+  what `clap` reports as required, internal anchors must resolve, every
+  published release artifact and every `ACME_` environment variable must appear
+  in the reference tables, the config example must match `generate-config`, and
+  the two READMEs must stay structurally identical. Ground truth comes from
+  invoking the binary, so the lint follows the CLI as it changes.
 
 ### Changed
 
