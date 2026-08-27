@@ -258,6 +258,8 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 The `show-dns-persist-01` subcommand displays the record you need to create, without running the full ACME flow:
 
+> **An ACME account is required.** The record embeds `accounturi=`, so the command looks your account up on the CA. If this account key has never been registered, the command fails rather than registering one silently — add `--agree-tos` the first time (which accepts the CA's terms), or pass `--account-url` if you already know it.
+
 ```sh
 acme-client-rs --directory https://your-acme-server/directory show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org
 ```
@@ -676,6 +678,8 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 ```
 
 ### Revoke a Certificate
+
+These assume the account key is already registered — it is, if you issued the certificate with `run` as above. Revoking with a key that has no account fails rather than creating one; pass `--account-url` if you know it, or `--agree-tos` to register during the call.
 
 ```sh
 # Revoke (no reason code)

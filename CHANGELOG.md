@@ -76,6 +76,9 @@ disk was never modified.
   `acmeIdentifier` extension OID (`1.3.6.1.5.5.7.1.31`) alongside the hex value.
 - Interrupting with Ctrl-C now reports how many cleanup actions are pending and
   that a second Ctrl-C aborts immediately, instead of a bare message.
+- Refreshed dependencies via `cargo update`. The security-relevant moves are
+  `rustls-webpki` 0.103.14 → 0.103.15 (certificate path validation) and
+  `aes-gcm` 0.11.0 → 0.11.1; `h2` 0.4.17 → 0.4.18 covers the HTTP/2 client.
 
 ### Fixed
 

@@ -258,6 +258,8 @@ acme-client-rs --directory https://your-acme-server/directory run --contact you@
 
 Субкоманда `show-dns-persist-01` выводит запись, которую нужно создать, без запуска полного ACME-процесса:
 
+> **Требуется ACME-аккаунт.** Запись содержит `accounturi=`, поэтому команда ищет ваш аккаунт на стороне CA. Если этот ключ аккаунта ещё не зарегистрирован, команда завершится с ошибкой вместо тихой регистрации - добавьте `--agree-tos` при первом запуске (это означает принятие условий CA) или передайте `--account-url`, если он вам уже известен.
+
 ```sh
 acme-client-rs --directory https://your-acme-server/directory show-dns-persist-01 --domain your.domain.com --issuer-domain-name letsencrypt.org
 ```
@@ -655,6 +657,8 @@ acme-client-rs --directory https://acme-v02.api.letsencrypt.org/directory --acco
 ```
 
 ### Отзыв сертификата
+
+Примеры предполагают, что ключ аккаунта уже зарегистрирован - так и есть, если сертификат выпускался командой `run` выше. Отзыв с ключом без аккаунта завершится ошибкой, а не создаст аккаунт: передайте `--account-url`, если он известен, или `--agree-tos` для регистрации в ходе вызова.
 
 ```sh
 # Revoke (no reason code)
