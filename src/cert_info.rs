@@ -148,4 +148,76 @@ mod tests {
             );
         }
     }
+
+    fn write_cert(
+        path: &std::path::Path,
+        dns: &[&str],
+        ips: &[IpAddr],
+        not_after: time::OffsetDateTime,
+    ) -> anyhow::Result<()> {
+        use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256, SanType};
+
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut params =
+            CertificateParams::new(dns.iter().map(|d| (*d).to_owned()).collect::<Vec<_>>())?;
+        for ip in ips {
+            params.subject_alt_names.push(SanType::IpAddress(*ip));
+        }
+        params.not_after = not_after;
+        std::fs::write(path, params.self_signed(&key)?.pem())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cert_days_remaining_counts_whole_days_until_not_after() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("cert.pem");
+        // `whole_days()` floors, so a fixture aimed at exactly 30 days would
+        // report 29 once setup overhead is subtracted. Add half a day of slack
+        // and assert the floored value.
+        let not_after =
+            time::OffsetDateTime::now_utc() + time::Duration::days(30) + time::Duration::hours(12);
+        write_cert(&path, &["a.example"], &[], not_after)?;
+
+        assert_eq!(super::cert_days_remaining(&path).await?, 30);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cert_days_remaining_is_negative_for_an_expired_cert() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("expired.pem");
+        let not_after =
+            time::OffsetDateTime::now_utc() - time::Duration::days(5) - time::Duration::hours(12);
+        write_cert(&path, &["a.example"], &[], not_after)?;
+
+        assert_eq!(super::cert_days_remaining(&path).await?, -5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cert_san_identifiers_returns_normalized_dns_and_ip_sans() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("san.pem");
+        let not_after = time::OffsetDateTime::now_utc() + time::Duration::days(10);
+        write_cert(
+            &path,
+            &["b.example", "A.Example"],
+            &["192.0.2.7".parse()?],
+            not_after,
+        )?;
+
+        let ids = super::cert_san_identifiers(&path).await?;
+        assert!(ids.contains("b.example"), "got {ids:?}");
+        assert!(
+            ids.contains("a.example"),
+            "DNS SANs are lowercased: {ids:?}"
+        );
+        assert!(
+            ids.contains("192.0.2.7"),
+            "IP SANs are canonicalized: {ids:?}"
+        );
+        assert_eq!(ids.len(), 3, "exactly the three SANs: {ids:?}");
+        Ok(())
+    }
 }

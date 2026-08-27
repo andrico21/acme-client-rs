@@ -352,6 +352,33 @@ mod tests {
     }
 
     #[test]
+    fn untrusted_block_at_exact_cap_is_not_truncated() {
+        let exact = vec![b'A'; MAX_UNTRUSTED_TEXT];
+        let out = untrusted_block(&exact);
+        assert!(
+            !out.contains("truncated"),
+            "exactly the cap must pass through"
+        );
+        assert_eq!(out.len(), MAX_UNTRUSTED_TEXT);
+
+        let over = vec![b'A'; MAX_UNTRUSTED_TEXT + 1];
+        assert!(untrusted_block(&over).contains("truncated"));
+    }
+
+    #[test]
+    fn certificate_cap_admits_one_mebibyte_and_truncates_beyond() {
+        let exact = "A".repeat(1_048_576);
+        let out = untrusted_certificate(&exact);
+        assert!(!out.contains("truncated"), "1 MiB must pass through intact");
+        assert_eq!(out.chars().count(), 1_048_576);
+
+        let over = "A".repeat(1_048_577);
+        let out = untrusted_certificate(&over);
+        assert!(out.contains("truncated"));
+        assert_eq!(out.chars().filter(|c| *c == 'A').count(), 1_048_576);
+    }
+
+    #[test]
     #[cfg(debug_assertions)]
     fn terminal_safety_predicate_matches_the_scrubbers() {
         assert!(is_terminal_safe("plain text"));

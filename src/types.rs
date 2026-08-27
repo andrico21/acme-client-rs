@@ -1424,6 +1424,155 @@ mod tests {
         assert!(!s.contains("sub10"), "beyond the cap is dropped: {s}");
         Ok(())
     }
+
+    // ── Wire-format contracts (RFC 8555 §6.7, RFC 1034) ─────────────────
+
+    fn subproblems(n: usize) -> AcmeError {
+        AcmeError {
+            error_type: Some(AcmeErrorType::Compound),
+            detail: None,
+            status: None,
+            subproblems: Some(
+                (0..n)
+                    .map(|i| Subproblem {
+                        error_type: AcmeErrorType::Malformed,
+                        detail: Some(format!("s{i}")),
+                        identifier: None,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    #[test]
+    fn acme_error_subproblem_overflow_note_appears_only_past_the_cap() {
+        let at_cap = subproblems(MAX_RENDERED_SUBPROBLEMS).to_string();
+        assert!(
+            !at_cap.contains("… and"),
+            "exactly the cap renders no overflow note: {at_cap}"
+        );
+        let over = subproblems(MAX_RENDERED_SUBPROBLEMS + 1).to_string();
+        assert!(over.contains("… and 1 more"), "one past the cap: {over}");
+    }
+
+    #[test]
+    fn acme_error_type_maps_every_rfc8555_urn_in_both_directions() {
+        use AcmeErrorType as E;
+        let table: &[(&str, E)] = &[
+            ("accountDoesNotExist", E::AccountDoesNotExist),
+            ("alreadyRevoked", E::AlreadyRevoked),
+            ("badCSR", E::BadCsr),
+            ("badNonce", E::BadNonce),
+            ("badPublicKey", E::BadPublicKey),
+            ("badRevocationReason", E::BadRevocationReason),
+            ("badSignatureAlgorithm", E::BadSignatureAlgorithm),
+            ("caa", E::Caa),
+            ("compound", E::Compound),
+            ("connection", E::Connection),
+            ("dns", E::Dns),
+            ("externalAccountRequired", E::ExternalAccountRequired),
+            ("incorrectResponse", E::IncorrectResponse),
+            ("invalidContact", E::InvalidContact),
+            ("malformed", E::Malformed),
+            ("orderNotReady", E::OrderNotReady),
+            ("rateLimited", E::RateLimited),
+            ("rejectedIdentifier", E::RejectedIdentifier),
+            ("serverInternal", E::ServerInternal),
+            ("tls", E::Tls),
+            ("unauthorized", E::Unauthorized),
+            ("unsupportedContact", E::UnsupportedContact),
+            ("unsupportedIdentifier", E::UnsupportedIdentifier),
+            ("userActionRequired", E::UserActionRequired),
+        ];
+        assert_eq!(table.len(), 24, "RFC 8555 §6.7 defines 24 error types");
+
+        for (kind, variant) in table {
+            let urn = format!("{ACME_ERROR_URN_PREFIX}{kind}");
+            assert_eq!(&AcmeErrorType::from(urn.clone()), variant, "parsing {urn}");
+            assert_eq!(String::from(variant.clone()), urn, "rendering {kind}");
+            assert_eq!(variant.to_string(), urn, "display {kind}");
+        }
+    }
+
+    #[test]
+    fn status_enums_display_their_wire_forms() {
+        for (got, want) in [
+            (AccountStatus::Valid.to_string(), "valid"),
+            (AccountStatus::Deactivated.to_string(), "deactivated"),
+            (AccountStatus::Revoked.to_string(), "revoked"),
+            (OrderStatus::Pending.to_string(), "pending"),
+            (OrderStatus::Ready.to_string(), "ready"),
+            (OrderStatus::Processing.to_string(), "processing"),
+            (OrderStatus::Valid.to_string(), "valid"),
+            (OrderStatus::Invalid.to_string(), "invalid"),
+            (AuthorizationStatus::Pending.to_string(), "pending"),
+            (AuthorizationStatus::Valid.to_string(), "valid"),
+            (AuthorizationStatus::Invalid.to_string(), "invalid"),
+            (AuthorizationStatus::Deactivated.to_string(), "deactivated"),
+            (AuthorizationStatus::Expired.to_string(), "expired"),
+            (AuthorizationStatus::Revoked.to_string(), "revoked"),
+            (ChallengeStatus::Pending.to_string(), "pending"),
+            (ChallengeStatus::Processing.to_string(), "processing"),
+            (ChallengeStatus::Valid.to_string(), "valid"),
+            (ChallengeStatus::Invalid.to_string(), "invalid"),
+            (ChallengeType::Http01.to_string(), "http-01"),
+            (ChallengeType::Dns01.to_string(), "dns-01"),
+            (ChallengeType::TlsAlpn01.to_string(), "tls-alpn-01"),
+            (ChallengeType::DnsPersist01.to_string(), "dns-persist-01"),
+        ] {
+            assert_eq!(got, want);
+        }
+    }
+
+    #[test]
+    fn newtype_accessors_expose_the_canonical_string() -> Result<()> {
+        let name = DnsName::parse("Example.COM")?;
+        assert_eq!(name.to_string(), "example.com");
+        assert_eq!(<DnsName as AsRef<str>>::as_ref(&name), "example.com");
+        assert_eq!(String::from(name), "example.com");
+
+        let token = ChallengeToken::parse("abc-DEF_123")?;
+        assert_eq!(token.to_string(), "abc-DEF_123");
+        assert_eq!(String::from(token), "abc-DEF_123");
+
+        let dns = Identifier::dns("example.com")?;
+        assert_eq!(
+            dns.as_dns().map(DnsName::as_str),
+            Some("example.com"),
+            "as_dns exposes the inner name"
+        );
+        assert!(
+            Identifier::ip("192.0.2.1")?.as_dns().is_none(),
+            "as_dns is None for IP identifiers"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn dns_label_length_boundary_is_exactly_63_octets() {
+        let ok = format!("{}.example", "a".repeat(63));
+        assert!(
+            validate_and_normalize_dns(&ok).is_ok(),
+            "a 63-octet label is legal (RFC 1034 §3.1)"
+        );
+        let bad = format!("{}.example", "a".repeat(64));
+        assert!(validate_and_normalize_dns(&bad).is_err(), "64 exceeds it");
+    }
+
+    #[test]
+    fn dns_total_length_boundary_is_exactly_253_octets() {
+        let label = "a".repeat(63);
+        let at_limit = format!("{label}.{label}.{label}.{}", "a".repeat(61));
+        assert_eq!(at_limit.len(), 253);
+        assert!(
+            validate_and_normalize_dns(&at_limit).is_ok(),
+            "253 octets is the documented maximum"
+        );
+
+        let over = format!("{label}.{label}.{label}.{}", "a".repeat(62));
+        assert_eq!(over.len(), 254);
+        assert!(validate_and_normalize_dns(&over).is_err(), "254 exceeds it");
+    }
 }
 
 #[cfg(test)]

@@ -478,6 +478,231 @@ mod tests {
             assert!(now < inst, "now {now} should be < selected {inst} (r={r})");
         }
     }
+
+    // A 10ns window with random = 9: `%` yields start+9ns, `/` yields start.
+    // A containment property cannot separate the two, because division lands a
+    // tiny offset that is still inside the window.
+    #[test]
+    fn selected_instant_uses_modulo_not_division() {
+        let start = datetime!(2026-01-01 00:00:00 UTC);
+        let end = start + time::Duration::nanoseconds(10);
+        assert_eq!(
+            select_renewal_instant(start, end, 9),
+            start + time::Duration::nanoseconds(9)
+        );
+    }
+
+    #[test]
+    fn format_rfc3339_emits_a_parseable_timestamp() -> Result<()> {
+        let dt = datetime!(2026-04-01 12:34:56 UTC);
+        let rendered = format_rfc3339(dt);
+        assert_eq!(rendered, "2026-04-01T12:34:56Z");
+        assert_eq!(
+            OffsetDateTime::parse(&rendered, &time::format_description::well_known::Rfc3339)?,
+            dt
+        );
+        Ok(())
+    }
+
+    // ── Renew / skip decision ───────────────────────────────────────────
+
+    use crate::cli::{Cli, Commands, RunArgs};
+
+    /// Owns everything `RunContext` borrows, so a context can be handed out
+    /// with `ctx(&self)`. `RunArgs` is borrowed back out of `cli.command`
+    /// rather than stored alongside it, which would duplicate the state clap
+    /// already parsed.
+    struct TestCtx {
+        cli: Cli,
+        registry: crate::cleanup::CleanupRegistry,
+        tmp: tempfile::TempDir,
+    }
+
+    impl TestCtx {
+        fn new(extra: &[&str]) -> Result<Self> {
+            let tmp = tempfile::tempdir()?;
+            let mut argv: Vec<String> = vec![
+                "acme-client-rs".to_owned(),
+                "run".to_owned(),
+                "--cert-output".to_owned(),
+                tmp.path().join("cert.pem").display().to_string(),
+                "--key-output".to_owned(),
+                tmp.path().join("key.pem").display().to_string(),
+            ];
+            argv.extend(extra.iter().map(|s| (*s).to_owned()));
+            argv.push("example.com".to_owned());
+            let cli = <Cli as clap::Parser>::try_parse_from(argv)?;
+            Ok(Self {
+                cli,
+                registry: crate::cleanup::CleanupRegistry::new(),
+                tmp,
+            })
+        }
+
+        fn cert_path(&self) -> std::path::PathBuf {
+            self.tmp.path().join("cert.pem")
+        }
+
+        fn run_args(&self) -> Result<&RunArgs> {
+            let Commands::Run(args) = &self.cli.command else {
+                anyhow::bail!("TestCtx only builds `run` commands");
+            };
+            Ok(args.as_ref())
+        }
+
+        fn ctx(&self) -> Result<RunContext<'_>> {
+            let args = self.run_args()?;
+            let challenge_type = crate::types::ChallengeType::parse_strict(&args.challenge_type)?;
+            RunContext::build(&self.cli, args, challenge_type, &self.registry)
+        }
+    }
+
+    fn write_cert(path: &std::path::Path, sans: &[&str], days: i64) -> Result<()> {
+        use rcgen::{CertificateParams, KeyPair, PKCS_ECDSA_P256_SHA256};
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut params =
+            CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())?;
+        // `cert_days_remaining` floors, so add half a day of slack to make the
+        // reported whole-day count deterministic.
+        params.not_after =
+            OffsetDateTime::now_utc() + time::Duration::days(days) + time::Duration::hours(12);
+        std::fs::write(path, params.self_signed(&key)?.pem())?;
+        Ok(())
+    }
+
+    /// Leaf signed by a CA so it carries the Authority Key Identifier that
+    /// `compute_cert_id` needs; a plain self-signed cert leaves `ari_cert_id`
+    /// silently unset.
+    fn leaf_der_with_aki() -> Result<Vec<u8>> {
+        use rcgen::{
+            BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, PKCS_ECDSA_P256_SHA256,
+        };
+        let issuer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut issuer_params = CertificateParams::new(vec!["Test CA".to_owned()])?;
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let issuer = Issuer::new(issuer_params, issuer_key);
+        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut leaf_params = CertificateParams::new(vec!["example.com".to_owned()])?;
+        leaf_params.use_authority_key_identifier_extension = true;
+        Ok(leaf_params.signed_by(&leaf_key, &issuer)?.der().to_vec())
+    }
+
+    fn window(start: &str, end: &str) -> Result<crate::types::RenewalInfo> {
+        Ok(serde_json::from_str(&format!(
+            r#"{{"suggestedWindow":{{"start":"{start}","end":"{end}"}}}}"#
+        ))?)
+    }
+
+    async fn days_decision(remaining: i64, threshold: &str) -> Result<Option<RenewalDecision>> {
+        let t = TestCtx::new(&["--days", threshold])?;
+        write_cert(&t.cert_path(), &["example.com"], remaining)?;
+        let ctx = t.ctx()?;
+        check_days_threshold(&ctx).await
+    }
+
+    #[tokio::test]
+    async fn check_renews_when_no_certificate_is_present() -> Result<()> {
+        let t = TestCtx::new(&["--days", "30"])?;
+        let mut ctx = t.ctx()?;
+        assert!(matches!(check(&mut ctx).await?, RenewalDecision::Renew));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn days_threshold_skips_only_strictly_above_the_threshold() -> Result<()> {
+        assert!(
+            matches!(days_decision(60, "30").await?, Some(RenewalDecision::Skip)),
+            "60 days left against a 30-day threshold must skip"
+        );
+        assert!(
+            days_decision(10, "30").await?.is_none(),
+            "10 days left must proceed to issuance"
+        );
+        // README documents "skip if MORE than N days remain", so the boundary
+        // itself renews.
+        assert!(
+            days_decision(30, "30").await?.is_none(),
+            "exactly N days remaining must renew, not skip"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn days_threshold_reads_the_certificate_it_reports_on() -> Result<()> {
+        let t = TestCtx::new(&["--days", "30"])?;
+        write_cert(&t.cert_path(), &["example.com"], 30)?;
+        assert_eq!(
+            cert_days_remaining(&t.cert_path()).await?,
+            30,
+            "fixture must land on the boundary the decision test assumes"
+        );
+        Ok(())
+    }
+
+    async fn mismatch_decision(cert_sans: &[&str]) -> Result<Option<RenewalDecision>> {
+        let t = TestCtx::new(&[])?;
+        write_cert(&t.cert_path(), cert_sans, 60)?;
+        let ctx = t.ctx()?;
+        check_domain_mismatch(&ctx).await
+    }
+
+    #[tokio::test]
+    async fn domain_mismatch_fires_only_when_the_san_set_differs() -> Result<()> {
+        assert!(
+            mismatch_decision(&["example.com"]).await?.is_none(),
+            "an identical SAN set is not a mismatch"
+        );
+        assert!(
+            mismatch_decision(&["other.example"]).await?.is_some(),
+            "a changed SAN set is a mismatch"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ari_skips_before_the_selected_instant_and_renews_after() -> Result<()> {
+        let der = leaf_der_with_aki()?;
+
+        let t = TestCtx::new(&["--ari"])?;
+        let mut ctx = t.ctx()?;
+        let future = window("2099-01-01T00:00:00Z", "2099-01-15T00:00:00Z")?;
+        assert!(
+            matches!(
+                apply_ari_info(&mut ctx, &future, &der),
+                Some(RenewalDecision::Skip)
+            ),
+            "a window entirely in the future must skip"
+        );
+        assert!(
+            ctx.ari_cert_id.is_none(),
+            "a skipped renewal sets no `replaces` field"
+        );
+        drop(ctx);
+
+        let t = TestCtx::new(&["--ari"])?;
+        let mut ctx = t.ctx()?;
+        let past = window("2000-01-01T00:00:00Z", "2000-01-15T00:00:00Z")?;
+        assert!(
+            apply_ari_info(&mut ctx, &past, &der).is_none(),
+            "a window entirely in the past must renew"
+        );
+        assert!(
+            ctx.ari_cert_id.is_some(),
+            "renewing links the replaced certificate (RFC 9773 §5)"
+        );
+        Ok(())
+    }
+
+    // With --ari unset, check_ari_window must return before build_client, which
+    // would otherwise reach for the ACME directory over the network.
+    #[tokio::test]
+    async fn check_never_touches_the_network_when_ari_is_off() -> Result<()> {
+        let t = TestCtx::new(&["--days", "30"])?;
+        write_cert(&t.cert_path(), &["example.com"], 60)?;
+        let mut ctx = t.ctx()?;
+        assert!(matches!(check(&mut ctx).await?, RenewalDecision::Skip));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
