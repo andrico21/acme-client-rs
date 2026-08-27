@@ -490,6 +490,8 @@ Hook variables: `ACME_ACTION`, `ACME_DOMAIN`, `ACME_TXT_NAME` (`_validation-pers
 
 The `show-dns-persist-01` subcommand displays the record to create without running the full flow:
 
+> **An ACME account is required.** The record embeds `accounturi=`, so the command looks your account up on the CA. If this account key has never been registered, the command fails rather than registering one silently — add `--agree-tos` the first time (which accepts the CA's terms), or pass `--account-url` if you already know it.
+
 ```sh
 docker run --rm andrico21/acme-client-rs \
   --directory https://your-acme-server/directory \
@@ -626,6 +628,8 @@ docker run --rm -it -v ./acme-data:/data andrico21/acme-client-rs \
 ```
 
 ### Revoke a Certificate
+
+These assume the account key is already registered — it is, if you issued the certificate with `run` as above. Revoking with a key that has no account fails rather than creating one; pass `--account-url` if you know it, or `--agree-tos` to register during the call.
 
 ```sh
 # Revoke (no reason code)
@@ -1052,17 +1056,17 @@ Global options can be placed before or after the subcommand.
 | `get-authz <url>` | Fetch an authorization object |
 | `respond-challenge <url>` | Tell the server a challenge is ready |
 | `serve-http-01` | Serve an HTTP-01 challenge response (`--token`, `--port`; `--challenge-dir` writes the file instead) |
-| `show-dns-01` | Show DNS-01 TXT record setup instructions |
-| `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions |
-| `finalize` | Finalize an order with a new CSR (`--key-output` required; `--cert-key-algorithm`, key-password flags, `--force`) |
+| `show-dns-01` | Show DNS-01 TXT record setup instructions (`--domain` and `--token` required) |
+| `show-dns-persist-01` | Show DNS-PERSIST-01 persistent TXT record setup instructions (`--domain` and `--issuer-domain-name` required). `--agree-tos` (default `false`) permits registering an account if this key has none |
+| `finalize` | Finalize an order with a new CSR (`--finalize-url` and `--key-output` required; `--cert-key-algorithm`, key-password flags, `--force`) |
 | `poll-order <url>` | Poll an order's current status |
 | `download-cert <url>` | Download the issued certificate (`--output`, default `certificate.pem`) |
 | `deactivate-account` | Deactivate the current account |
-| `key-rollover` | Rotate the account key (RFC 8555 §7.3.5). `--new-key` required |
-| `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 §7.4.1) |
+| `key-rollover` | Rotate the account key (RFC 8555 §7.3.5). `--new-key` required; `--agree-tos` (default `false`) permits registering an account if this key has none |
+| `pre-authorize` | Pre-authorize an identifier before creating an order (RFC 8555 §7.4.1; `--domain` required). `--agree-tos` (default `false`) permits registering an account if this key has none |
 | `renewal-info <path>` | Query ACME Renewal Information for a certificate (RFC 9773) |
 | `list-profiles` | List certificate profiles advertised by the server (draft-ietf-acme-profiles-01) |
-| `revoke-cert <path>` | Revoke a certificate |
+| `revoke-cert <path>` | Revoke a certificate. `--reason` sets an RFC 5280 reason code; `--agree-tos` (default `false`) permits registering an account if this key has none |
 | `run <domains...>` | Run the full ACME flow end-to-end |
 
 ### `run` Options

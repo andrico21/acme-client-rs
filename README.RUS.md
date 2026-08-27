@@ -17,7 +17,10 @@
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Статическая (musl)** | **Рекомендуется.** Без runtime-зависимостей — работает на любом дистрибутиве Linux. |
 | `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Статическая (musl)** | Raspberry Pi 3/4/5 (64-битная ОС), AWS Graviton, любой ARM64-дистрибутив Linux. |
 | `acme-client-rs-linux-armv7-musl.tar.gz` | Linux ARMv7 | **Статическая (musl)** | Raspberry Pi 2/3/4 (32-битная ОС). |
+| `acme-client-rs-linux-mipsel-musl.tar.gz` | Linux MIPS (little-endian) | **Статическая (musl)** | Потребительские роутеры - ramips MT7620/MT7621, OpenWrt/Entware. Soft-float MIPS32r2. |
+| `acme-client-rs-linux-mips-musl.tar.gz` | Linux MIPS (big-endian) | **Статическая (musl)** | Роутеры на big-endian MIPS. Soft-float MIPS32r2. |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Динамическая (GNU) | Требует GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
+| `acme-client-rs-linux-armv7-gnueabihf.tar.gz` | Linux ARMv7 | Динамическая (GNU) | Для ARMv7-систем с glibc-окружением, которым нужен меньший динамический бинарник. Требуется `/lib/ld-linux-armhf.so.3`; иначе используйте musl-сборку выше. |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Динамическая | Intel Mac. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Динамическая | Apple Silicon (M1+). |
 | `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Динамическая (MSVC) | Windows 10+. |

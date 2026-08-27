@@ -4,7 +4,7 @@
 
 A lightweight, single-binary ACME client implementing [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) with [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) (ACME Renewal Information) and [DNS-PERSIST-01](https://datatracker.ietf.org/doc/html/draft-ietf-acme-dns-persist) support. Handles the full certificate lifecycle, from account registration through issuance, renewal, and revocation, in a single self-contained binary. The statically linked (musl) Linux binary and the Windows binary have zero runtime dependencies.
 
-Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX; the armv7 build is non-PIE static ET_EXEC with RELRO/NX — see [Hardened builds](#hardened-builds)), and structured JSON output for CI/CD integration.
+Built in Rust (edition 2024) with `#![forbid(unsafe_code)]`, hardened release binaries (CFG, ASLR, full RELRO, NX; the armv7 build is non-PIE static ET_EXEC with RELRO/NX — see [Smallest Hardened Binary](#smallest-hardened-binary)), and structured JSON output for CI/CD integration.
 
 > **AI Disclosure:** This project was developed with AI assistance using [Claude Opus 4.6](https://www.anthropic.com/claude) (via GitHub Copilot). All code, documentation, and tests were reviewed and validated by the author.
 
@@ -17,7 +17,10 @@ Download a prebuilt binary from the [latest release](https://github.com/andrico2
 | `acme-client-rs-linux-x86_64-musl.tar.gz` | Linux x86_64 | **Static (musl)** | **Recommended.** No runtime dependencies — works on any Linux distro. |
 | `acme-client-rs-linux-aarch64-musl.tar.gz` | Linux ARM64 | **Static (musl)** | Raspberry Pi 3/4/5 (64-bit OS), AWS Graviton, any ARM64 Linux distro. |
 | `acme-client-rs-linux-armv7-musl.tar.gz` | Linux ARMv7 | **Static (musl)** | Raspberry Pi 2/3/4 (32-bit OS). |
+| `acme-client-rs-linux-mipsel-musl.tar.gz` | Linux MIPS (little-endian) | **Static (musl)** | Consumer routers — ramips MT7620/MT7621, OpenWrt/Entware. Soft-float MIPS32r2. |
+| `acme-client-rs-linux-mips-musl.tar.gz` | Linux MIPS (big-endian) | **Static (musl)** | Big-endian MIPS routers. Soft-float MIPS32r2. |
 | `acme-client-rs-linux-x86_64-gnu.tar.gz` | Linux x86_64 | Dynamic (GNU) | Requires GLIBC 2.39+ (Ubuntu 24.04+, Fedora 40+, Debian trixie+). |
+| `acme-client-rs-linux-armv7-gnueabihf.tar.gz` | Linux ARMv7 | Dynamic (GNU) | For ARMv7 systems with a glibc userland that prefer a smaller dynamic binary. Needs `/lib/ld-linux-armhf.so.3`; otherwise use the musl build above. |
 | `acme-client-rs-darwin-x86_64.tar.gz` | macOS x86_64 | Dynamic | Intel Macs. |
 | `acme-client-rs-darwin-arm64.tar.gz` | macOS ARM64 | Dynamic | Apple Silicon (M1+). |
 | `acme-client-rs-windows-x86_64-msvc.zip` | Windows x86_64 | Dynamic (MSVC) | Windows 10+. |
