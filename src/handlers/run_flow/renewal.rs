@@ -519,7 +519,7 @@ mod tests {
     }
 
     impl TestCtx {
-        fn new(extra: &[&str]) -> anyhow::Result<Self> {
+        fn new(extra: &[&str]) -> Result<Self> {
             let tmp = tempfile::tempdir()?;
             // A real account key inside the tempdir. Without this the CLI
             // default resolves to a relative `account.key` in the working
