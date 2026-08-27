@@ -19,6 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Without this the job inherits whatever rustc the runner image ships.
+      # When that predates the crate's MSRV, cargo-geiger (which drives its own
+      # embedded cargo) aborts with "rustc 1.97.1 is not supported ... requires
+      # rustc 1.98" and produces no census at all — observed on run 33064155146
+      # after run 33062052502 had succeeded on the same commit range.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
 
@@ -58,13 +67,20 @@ jobs:
         run: cargo install cargo-geiger --locked
         continue-on-error: true
 
-      # `cargo geiger` exits non-zero when it *finds* `unsafe` in the tree, which
-      # is a finding count rather than a failure — every dependency graph with a
-      # crypto crate in it will trip that. Swallow the status so the census still
-      # prints without leaving a red annotation on every green run.
+      # `cargo geiger` exits non-zero when it *finds* `unsafe` in the tree — a
+      # finding count, not a failure — so its status is not a usable signal.
+      # Key off whether a census was actually produced instead, so a tool that
+      # cannot run is reported rather than silently passing as a working control.
       - name: Census transitive `unsafe` usage
-        run: cargo geiger --all-features || true
         continue-on-error: true
+        run: |
+          cargo geiger --all-features > geiger.txt 2>&1 || true
+          tail -50 geiger.txt
+          if grep -qE '[0-9]+/[0-9]+[[:space:]]+[0-9]+/[0-9]+' geiger.txt; then
+            echo "cargo-geiger census produced."
+          else
+            echo "::warning::cargo-geiger produced no census - the tool failed to run, this is not an unsafe finding"
+          fi
 
   lint:
     name: Lint (fmt + clippy)
