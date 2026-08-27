@@ -10,7 +10,7 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
-## [3.0.0] - 2026-08-27
+## [2.4.0] - 2026-08-27
 
 ### Security
 
@@ -227,8 +227,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/3.0.0...HEAD
-[3.0.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...3.0.0
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...HEAD
+[2.4.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...2.4.0
 [2.3.4]: https://github.com/andrico21/acme-client-rs/compare/2.3.3...2.3.4
 [2.2.5]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...2.2.5
 [2.2.4]: https://github.com/andrico21/acme-client-rs/compare/2.2.3...2.2.4
