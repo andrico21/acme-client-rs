@@ -1299,23 +1299,23 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 |---|---|
 | `generate-config` | Генерация самодокументирующегося шаблона TOML-конфигурации |
 | `show-config` | Показать итоговую объединённую конфигурацию (`--verbose` — источники значений; `--show-secrets` раскрывает пароли/HMAC-ключи) |
-| `generate-key` | Генерация новой пары ключей аккаунта (ES256, ES384, ES512, RSA-2048, RSA-4096, Ed25519). `--force` перезаписывает существующий файл ключа |
+| `generate-key` | Генерация новой пары ключей аккаунта. `--algorithm` выбирает ES256 (по умолчанию), ES384, ES512, RSA-2048, RSA-4096 или Ed25519; `--force` перезаписывает существующий файл ключа |
 | `account` | Создание или поиск ACME-аккаунта (`--contact`, EAB-флаги; `--agree-tos` по умолчанию `true`) |
 | `order <domains...>` | Создание нового заказа на сертификат |
 | `get-authz <url>` | Получение объекта авторизации |
 | `respond-challenge <url>` | Сообщить серверу, что вызов готов |
 | `serve-http-01` | Обслуживание ответа на вызов HTTP-01 (`--token`, `--port`; `--challenge-dir` записывает файл ответа вместо запуска сервера) |
-| `show-dns-01` | Показать инструкции по настройке TXT-записи DNS-01 |
-| `show-dns-persist-01` | Показать инструкции по настройке постоянной TXT-записи DNS-PERSIST-01 |
-| `finalize` | Финализация заказа с новым CSR (`--key-output` обязателен; `--cert-key-algorithm`, `--key-password`/`--key-password-file`, `--force`) |
+| `show-dns-01` | Показать инструкции по настройке TXT-записи DNS-01 (обязательны `--domain` и `--token`) |
+| `show-dns-persist-01` | Показать инструкции по настройке постоянной TXT-записи DNS-PERSIST-01 (обязательны `--domain` и `--issuer-domain-name`). `--agree-tos` (по умолчанию `false`) разрешает регистрацию аккаунта, если для этого ключа его нет |
+| `finalize` | Финализация заказа с новым CSR (обязательны `--finalize-url` и `--key-output`; `--cert-key-algorithm`, `--key-password`/`--key-password-file`, `--force`) |
 | `poll-order <url>` | Опрос текущего статуса заказа |
 | `download-cert <url>` | Загрузка выпущенного сертификата (`--output`, по умолчанию `certificate.pem`) |
 | `deactivate-account` | Деактивация текущего аккаунта |
-| `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5). `--new-key` обязателен; `--new-key-password`/`--new-key-password-file` шифруют новый ключ |
-| `pre-authorize` | Предварительная авторизация идентификатора перед созданием заказа (RFC 8555 Section 7.4.1) |
+| `key-rollover` | Ротация ключа аккаунта (RFC 8555 Section 7.3.5). `--new-key` обязателен; `--new-key-password`/`--new-key-password-file` шифруют новый ключ; `--agree-tos` (по умолчанию `false`) разрешает регистрацию аккаунта, если для этого ключа его нет |
+| `pre-authorize` | Предварительная авторизация идентификатора перед созданием заказа (RFC 8555 Section 7.4.1; обязателен `--domain`). `--agree-tos` (по умолчанию `false`) разрешает регистрацию аккаунта, если для этого ключа его нет |
 | `renewal-info <path>` | Запрос ACME Renewal Information для сертификата (RFC 9773) |
 | `list-profiles` | Список профилей сертификатов, объявленных ACME-сервером (draft-ietf-acme-profiles-01) |
-| `revoke-cert <path>` | Отзыв сертификата |
+| `revoke-cert <path>` | Отзыв сертификата. `--reason` задаёт код причины по RFC 5280; `--agree-tos` (по умолчанию `false`) разрешает регистрацию аккаунта, если для этого ключа его нет |
 | `run <domains...>` | Запуск полного ACME-процесса от начала до конца |
 
 ### Опции `run`
