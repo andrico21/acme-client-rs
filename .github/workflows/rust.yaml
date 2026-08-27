@@ -50,6 +50,17 @@ jobs:
       - name: Install cargo-vet
         run: cargo install cargo-vet --locked
 
+      # `--locked` reads supply-chain/imports.lock and performs no network I/O,
+      # so a registry outage cannot redden this gate. Refreshing imports is a
+      # deliberate local `cargo vet import` run, never something CI does.
+      #
+      # Mozilla's and Bytecode Alliance's audit sets are absent because those
+      # two reference crates outside our graph (utf8_iter, wit-bindgen), so
+      # importing them forces fresh index.crates.io metadata fetches. Behind a
+      # TLS-intercepting proxy those fail: cargo-vet's rustls trusts only its
+      # compiled-in webpki-roots, ignoring both the system store and
+      # SSL_CERT_FILE, so a re-signed chain is UnknownIssuer no matter how the
+      # host is configured. Import them from an unintercepted network.
       - name: Check supply-chain audits
         run: cargo vet --locked
 
