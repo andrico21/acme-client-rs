@@ -31,8 +31,8 @@
 # armv7-musleabihf cross toolchain. Pinned by multi-arch INDEX digest
 # (amd64/arm64/arm children) — re-resolve the index digest manually when
 # bumping the toolchain.
-FROM docker.io/library/rust:1.96-alpine3.23 AS builder-amd64
-FROM docker.io/library/rust:1.96-alpine3.23 AS builder-arm64
+FROM docker.io/library/rust:1.98-alpine3.23 AS builder-amd64
+FROM docker.io/library/rust:1.98-alpine3.23 AS builder-arm64
 FROM --platform=$BUILDPLATFORM docker.io/messense/rust-musl-cross@sha256:965d005bc457b10afa22dc9211ee8c64beceab156d2d731a028f6d11d3b3e619 AS builder-arm
 
 # The single build stage: exactly one selector above, chosen per platform leg.
@@ -60,8 +60,11 @@ COPY . .
 #
 # TARGETARCH/TARGETVARIANT are auto-populated by BuildKit/buildah per leg.
 # amd64/arm64 build natively (host triple == target triple, std already
-# installed). The arm/v7 leg cross-compiles: `rustup target add` first
-# (the repo-pinned toolchain ships without armv7 std — E0463 otherwise).
+# installed). The arm/v7 leg cross-compiles inside messense/rust-musl-cross,
+# whose baked-in rustc (1.95) is below this crate's rust-version floor, so it
+# installs its own stable toolchain into a private RUSTUP_HOME first — exactly
+# as the armv7 job in release.yaml does — then adds the target, since that
+# toolchain ships without armv7 std (E0463 otherwise).
 # `--target` stays mandatory for the proc-macro flag scoping above.
 #
 # armv7 hardening omits PIE deliberately: `-C relocation-model=pie` silently
@@ -75,8 +78,11 @@ RUN case "$TARGETARCH" in \
              HARDENING="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" ;; \
       arm)   if [ "$TARGETVARIANT" != "v7" ]; then echo "unsupported arm variant: '${TARGETVARIANT}' (only v7)" >&2; exit 1; fi; \
              RUST_TARGET=armv7-unknown-linux-musleabihf; \
-             HARDENING="-C target-feature=+crt-static -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"; \
-             rustup target add "$RUST_TARGET" ;; \
+              HARDENING="-C target-feature=+crt-static -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"; \
+              export RUSTUP_HOME=/tmp/rustup; \
+              rustup toolchain install stable --profile minimal; \
+              rustup default stable; \
+              rustup target add "$RUST_TARGET" ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
  && export "CARGO_TARGET_$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS=$HARDENING" \
