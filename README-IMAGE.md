@@ -948,6 +948,8 @@ The image already declares `TZ=UTC` and `RUST_LOG=info`, and documents (commente
 | `ACME_NEW_KEY_PASSWORD` / `ACME_NEW_KEY_PASSWORD_FILE` | New account key password (for `key-rollover`) |
 | `ACME_EAB_KID` / `ACME_EAB_HMAC_KEY` | EAB Key ID / HMAC key (base64url) |
 | `ACME_PROFILE` | Certificate profile (draft-ietf-acme-profiles-01) |
+| `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING` | Generate the account key if it does not exist, then proceed (alternative to `--generate-account-key-if-missing`) |
+| `ACME_ACCOUNT_KEY_ALGORITHM` | Algorithm for the auto-generated account key (alternative to `--account-key-algorithm`) |
 
 ### Secrets
 

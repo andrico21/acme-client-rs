@@ -119,6 +119,15 @@ jobs:
       - name: Test-script output-safety lint
         run: bash tests/lint-output-safety.sh
 
+      # Documentation drifts silently because nothing executes it. Every defect
+      # this caught while preparing 2.4.0 was one of the three shipped documents
+      # falling behind the binary — most often README.RUS.md or the Docker Hub
+      # description, updated later than README.md or not at all.
+      - name: Documentation consistency lint
+        run: |
+          cargo build --quiet
+          ACME_BIN=target/debug/acme-client-rs python3 tests/lint-docs.py
+
   build-linux:
     name: Build & Test (Linux)
     runs-on: ubuntu-24.04
