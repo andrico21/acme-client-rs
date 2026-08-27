@@ -344,3 +344,67 @@ pub(crate) async fn cmd_download_cert(cli: &Cli, url: &str, output: &Path) -> Re
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::cmd_list_profiles;
+    use crate::cli::Cli;
+    use crate::test_support::{Route, spawn_mock};
+
+    /// Directory whose profile description carries the exact payload that
+    /// reached a real terminal in the E1 audit repro.
+    fn hostile_directory(port: u16) -> Vec<u8> {
+        let base = format!("http://127.0.0.1:{port}");
+        serde_json::to_vec(&serde_json::json!({
+            "newNonce": format!("{base}/n"),
+            "newAccount": format!("{base}/a"),
+            "newOrder": format!("{base}/o"),
+            "revokeCert": format!("{base}/r"),
+            "keyChange": format!("{base}/k"),
+            "meta": { "profiles": { "tlsserver": "\u{1b}[2J\u{1b}[31mSPOOFED\u{1b}[0m\rOVERWRITE\u{7}" } },
+        }))
+        .unwrap_or_default()
+    }
+
+    // The end-to-end E1 lock: previously only provable by running the binary
+    // by hand, because `outln!` wrote straight to the process stdout.
+    #[tokio::test]
+    async fn e1_list_profiles_scrubs_hostile_directory_text() -> anyhow::Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        spawn_mock(
+            listener,
+            vec![Route {
+                method: "GET",
+                path_prefix: "/directory",
+                status_line: "HTTP/1.1 200 OK",
+                extra_headers: vec![("content-type".into(), "application/json".into())],
+                body: hostile_directory(port),
+            }],
+        );
+
+        let directory = format!("http://127.0.0.1:{port}/directory");
+        let cli = <Cli as clap::Parser>::try_parse_from([
+            "acme-client-rs",
+            "--insecure",
+            "--directory",
+            &directory,
+            "list-profiles",
+        ])?;
+
+        let (result, out) =
+            crate::output::capture_async(|| async { cmd_list_profiles(&cli).await }).await;
+        result?;
+
+        assert!(
+            !out.bytes().any(|b| (b < 0x20 && b != b'\n') || b == 0x7f),
+            "no terminal-steering byte may reach stdout: {out:?}"
+        );
+        assert!(out.contains("SPOOFED"), "printable text survives: {out:?}");
+        assert!(
+            out.contains("tlsserver"),
+            "the profile is still listed: {out:?}"
+        );
+        Ok(())
+    }
+}

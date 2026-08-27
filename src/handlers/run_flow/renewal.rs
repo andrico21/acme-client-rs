@@ -703,6 +703,232 @@ mod tests {
         assert!(matches!(check(&mut ctx).await?, RenewalDecision::Skip));
         Ok(())
     }
+
+    // ── Operator-facing output of the decision ──────────────────────────
+    //
+    // `--silent` and `--output-format json` gate every `outln!` on this path.
+    // Asserting the captured text is the only way to pin those guards.
+
+    type Sans = std::collections::BTreeSet<String>;
+
+    fn mismatch_output(flags: &[&str]) -> Result<(RenewalDecision, String)> {
+        let t = TestCtx::new(flags)?;
+        let ctx = t.ctx()?;
+        let cert_sans: Sans = ["old.example".to_owned()].into();
+        let requested: Sans = ["example.com".to_owned()].into();
+        Ok(crate::output::capture(|| {
+            decide_domain_mismatch(
+                &ctx,
+                &cert_sans,
+                &requested,
+                &["example.com"],
+                &["old.example"],
+            )
+        }))
+    }
+
+    #[test]
+    fn domain_mismatch_output_honours_silent_and_output_format() -> Result<()> {
+        let (decision, out) = mismatch_output(&[])?;
+        assert!(matches!(decision, RenewalDecision::Skip));
+        assert!(out.contains("Domain mismatch"), "default prints: {out:?}");
+
+        let (_, out) = mismatch_output(&["--silent"])?;
+        assert!(out.is_empty(), "--silent prints nothing: {out:?}");
+
+        let (decision, out) = mismatch_output(&["--reissue-on-mismatch"])?;
+        assert!(matches!(decision, RenewalDecision::Reissue));
+        assert!(out.contains("reissuing"), "{out:?}");
+
+        let (_, out) = mismatch_output(&["--reissue-on-mismatch", "--silent"])?;
+        assert!(
+            out.is_empty(),
+            "--silent prints nothing on reissue: {out:?}"
+        );
+
+        let (_, out) = mismatch_output(&["--output-format", "json"])?;
+        assert!(out.contains(r#""reason":"domain_mismatch""#), "{out:?}");
+        assert!(
+            !out.contains("Domain mismatch:"),
+            "json mode drops prose: {out:?}"
+        );
+        Ok(())
+    }
+
+    async fn days_output(
+        remaining: i64,
+        flags: &[&str],
+    ) -> Result<(Option<RenewalDecision>, String)> {
+        let mut argv: Vec<&str> = vec!["--days", "30"];
+        argv.extend_from_slice(flags);
+        let t = TestCtx::new(&argv)?;
+        write_cert(&t.cert_path(), &["example.com"], remaining)?;
+        let ctx = t.ctx()?;
+        let (res, out) =
+            crate::output::capture_async(|| async { check_days_threshold(&ctx).await }).await;
+        Ok((res?, out))
+    }
+
+    #[tokio::test]
+    async fn days_threshold_output_honours_silent_and_output_format() -> Result<()> {
+        let (_, out) = days_output(60, &[]).await?;
+        assert!(
+            out.contains("days remaining"),
+            "skip prints in text: {out:?}"
+        );
+
+        let (_, out) = days_output(60, &["--silent"]).await?;
+        assert!(out.is_empty(), "skip is silent under --silent: {out:?}");
+
+        let (_, out) = days_output(60, &["--output-format", "json"]).await?;
+        assert!(
+            out.contains(r#""reason":"days""#),
+            "skip emits JSON: {out:?}"
+        );
+
+        let (_, out) = days_output(60, &["--output-format", "json", "--silent"]).await?;
+        assert!(out.is_empty(), "--silent beats json: {out:?}");
+
+        let (_, out) = days_output(10, &[]).await?;
+        assert!(out.contains("renewing"), "renew prints progress: {out:?}");
+
+        // The renew branch is deliberately text-only: `cmd_run` continues to
+        // issuance and `finalize` emits the terminal JSON result. Progress JSON
+        // here would put two objects on stdout.
+        let (_, out) = days_output(10, &["--output-format", "json"]).await?;
+        assert!(out.is_empty(), "renew emits no progress JSON: {out:?}");
+
+        let (_, out) = days_output(10, &["--silent"]).await?;
+        assert!(out.is_empty(), "renew is silent under --silent: {out:?}");
+        Ok(())
+    }
+
+    fn ari_output(
+        window_bounds: (&str, &str),
+        flags: &[&str],
+        der: &[u8],
+    ) -> Result<(Option<RenewalDecision>, String)> {
+        let mut argv: Vec<&str> = vec!["--ari"];
+        argv.extend_from_slice(flags);
+        let t = TestCtx::new(&argv)?;
+        let mut ctx = t.ctx()?;
+        let info = window(window_bounds.0, window_bounds.1)?;
+        Ok(crate::output::capture(|| {
+            apply_ari_info(&mut ctx, &info, der)
+        }))
+    }
+
+    #[test]
+    fn ari_output_honours_silent_and_output_format() -> Result<()> {
+        let der = leaf_der_with_aki()?;
+        let future = ("2099-01-01T00:00:00Z", "2099-01-15T00:00:00Z");
+        let past = ("2000-01-01T00:00:00Z", "2000-01-15T00:00:00Z");
+
+        let (_, out) = ari_output(future, &[], &der)?;
+        assert!(
+            out.contains("skipping renewal"),
+            "skip prints in text: {out:?}"
+        );
+
+        let (_, out) = ari_output(future, &["--silent"], &der)?;
+        assert!(out.is_empty(), "skip is silent under --silent: {out:?}");
+
+        let (_, out) = ari_output(future, &["--output-format", "json"], &der)?;
+        assert!(
+            out.contains(r#""reason":"ari""#),
+            "skip emits JSON: {out:?}"
+        );
+
+        let (_, out) = ari_output(past, &[], &der)?;
+        assert!(out.contains("renewing"), "renew prints progress: {out:?}");
+
+        // Same rationale as the days branch: terminal JSON comes from finalize.
+        let (_, out) = ari_output(past, &["--output-format", "json"], &der)?;
+        assert!(out.is_empty(), "renew emits no progress JSON: {out:?}");
+
+        let (_, out) = ari_output(past, &["--silent"], &der)?;
+        assert!(out.is_empty(), "renew is silent under --silent: {out:?}");
+        Ok(())
+    }
+
+    // ── ARI against a live directory ────────────────────────────────────
+
+    fn write_cert_with_aki(path: &std::path::Path, days: i64) -> Result<()> {
+        use rcgen::{
+            BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair, PKCS_ECDSA_P256_SHA256,
+        };
+        let issuer_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut issuer_params = CertificateParams::new(vec!["Test CA".to_owned()])?;
+        issuer_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let issuer = Issuer::new(issuer_params, issuer_key);
+
+        let leaf_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256)?;
+        let mut leaf_params = CertificateParams::new(vec!["example.com".to_owned()])?;
+        leaf_params.use_authority_key_identifier_extension = true;
+        leaf_params.not_after =
+            OffsetDateTime::now_utc() + time::Duration::days(days) + time::Duration::hours(12);
+        std::fs::write(path, leaf_params.signed_by(&leaf_key, &issuer)?.pem())?;
+        Ok(())
+    }
+
+    // Deliberately no --days: the ARI decision has to stand on its own, so a
+    // mutant that short-circuits the ARI path falls through to `Renew` instead
+    // of being masked by the days fallback.
+    #[tokio::test]
+    async fn ari_skip_requires_the_directory_and_renewal_info_round_trip() -> Result<()> {
+        use crate::test_support::{Route, collect_captured, spawn_mock};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let base = format!("http://127.0.0.1:{port}");
+        let directory = serde_json::to_vec(&serde_json::json!({
+            "newNonce": format!("{base}/n"),
+            "newAccount": format!("{base}/a"),
+            "newOrder": format!("{base}/o"),
+            "revokeCert": format!("{base}/r"),
+            "keyChange": format!("{base}/k"),
+            "renewalInfo": format!("{base}/renewalInfo"),
+        }))?;
+
+        let captured = spawn_mock(
+            listener,
+            vec![
+                Route {
+                    method: "GET",
+                    path_prefix: "/directory",
+                    status_line: "HTTP/1.1 200 OK",
+                    extra_headers: vec![("content-type".into(), "application/json".into())],
+                    body: directory,
+                },
+                Route {
+                    method: "GET",
+                    path_prefix: "/renewalInfo/",
+                    status_line: "HTTP/1.1 200 OK",
+                    extra_headers: vec![("content-type".into(), "application/json".into())],
+                    body: br#"{"suggestedWindow":{"start":"2099-01-01T00:00:00Z","end":"2099-01-15T00:00:00Z"}}"#
+                        .to_vec(),
+                },
+            ],
+        );
+
+        let dir_url = format!("{base}/directory");
+        let t = TestCtx::new(&["--ari", "--insecure", "--directory", &dir_url])?;
+        write_cert_with_aki(&t.cert_path(), 60)?;
+        let mut ctx = t.ctx()?;
+
+        assert!(
+            matches!(check(&mut ctx).await?, RenewalDecision::Skip),
+            "a future ARI window must skip renewal"
+        );
+
+        let requests = collect_captured(&captured)?;
+        assert!(
+            requests.iter().any(|r| r.path.starts_with("/renewalInfo/")),
+            "the ARI endpoint must actually be queried: {:?}",
+            requests.iter().map(|r| &r.path).collect::<Vec<_>>()
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]

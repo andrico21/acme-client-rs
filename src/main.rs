@@ -22,6 +22,8 @@ mod jws;
 mod output;
 mod run_dispatch;
 mod sanitize;
+#[cfg(test)]
+mod test_support;
 mod types;
 
 use anyhow::{Context, Result};

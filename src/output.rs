@@ -19,6 +19,8 @@
 
 #![allow(clippy::print_stdout)]
 
+#[cfg(test)]
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Process-global suppression flag for all user-facing stdout.
@@ -54,32 +56,43 @@ pub(crate) fn stdout_dead() -> bool {
 /// and ignoring every other error.
 ///
 /// In debug builds this asserts the rendered text is terminal-safe, so a sink
-/// that forgets to scrub CA-supplied bytes fails loudly in tests. Compiled out
-/// entirely in release, where the fix belongs at the source sink instead.
+/// that forgets to scrub CA-supplied bytes fails loudly in tests. Under `cfg(test)`
+/// a thread-local capture buffer, when installed, receives the text instead of
+/// stdout. Release builds outside tests take neither path.
 #[doc(hidden)]
 pub(crate) fn __write(args: std::fmt::Arguments<'_>, newline: bool) {
     if is_silent() || stdout_dead() {
         return;
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(not(any(debug_assertions, test)))]
+    write_args(args, newline);
+
+    #[cfg(any(debug_assertions, test))]
     {
         // Rendered once and reused: `Display` impls may have side effects, so
         // formatting twice would not be semantics-preserving.
         let rendered = args.to_string();
+
+        #[cfg(debug_assertions)]
         debug_assert!(
             crate::sanitize::is_terminal_safe(&rendered),
             "terminal-unsafe bytes reached the stdout sink; scrub untrusted \
              text at its source (see crate::sanitize)"
         );
+
+        // Early return, never fall through: a captured write must not also
+        // reach the real stdout.
+        #[cfg(test)]
+        if capture::push(&rendered, newline) {
+            return;
+        }
+
         write_rendered(&rendered, newline);
     }
-
-    #[cfg(not(debug_assertions))]
-    write_args(args, newline);
 }
 
-#[cfg(debug_assertions)]
+#[cfg(any(debug_assertions, test))]
 fn write_rendered(rendered: &str, newline: bool) {
     use std::io::Write as _;
     let stdout = std::io::stdout();
@@ -91,7 +104,7 @@ fn write_rendered(rendered: &str, newline: bool) {
     });
 }
 
-#[cfg(not(debug_assertions))]
+#[cfg(not(any(debug_assertions, test)))]
 fn write_args(args: std::fmt::Arguments<'_>, newline: bool) {
     use std::io::Write as _;
     let stdout = std::io::stdout();
@@ -109,6 +122,67 @@ fn latch_broken_pipe(res: std::io::Result<()>) {
     {
         STDOUT_DEAD.store(true, Ordering::Relaxed);
     }
+}
+
+/// Thread-local redirection of `out!` / `outln!` for tests.
+///
+/// Thread-local rather than process-global because cargo runs tests on parallel
+/// threads and a shared buffer would interleave. The consequence is that output
+/// emitted from a `tokio::spawn`ed task is **not** captured — only work driven
+/// directly on the calling thread.
+#[cfg(test)]
+mod capture {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static BUFFER: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn install() {
+        BUFFER.with(|b| *b.borrow_mut() = Some(String::new()));
+    }
+
+    pub(super) fn take() -> String {
+        BUFFER.with(|b| b.borrow_mut().take().unwrap_or_default())
+    }
+
+    /// Appends when a buffer is installed; reports whether it consumed the write.
+    pub(super) fn push(rendered: &str, newline: bool) -> bool {
+        BUFFER.with(|b| {
+            let mut slot = b.borrow_mut();
+            let Some(buf) = slot.as_mut() else {
+                return false;
+            };
+            buf.push_str(rendered);
+            if newline {
+                buf.push('\n');
+            }
+            true
+        })
+    }
+}
+
+/// Run `body`, returning its value alongside everything it printed.
+#[cfg(test)]
+pub(crate) fn capture<T>(body: impl FnOnce() -> T) -> (T, String) {
+    capture::install();
+    let value = body();
+    (value, capture::take())
+}
+
+/// Async counterpart of [`capture`].
+///
+/// `#[tokio::test]` already runs inside a runtime, so a nested `block_on` is
+/// not an option; the future is awaited directly on the capturing thread.
+#[cfg(test)]
+pub(crate) async fn capture_async<F, Fut, T>(body: F) -> (T, String)
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = T>,
+{
+    capture::install();
+    let value = body().await;
+    (value, capture::take())
 }
 
 /// Writes a line to stdout unless `--silent` is active or stdout is a closed
