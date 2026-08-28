@@ -39,8 +39,12 @@ jobs:
 
       # Accepted advisories are declared in .cargo/audit.toml, which mirrors the
       # ignore list in deny.toml. Keep both files in sync when revisiting.
+      # `--deny yanked` because plain `cargo audit` reports a yanked crate as a
+      # warning and still exits 0, which is how chacha20 0.10.1 reached the
+      # 2.4.0 lockfile unnoticed. A yanked release is one its author withdrew,
+      # so it should block rather than inform.
       - name: Audit RustSec advisories
-        run: cargo audit
+        run: cargo audit --deny yanked
 
       # RUST_GUIDELINES.md §10 lists `cargo vet` as a control, not an advisory:
       # it answers "has a human looked at this code?", which `cargo audit`
