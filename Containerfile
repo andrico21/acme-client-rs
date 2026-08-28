@@ -78,11 +78,11 @@ RUN case "$TARGETARCH" in \
              HARDENING="-C target-feature=+crt-static -C relocation-model=pie -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack" ;; \
       arm)   if [ "$TARGETVARIANT" != "v7" ]; then echo "unsupported arm variant: '${TARGETVARIANT}' (only v7)" >&2; exit 1; fi; \
              RUST_TARGET=armv7-unknown-linux-musleabihf; \
-              HARDENING="-C target-feature=+crt-static -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"; \
-              export RUSTUP_HOME=/tmp/rustup; \
-              rustup toolchain install stable --profile minimal; \
-              rustup default stable; \
-              rustup target add "$RUST_TARGET" ;; \
+             HARDENING="-C target-feature=+crt-static -C link-args=-Wl,-z,relro,-z,now,-z,noexecstack"; \
+             export RUSTUP_HOME=/tmp/rustup; \
+             rustup toolchain install stable --profile minimal; \
+             rustup default stable; \
+             rustup target add "$RUST_TARGET" ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac \
  && export "CARGO_TARGET_$(printf '%s' "$RUST_TARGET" | tr '[:lower:]-' '[:upper:]_')_RUSTFLAGS=$HARDENING" \
