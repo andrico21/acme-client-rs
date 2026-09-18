@@ -10,6 +10,19 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-09-18
+
+### Security
+
+- **Locked `rustls` bumped to 0.23.45 for RUSTSEC-2026-0285.** The previously
+  locked 0.23.43 accepted TLS 1.3 handshake messages sent at the wrong
+  encryption level when they followed a key-changing message in the same record
+  ([GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc)),
+  so a peer could send messages that RFC 8446 §5.1 requires to be rejected. The
+  handshake transcript stays authenticated, so a network-position attacker
+  cannot alter or complete a handshake. 0.23.45 is the first patched release;
+  the bump is lockfile-only, with no source changes.
+
 ## [2.4.0] - 2026-08-27
 
 ### Security
@@ -238,7 +251,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...HEAD
+[2.4.1]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...2.4.1
 [2.4.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...2.4.0
 [2.3.4]: https://github.com/andrico21/acme-client-rs/compare/2.3.3...2.3.4
 [2.2.5]: https://github.com/andrico21/acme-client-rs/compare/2.2.4...2.2.5
