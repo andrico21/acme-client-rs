@@ -1039,7 +1039,7 @@ docker run --rm --network <compose-network> -v ./acme-data:/data andrico21/acme-
 | `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (self-signed CAs like Pebble). Implies `--allow-private-network`. |
 | `--connect-timeout <SECONDS>` | | `ACME_CONNECT_TIMEOUT` | `15` | HTTP connect timeout (TCP + TLS handshake). Whole-request timeout is fixed at 120s. |
 | `--allow-private-network` | | `ACME_ALLOW_PRIVATE_NETWORK` | `false` | Allow contacting private/loopback/link-local IPs. Default blocks these to prevent SSRF. Implied by `--insecure`. |
-| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Downgrade hook-script ownership/permission violations from hard errors to warnings. |
+| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Downgrade hook-script ownership/permission violations from hard errors to warnings. Default requires the hook, and every directory above it up to `/`, to be owned by the container's user (UID 65532) or root and not group/world-writable — relevant if you bind-mount a hook script from the host. |
 | `--dns-check-mode <MODE>` | | `ACME_DNS_CHECK_MODE` | `authoritative` | DNS-01 propagation resolver: `authoritative`, `cached`, or `system`. |
 | `--dns-check-dnssec` | | `ACME_DNS_CHECK_DNSSEC` | `false` | Enable DNSSEC validation on DNS-01 propagation checks. |
 | `--silent` | | - | `false` | Suppress all stdout; only the exit code indicates success/failure. |

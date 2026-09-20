@@ -6,8 +6,14 @@
 //! locations. A hook script that is writable by an unprivileged user becomes a
 //! privilege-escalation primitive against the user running the client.
 //!
-//! Each configured hook path is checked for four properties before any hook is
-//! executed:
+//! Each configured hook path is checked for five properties before any hook is
+//! executed. Properties 4 and 5 (the ancestor walk) are checked on *both* the
+//! path exactly as configured and its `std::fs::canonicalize`-resolved
+//! target, since either chain can be the one an attacker controls: the
+//! lexical parent of the configured path is what must be controlled to swap
+//! that path's own entry (whether it is a plain file, a symlink, or a hard
+//! link), while a symlinked *ancestor component* would otherwise hide its
+//! real subtree from a purely lexical walk:
 //!
 //! 1. **Absolute path** — relative paths resolve against the process cwd, which
 //!    for cron/systemd may be `/` or some other location the operator did not
@@ -19,9 +25,15 @@
 //! 3. **File is not group/world-writable** — `mode & 0o022 == 0`. A writable
 //!    bit lets any group member (or anyone, for world-writable) replace the
 //!    script contents in place.
-//! 4. **Every ancestor directory up to `/` is not group/world-writable** —
-//!    even if the file itself is locked down, a writable parent allows
-//!    `unlink(2) + rename(2)` to swap in an attacker-controlled file.
+//! 4. **Every ancestor directory up to `/` is owned by the effective user or
+//!    root** — an ancestor owned by anyone else can `unlink(2) + rename(2)`
+//!    to swap in an attacker-controlled file, regardless of that directory's
+//!    mode.
+//! 5. **Every ancestor directory up to `/` is not group/world-writable**
+//!    (sticky directories such as the standard `/tmp` = `1777` are exempt —
+//!    POSIX restricts unlink/rename there to the file's owner, the
+//!    directory's owner, or root) — even a correctly-owned ancestor permits
+//!    the same swap if it is writable by anyone else.
 //!
 //! On non-Unix targets all checks are skipped (Windows' permission model is
 //! DACL-based and does not map onto these POSIX bits); a single advisory is
@@ -85,7 +97,6 @@ fn windows_advisory_once() {
 fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
     use nix::sys::stat::stat;
     use nix::unistd::{Uid, geteuid};
-    use std::os::unix::ffi::OsStrExt;
 
     let mut violations: Vec<String> = Vec::new();
 
@@ -100,7 +111,20 @@ fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
         return Ok(HookCheck::Violations(violations));
     }
 
-    let st = stat(path).with_context(|| format!("stat({}) failed", path.display()))?;
+    // Resolve symlinks so the ancestor walk can also reach a symlinked
+    // ancestor *component*'s real target (an attacker-owned subtree hidden
+    // behind, e.g., /etc/acme/hook.sh -> /opt/deploy/dns.sh would otherwise
+    // never have /opt/deploy inspected). This does NOT replace the lexical
+    // walk below over `path` itself: whoever controls the directory holding
+    // the `path` entry — symlink, hardlink, or plain file — can swap it
+    // regardless of where it resolves to, and that directory is a lexical
+    // ancestor of `path`, not of `resolved`. Both chains are walked; they
+    // coincide (and the second walk is a cheap no-op re-check) whenever
+    // `path` involves no symlink at all.
+    let resolved = std::fs::canonicalize(path)
+        .with_context(|| format!("failed to resolve hook path {}", path.display()))?;
+
+    let st = stat(&resolved).with_context(|| format!("stat({}) failed", resolved.display()))?;
     let euid = geteuid();
     let owner = Uid::from_raw(st.st_uid);
 
@@ -127,36 +151,9 @@ fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
         ));
     }
 
-    // Walk every ancestor up to `/`. A writable directory permits the file to
-    // be swapped (unlink + create) regardless of the file's own mode.
-    let mut current = path.parent();
-    while let Some(dir) = current {
-        // Skip empty path segment that .parent() can yield on some inputs.
-        if dir.as_os_str().as_bytes().is_empty() {
-            break;
-        }
-        let dst = stat(dir).with_context(|| format!("stat({}) failed", dir.display()))?;
-        let dmode = dst.st_mode & 0o7777;
-        // World/group-writable directories normally allow an attacker to swap
-        // the hook script via unlink+rename. POSIX, however, gives the sticky
-        // bit (0o1000) a precise meaning: in a sticky directory only the
-        // file's owner, the directory's owner, or root may unlink or rename a
-        // file. That is exactly the swap attack we are guarding against, so a
-        // sticky world/group-writable directory (the standard /tmp = 1777)
-        // does NOT in fact give the attacker unlink/rename capability and
-        // must not be flagged. Direct in-place writes by group members are
-        // already prevented by the file-permission check at line 105 above.
-        let sticky = dmode & 0o1000 != 0;
-        if dmode & 0o022 != 0 && !sticky {
-            violations.push(format!(
-                "directory {} above hook {} has insecure permissions {:#o}; an \
-                 unprivileged user can replace the hook script via unlink+rename",
-                dir.display(),
-                path.display(),
-                dmode,
-            ));
-        }
-        current = dir.parent();
+    walk_ancestors(path, path, euid, &mut violations)?;
+    if resolved != path {
+        walk_ancestors(&resolved, path, euid, &mut violations)?;
     }
 
     if violations.is_empty() {
@@ -164,6 +161,97 @@ fn check_hook_path_unix(path: &Path) -> Result<HookCheck> {
     } else {
         Ok(HookCheck::Violations(violations))
     }
+}
+
+/// Walk every ancestor of `from` up to `/`, checking ownership and
+/// group/world write bits. `hook` (only used in messages) is the path as
+/// originally configured, which may differ from `from` when this is the
+/// resolved-target chain rather than the lexical one.
+#[cfg(unix)]
+fn walk_ancestors(
+    from: &Path,
+    hook: &Path,
+    euid: nix::unistd::Uid,
+    violations: &mut Vec<String>,
+) -> Result<()> {
+    use nix::sys::stat::stat;
+    use nix::unistd::Uid;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut current = from.parent();
+    while let Some(dir) = current {
+        // Skip empty path segment that .parent() can yield on some inputs.
+        if dir.as_os_str().as_bytes().is_empty() {
+            break;
+        }
+        let dst = stat(dir).with_context(|| format!("stat({}) failed", dir.display()))?;
+        let dmode = dst.st_mode & 0o7777;
+        let dir_owner = Uid::from_raw(dst.st_uid);
+        for fault in ancestor_faults(dir_owner, dmode, euid) {
+            violations.push(fault.describe(dir, hook));
+        }
+        current = dir.parent();
+    }
+    Ok(())
+}
+
+/// A directory can be both foreign-owned and world-writable at once, so
+/// [`ancestor_faults`] returns a `Vec`, not an `Option`.
+#[derive(Debug, PartialEq)]
+enum AncestorFault {
+    /// Owned by neither the current effective user nor root. That owner —
+    /// not merely anyone able to exploit a group/world write bit — can
+    /// unlink+rename the directory's contents regardless of its mode.
+    ForeignOwner(u32),
+    /// Group- or world-writable and not sticky-exempt.
+    InsecurePermissions(nix::sys::stat::mode_t),
+}
+
+impl AncestorFault {
+    fn describe(&self, dir: &Path, hook: &Path) -> String {
+        match self {
+            Self::ForeignOwner(uid) => format!(
+                "directory {} above hook {} is owned by uid {uid}, not the current user or \
+                 root; its owner can replace the hook script via unlink+rename regardless of \
+                 its mode",
+                dir.display(),
+                hook.display(),
+            ),
+            Self::InsecurePermissions(dmode) => format!(
+                "directory {} above hook {} has insecure permissions {:#o}; an \
+                 unprivileged user can replace the hook script via unlink+rename",
+                dir.display(),
+                hook.display(),
+                dmode,
+            ),
+        }
+    }
+}
+
+/// Pure predicate — no syscalls, no root needed to unit-test — for what is
+/// wrong, if anything, with one ancestor directory of a hook path.
+fn ancestor_faults(
+    dir_owner: nix::unistd::Uid,
+    dmode: nix::sys::stat::mode_t,
+    euid: nix::unistd::Uid,
+) -> Vec<AncestorFault> {
+    let mut faults = Vec::new();
+    if dir_owner != euid && !dir_owner.is_root() {
+        faults.push(AncestorFault::ForeignOwner(dir_owner.as_raw()));
+    }
+    // World/group-writable directories normally allow an attacker to swap
+    // the hook script via unlink+rename. POSIX, however, gives the sticky
+    // bit (0o1000) a precise meaning: in a sticky directory only the
+    // file's owner, the directory's owner, or root may unlink or rename a
+    // file. That is exactly the swap attack being guarded against, so a
+    // sticky world/group-writable directory (the standard /tmp = 1777)
+    // does NOT in fact give the attacker unlink/rename capability and
+    // must not be flagged on mode alone.
+    let sticky = dmode & 0o1000 != 0;
+    if dmode & 0o022 != 0 && !sticky {
+        faults.push(AncestorFault::InsecurePermissions(dmode));
+    }
+    faults
 }
 
 /// Validate every configured hook. In strict mode (the default) any violation
@@ -208,6 +296,7 @@ pub(crate) fn validate_all_hooks(
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+    use nix::unistd::Uid;
     use std::fs::{File, Permissions, set_permissions};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
@@ -285,6 +374,140 @@ mod tests {
         // Restore mode so tempdir can clean up.
         set_permissions(dir.path(), Permissions::from_mode(0o755))?;
         Ok(())
+    }
+
+    // §4.1: a symlinked *leaf* hides its real parent directory from a purely
+    // lexical ancestor walk. The symlink must be on the final component, not
+    // a directory component — stat(2) already follows symlinks for the file
+    // check, so a symlinked ancestor is dereferenced and its mode inspected
+    // regardless; only a symlinked leaf lets a directory component skip the
+    // walk entirely.
+    #[test]
+    fn symlinked_hook_walks_the_resolved_ancestor_not_the_link_parent() -> Result<()> {
+        let tmp = tempdir()?;
+
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir)?;
+        let real_hook = real_dir.join("hook.sh");
+        write_hook(&real_hook, 0o755)?;
+
+        let link_dir = tmp.path().join("link");
+        std::fs::create_dir(&link_dir)?;
+        set_permissions(&link_dir, Permissions::from_mode(0o755))?;
+        let link_hook = link_dir.join("hook.sh");
+        std::os::unix::fs::symlink(&real_hook, &link_hook)?;
+
+        // `real/` world-writable and non-sticky: only visible to the walk
+        // once the symlink is resolved.
+        set_permissions(&real_dir, Permissions::from_mode(0o777))?;
+        match check_hook_path(&link_hook)? {
+            HookCheck::Violations(vs) => {
+                let real_dir_display = real_dir.display().to_string();
+                assert!(
+                    vs.iter().any(|v| v.contains(&real_dir_display)),
+                    "expected a violation naming the resolved ancestor {real_dir:?}, got {vs:?}",
+                );
+            }
+            HookCheck::Ok => {
+                panic!("world-writable resolved ancestor must be caught via the symlinked leaf")
+            }
+        }
+
+        // Non-regression: canonicalization alone must not over-reject a safe
+        // resolved ancestor.
+        set_permissions(&real_dir, Permissions::from_mode(0o755))?;
+        assert!(
+            matches!(check_hook_path(&link_hook)?, HookCheck::Ok),
+            "safe resolved ancestor must not be flagged merely because the leaf is a symlink",
+        );
+        Ok(())
+    }
+
+    // The inverse of the test above, and the actual historical attack this
+    // whole feature exists to close (fix-hook-cleanup-revalidation.md §5):
+    // the attacker controls the directory holding the hook *entry* itself
+    // (here, a symlink one could equally replace with a hardlink or a plain
+    // file) and points it at some other, perfectly safe target — the swap
+    // capability lives in the entry's own lexical parent, not in wherever it
+    // happens to resolve to. If the walk only followed the resolved chain
+    // (as an earlier, incomplete version of this fix did), this directory
+    // would never be inspected at all and this would wrongly return `Ok`.
+    #[test]
+    fn symlinked_hook_also_walks_the_links_own_lexical_parent() -> Result<()> {
+        let tmp = tempdir()?;
+
+        let real_dir = tmp.path().join("real");
+        std::fs::create_dir(&real_dir)?;
+        set_permissions(&real_dir, Permissions::from_mode(0o755))?;
+        let real_hook = real_dir.join("hook.sh");
+        write_hook(&real_hook, 0o755)?;
+
+        let link_dir = tmp.path().join("link");
+        std::fs::create_dir(&link_dir)?;
+        let link_hook = link_dir.join("hook.sh");
+        std::os::unix::fs::symlink(&real_hook, &link_hook)?;
+
+        // `link/` world-writable and non-sticky: the resolved target is
+        // completely safe, but anyone can still unlink+recreate the symlink
+        // entry itself inside `link/`.
+        set_permissions(&link_dir, Permissions::from_mode(0o777))?;
+        match check_hook_path(&link_hook)? {
+            HookCheck::Violations(vs) => {
+                let link_dir_display = link_dir.display().to_string();
+                assert!(
+                    vs.iter().any(|v| v.contains(&link_dir_display)),
+                    "expected a violation naming the symlink's own lexical parent \
+                     {link_dir:?}, got {vs:?}",
+                );
+            }
+            HookCheck::Ok => panic!(
+                "world-writable lexical parent of a symlinked hook must be caught even \
+                 when the resolved target is entirely safe"
+            ),
+        }
+        set_permissions(&link_dir, Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    // §4.2: the extracted pure predicate, exercised without touching the
+    // filesystem (no root needed).
+    #[test]
+    fn ancestor_faults_predicate_covers_each_boundary() {
+        let euid = nix::unistd::geteuid();
+        let root = Uid::from_raw(0);
+        let foreign = Uid::from_raw(if euid.as_raw() == 65534 { 65533 } else { 65534 });
+        let safe_mode: nix::sys::stat::mode_t = 0o755;
+        let world_writable_non_sticky: nix::sys::stat::mode_t = 0o777;
+        let world_writable_sticky: nix::sys::stat::mode_t = 0o1777;
+
+        assert_eq!(
+            ancestor_faults(foreign, safe_mode, euid),
+            vec![AncestorFault::ForeignOwner(foreign.as_raw())],
+            "foreign owner, safe mode → ForeignOwner only",
+        );
+        assert_eq!(
+            ancestor_faults(root, safe_mode, euid),
+            vec![],
+            "root-owned, safe mode → no fault",
+        );
+        assert_eq!(
+            ancestor_faults(euid, safe_mode, euid),
+            vec![],
+            "self-owned, safe mode → no fault",
+        );
+        assert_eq!(
+            ancestor_faults(euid, world_writable_sticky, euid),
+            vec![],
+            "self-owned, sticky world-writable (/tmp-style 1777) → no fault",
+        );
+        assert_eq!(
+            ancestor_faults(foreign, world_writable_non_sticky, euid),
+            vec![
+                AncestorFault::ForeignOwner(foreign.as_raw()),
+                AncestorFault::InsecurePermissions(world_writable_non_sticky),
+            ],
+            "foreign owner AND world-writable non-sticky → both faults",
+        );
     }
 
     #[test]

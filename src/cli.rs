@@ -145,7 +145,7 @@ pub(crate) struct Cli {
     #[arg(long, global = true, env = "ACME_ALLOW_PRIVATE_NETWORK")]
     pub(crate) allow_private_network: bool,
 
-    /// Downgrade hook-script ownership/permission violations (SEC-13) from hard errors to stderr warnings. Default: refuse to run if any configured hook is not absolute, not owned by current user or root, group/world-writable, or sits in a group/world-writable directory. Set this only if you accept the privilege-escalation risk.
+    /// Downgrade hook-script ownership/permission violations (SEC-13) from hard errors to stderr warnings. Default: refuse to run if any configured hook is not absolute, not owned by current user or root, group/world-writable, or sits under a directory (up to `/`) that is not owned by the current user or root or that is itself group/world-writable. Set this only if you accept the privilege-escalation risk.
     #[arg(long, global = true, env = "ACME_UNSAFE_HOOKS")]
     pub(crate) unsafe_hooks: bool,
 

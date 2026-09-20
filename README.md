@@ -1291,7 +1291,7 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 | `--insecure` | | `ACME_INSECURE` | `false` | Disable TLS certificate verification (for testing with self-signed CAs like Pebble). Implies `--allow-private-network`. |
 | `--connect-timeout <SECONDS>` | | `ACME_CONNECT_TIMEOUT` | `15` | HTTP connect timeout (TCP + TLS handshake) in seconds. The whole-request timeout is fixed at 120s. |
 | `--allow-private-network` | | `ACME_ALLOW_PRIVATE_NETWORK` | `false` | Allow contacting private/loopback/link-local IPs (RFC1918, 127/8, 169.254/16, `::1`, `fc00::/7`, `fe80::/10`). Default blocks these to prevent SSRF. Implied by `--insecure`. Set for internal/on-prem ACME deployments. |
-| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Downgrade hook-script ownership/permission violations from hard errors to stderr warnings. Default refuses to run if any hook is not absolute, not owned by current user/root, or group/world-writable (or sits in such a directory). Set only if you accept the privilege-escalation risk. |
+| `--unsafe-hooks` | | `ACME_UNSAFE_HOOKS` | `false` | Downgrade hook-script ownership/permission violations from hard errors to stderr warnings. Default refuses to run if any hook is not absolute, not owned by current user/root, or group/world-writable, or if any directory above it (up to `/`) is not owned by the current user/root or is itself group/world-writable. Set only if you accept the privilege-escalation risk. |
 | `--dns-check-mode <MODE>` | | `ACME_DNS_CHECK_MODE` | `authoritative` | Resolver strategy for DNS-01 propagation checks: `authoritative` (queries the zone's NS directly, bypasses caches), `cached` (public resolvers 1.1.1.1/8.8.8.8/9.9.9.9), or `system` (host's resolv.conf). |
 | `--dns-check-dnssec` | | `ACME_DNS_CHECK_DNSSEC` | `false` | Enable DNSSEC validation on DNS-01 propagation checks. Off by default (parent-zone DNSSEC misconfig outside your control would cause spurious failures). |
 | `--silent` | | - | `false` | Suppress all stdout output; only exit code indicates success/failure |
@@ -1300,13 +1300,23 @@ Global options can be placed before or after the subcommand.
 
 > **Hook security note:** `--unsafe-hooks` only downgrades *this tool's own*
 > violations to warnings — it does not add protection. The validation above
-> does not yet check that every directory *above* a hook script is owned by
-> the effective uid or root (only that those directories are not group/world-writable).
-> Until that lands, an attacker who owns an ancestor directory of a hook path
-> can still substitute the script between runs even in strict (non-`--unsafe-hooks`)
-> mode; `--unsafe-hooks` does **not** mitigate this. Operators should ensure
-> every directory in a hook's path — not just the script file itself — is
-> owned by the user running `acme-client-rs` or by root.
+> checks that every directory *above* a hook script (up to `/`) is both owned
+> by the effective user or root **and** not group/world-writable (sticky
+> directories such as the standard `/tmp` = `1777` are exempt), and it checks
+> those properties for both the hook path as configured and its
+> symlink-resolved target — so a symlink or hard link cannot be used to point
+> at some other executable without an ancestor directory somewhere in that
+> chain also being owned or writable by an attacker. An ancestor directory
+> owned by anyone else, or writable by anyone else, is a hard error by
+> default — this can be a **breaking change** if a hook lives under a
+> directory owned by a different account than the one running
+> `acme-client-rs`; move the hook or `chown` the directory chain rather than
+> reaching for `--unsafe-hooks`, which does not mitigate the actual risk.
+> The one residual is the unavoidable `stat`→`exec` race inherent to any
+> path-based (rather than fd-based) exec API in safe Rust: the kernel
+> re-resolves the hook path a second time at spawn, a fraction of a second
+> after the last validation. Revalidating immediately before every spawn
+> narrows that window to microseconds but cannot close it without `unsafe`.
 >
 > **Unix-only:** hook ownership/permission validation (`--unsafe-hooks` and
 > the default strict checks alike) is not implemented on Windows; on the
