@@ -177,6 +177,8 @@ pub(crate) fn untrusted_block(body: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
     use super::*;
 
     // ── untrusted_block: behaviour moved verbatim from the former
@@ -392,6 +394,98 @@ mod tests {
             "hostile\u{1b}\rmix"
         )));
         assert!(is_terminal_safe(&untrusted_inline("hostile\u{1b}\rmix")));
+    }
+
+    // ── message-field EscapeGuard: pins a *dependency* property, not our own
+    //    scrubbing. `tracing-subscriber` routes the tracing `message` field
+    //    through its own `EscapeGuard`/`EscapingWriter`, independently of this
+    //    module. The `Cargo.toml` floor bump to "0.3.23" only raises the
+    //    minimum; it does not pin the behavior, since a future 0.3.x could
+    //    still flip the default or feature-gate the guard and still satisfy
+    //    the requirement string. This test makes that assumption enforceable.
+    //    Deliberately routed through a synthetic `tracing::warn!`, not through
+    //    `RenewalInfo::validate_window`: once that sink is sanitized at the
+    //    source, it never emits a raw ESC, so a test through it would pass
+    //    for the wrong reason and stop guarding this property.
+
+    struct SharedBufWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for SharedBufWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone)]
+    struct SharedBufMakeWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedBufMakeWriter {
+        type Writer = SharedBufWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            SharedBufWriter(std::sync::Arc::clone(&self.0))
+        }
+    }
+
+    #[test]
+    fn message_field_escape_guard_scrubs_a_raw_esc_byte() {
+        let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(SharedBufMakeWriter(std::sync::Arc::clone(&buf)))
+            .with_ansi(false)
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!("hostile\u{1b}[31mred\u{1b}[0mtext");
+        });
+
+        let written = buf.lock().expect("lock").clone();
+        let out = String::from_utf8_lossy(&written).into_owned();
+        assert!(
+            !out.contains('\u{1b}'),
+            "raw ESC byte must never reach the writer: {out:?}"
+        );
+        assert!(
+            out.contains("\\x1b"),
+            "EscapeGuard must render ESC as the literal text \\x1b: {out:?}"
+        );
+        assert!(
+            out.contains("hostile") && out.contains("red") && out.contains("text"),
+            "printable text must survive: {out:?}"
+        );
+    }
+
+    // ── RenewalInfo::validate_window: the one CA-text render in the
+    //    error/log-message tier that did not route through this module.
+    //    Constructed here (rather than in `types.rs`) to keep the sanitizer
+    //    contract and its regression test co-located.
+    #[test]
+    fn validate_window_sanitizes_hostile_endpoints_in_the_error_message() {
+        use crate::types::{RenewalInfo, RenewalInfoWindow};
+
+        let info = RenewalInfo {
+            suggested_window: RenewalInfoWindow {
+                start: "not-a-date\u{1b}[31m\ninjected\r".to_owned(),
+                end: "also-bad\u{1b}[0m\tend".to_owned(),
+            },
+            explanation_url: None,
+        };
+
+        let err = info.validate_window().expect_err("garbage dates must fail");
+        let rendered = format!("{err:#}");
+        assert!(
+            !rendered
+                .bytes()
+                .any(|b| (b < 0x20 && b != b' ') || b == 0x7f),
+            "no control bytes may survive into the error message: {rendered:?}"
+        );
+        assert!(
+            !rendered.contains('\n') && !rendered.contains('\r'),
+            "no newlines may survive into the single-line error message: {rendered:?}"
+        );
     }
 }
 

@@ -896,7 +896,14 @@ pub(crate) struct RenewalInfo {
 impl RenewalInfo {
     /// Validate the suggested window per RFC 9773 §4.2: both endpoints MUST
     /// be RFC 3339 timestamps and `end` MUST be strictly after `start`.
+    ///
+    /// Both endpoints are CA-controlled text (RFC 9773's `suggestedWindow` is
+    /// server-supplied), so every interpolation below routes through
+    /// [`crate::sanitize::untrusted_inline`] before reaching a `tracing::warn!`
+    /// or `bail!` message — this was previously the one CA-text render in this
+    /// class of sink that did not.
     pub(crate) fn validate_window(&self) -> Result<()> {
+        use crate::sanitize::untrusted_inline;
         use anyhow::Context as _;
         let start = time::OffsetDateTime::parse(
             &self.suggested_window.start,
@@ -905,7 +912,7 @@ impl RenewalInfo {
         .with_context(|| {
             format!(
                 "ARI suggestedWindow.start is not a valid RFC 3339 timestamp: {}",
-                self.suggested_window.start
+                untrusted_inline(&self.suggested_window.start)
             )
         })?;
         let end = time::OffsetDateTime::parse(
@@ -915,14 +922,14 @@ impl RenewalInfo {
         .with_context(|| {
             format!(
                 "ARI suggestedWindow.end is not a valid RFC 3339 timestamp: {}",
-                self.suggested_window.end
+                untrusted_inline(&self.suggested_window.end)
             )
         })?;
         if end <= start {
             anyhow::bail!(
                 "ARI suggestedWindow violates RFC 9773 §4.2: end ({}) must be strictly after start ({})",
-                self.suggested_window.end,
-                self.suggested_window.start,
+                untrusted_inline(&self.suggested_window.end),
+                untrusted_inline(&self.suggested_window.start),
             );
         }
         Ok(())
