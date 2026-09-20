@@ -54,7 +54,9 @@
 //! down to microseconds, which is the strongest mitigation available to a
 //! pure-safe-Rust binary.
 
-use anyhow::{Context, Result, bail};
+#[cfg(unix)]
+use anyhow::Context;
+use anyhow::{Result, bail};
 use std::path::Path;
 
 /// Outcome of validating a hook path. Callers decide how to act (fail vs warn).
@@ -197,6 +199,7 @@ fn walk_ancestors(
 
 /// A directory can be both foreign-owned and world-writable at once, so
 /// [`ancestor_faults`] returns a `Vec`, not an `Option`.
+#[cfg(unix)]
 #[derive(Debug, PartialEq)]
 enum AncestorFault {
     /// Owned by neither the current effective user nor root. That owner —
@@ -207,6 +210,7 @@ enum AncestorFault {
     InsecurePermissions(nix::sys::stat::mode_t),
 }
 
+#[cfg(unix)]
 impl AncestorFault {
     fn describe(&self, dir: &Path, hook: &Path) -> String {
         match self {
@@ -230,6 +234,7 @@ impl AncestorFault {
 
 /// Pure predicate — no syscalls, no root needed to unit-test — for what is
 /// wrong, if anything, with one ancestor directory of a hook path.
+#[cfg(unix)]
 fn ancestor_faults(
     dir_owner: nix::unistd::Uid,
     dmode: nix::sys::stat::mode_t,
