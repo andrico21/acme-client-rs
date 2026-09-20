@@ -276,10 +276,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let log = tmp.path().join("hook.log");
         let hook = tmp.path().join("hook.sh");
-        std::fs::write(
-            &hook,
-            format!("#!/bin/sh\necho ran >> {}\n", log.display()),
-        )?;
+        std::fs::write(&hook, format!("#!/bin/sh\necho ran >> {}\n", log.display()))?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
 
         let reg = CleanupRegistry::new();
@@ -311,10 +308,7 @@ mod tests {
         let tmp = tempfile::tempdir()?;
         let log = tmp.path().join("hook.log");
         let hook = tmp.path().join("hook.sh");
-        std::fs::write(
-            &hook,
-            format!("#!/bin/sh\necho ran >> {}\n", log.display()),
-        )?;
+        std::fs::write(&hook, format!("#!/bin/sh\necho ran >> {}\n", log.display()))?;
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
 
         let reg = CleanupRegistry::new();
