@@ -297,10 +297,10 @@ fn apply_run(
 
     if let Some((_, sub_matches)) = matches.subcommand() {
         apply_run_subcommand_fields(args, sub_matches, cfg_run, config_mode)?;
+        apply_run_boolean_flags(args, sub_matches, cfg_run, config_mode);
+        apply_run_account_and_persistence(args, sub_matches, cfg_run, config_mode)?;
     }
     apply_run_optionals(args, cfg_run, config_mode);
-    apply_run_boolean_flags(args, cfg_run);
-    apply_run_account_and_persistence(args, matches, cfg_run)?;
     apply_run_secrets(args, cfg_run);
     Ok(())
 }
@@ -418,7 +418,20 @@ fn apply_run_optionals(args: &mut RunArgs, cfg_run: &config::RunConfig, config_m
     }
 }
 
-fn apply_run_boolean_flags(args: &mut RunArgs, cfg_run: &config::RunConfig) {
+// `generate_account_key_if_missing` is the only one of these five booleans
+// documented as a config-mode contract item (README's "Single-command
+// container usage" section tells users to set its env var directly), so it
+// alone is routed through `config_or_env_reset` for a fail-closed env reset
+// in config mode. `pre_authorize`, `ari`, `reissue_on_mismatch`, and
+// `print_cert` are deliberately left on the simpler CLI-or-config-implies-true
+// pattern: converting them too would be unaudited scope creep with its own
+// behavior changes.
+fn apply_run_boolean_flags(
+    args: &mut RunArgs,
+    sub_matches: &clap::ArgMatches,
+    cfg_run: &config::RunConfig,
+    config_mode: bool,
+) {
     if !args.pre_authorize && cfg_run.pre_authorize == Some(true) {
         args.pre_authorize = true;
     }
@@ -431,29 +444,45 @@ fn apply_run_boolean_flags(args: &mut RunArgs, cfg_run: &config::RunConfig) {
     if !args.print_cert && cfg_run.print_cert == Some(true) {
         args.print_cert = true;
     }
-    if !args.generate_account_key_if_missing
-        && cfg_run.generate_account_key_if_missing == Some(true)
-    {
-        args.generate_account_key_if_missing = true;
+    if let Some(v) = config_or_env_reset(
+        sub_matches.value_source("generate_account_key_if_missing"),
+        cfg_run.generate_account_key_if_missing,
+        config_mode,
+        false,
+    ) {
+        args.generate_account_key_if_missing = v;
     }
 }
 
 fn apply_run_account_and_persistence(
     args: &mut RunArgs,
-    matches: &clap::ArgMatches,
+    sub_matches: &clap::ArgMatches,
     cfg_run: &config::RunConfig,
+    config_mode: bool,
 ) -> Result<()> {
-    if let Some((_, sub_matches)) = matches.subcommand()
-        && should_apply_config(sub_matches.value_source("account_key_algorithm"))
-        && let Some(ref v) = cfg_run.account_key_algorithm
-    {
-        args.account_key_algorithm = <crate::jws::KeyAlgorithm as clap::ValueEnum>::from_str(v, true)
-            .map_err(|_| {
+    // NB: this file imports only `anyhow::{Context, Result}` (:29) and does
+    // not import `KeyAlgorithm` or the `ValueEnum` trait — hence the
+    // fully-qualified paths.
+    let parsed: Option<crate::jws::KeyAlgorithm> = cfg_run
+        .account_key_algorithm
+        .as_deref()
+        .map(|v| {
+            <crate::jws::KeyAlgorithm as clap::ValueEnum>::from_str(v, true).map_err(|_| {
                 anyhow::anyhow!(
                     "config: account_key_algorithm must be one of: es256, es384, es512, rsa2048, rsa4096, ed25519 (got {v:?})"
                 )
-            })?;
+            })
+        })
+        .transpose()?;
+    if let Some(v) = config_or_env_reset(
+        sub_matches.value_source("account_key_algorithm"),
+        parsed,
+        config_mode,
+        crate::jws::KeyAlgorithm::Es256,
+    ) {
+        args.account_key_algorithm = v;
     }
+
     if args.persist_policy.is_none() {
         args.persist_policy.clone_from(&cfg_run.persist_policy);
     }
@@ -570,6 +599,69 @@ eab_kid = "kid-from-config"
         assert_eq!(args.challenge_timeout, 111);
         assert!(args.pre_authorize);
         assert_eq!(args.eab_kid.as_deref(), Some("kid-from-config"));
+    }
+
+    // W5: `apply_config_merges_global_and_run_end_to_end` above never sets an
+    // env var, so it cannot exercise the env-reset path. A pure unit test of
+    // `config_or_env_reset` (see `h1_insecure_is_failclosed` below) is also
+    // not enough - it would pass whether or not
+    // `apply_run_boolean_flags`/`apply_run_account_and_persistence` actually
+    // route these two fields through the helper. This test builds real
+    // `ArgMatches` with both env vars set and neither field present in the
+    // config file, so in config mode both must reset to their secure
+    // built-in defaults rather than leaking the env value through.
+    #[test]
+    fn w5_config_mode_resets_env_sourced_generate_key_and_algorithm() {
+        use clap::{CommandFactory as _, Parser as _};
+
+        use super::apply_config;
+        use crate::cli::{Cli, Commands};
+        use crate::jws::KeyAlgorithm;
+
+        let toml = r#"
+[run]
+domains = ["a.example.com"]
+"#;
+        let config: crate::config::Config = toml::from_str(toml).expect("fixture parses");
+        let argv = ["acme-client-rs", "run", "--account-key", "/tmp/k.pem"];
+
+        temp_env::with_vars(
+            [
+                ("ACME_GENERATE_ACCOUNT_KEY_IF_MISSING", Some("true")),
+                ("ACME_ACCOUNT_KEY_ALGORITHM", Some("rsa4096")),
+            ],
+            || {
+                let matches = Cli::command()
+                    .try_get_matches_from(argv)
+                    .expect("argv parses");
+                let mut cli = Cli::try_parse_from(argv).expect("argv parses");
+
+                assert_eq!(
+                    matches
+                        .subcommand()
+                        .expect("run subcommand")
+                        .1
+                        .value_source("generate_account_key_if_missing"),
+                    Some(ValueSource::EnvVariable),
+                    "fixture invalid: expected the env var to be the source clap picked up"
+                );
+
+                apply_config(&mut cli, &matches, &config, true).expect("merge succeeds");
+
+                let Commands::Run(args) = &cli.command else {
+                    panic!("expected run command");
+                };
+                assert!(
+                    !args.generate_account_key_if_missing,
+                    "env-sourced true must reset to the secure default in config mode"
+                );
+                assert_eq!(
+                    args.account_key_algorithm,
+                    KeyAlgorithm::Es256,
+                    "env-sourced rsa4096 must reset to the default in config mode"
+                );
+            },
+        );
     }
 
     // H1: an env-sourced safety toggle with no config override must reset to
