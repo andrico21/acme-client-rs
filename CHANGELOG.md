@@ -10,6 +10,49 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-09-20
+
+### Changed
+
+- **CA-controlled text in ARI renewal-window validation errors is now
+  sanitized.** `RenewalInfo::validate_window`'s three interpolations (the
+  start/end timestamps and the inverted-window error) now route through
+  the same `sanitize::untrusted_inline` guard used everywhere else CA text
+  reaches an error or log message, instead of being the one sink in that
+  tier that did not. `tracing-subscriber`'s requirement floor is raised
+  to the exact locked `0.3.23`, and a new test drives a real subscriber to
+  confirm its message-field escaping actually behaves as assumed, rather
+  than trusting the dependency floor alone. Adversarial review found the
+  originally filed report on this incidental/incomplete rather than a
+  live gap - not a vulnerability fix, but real defense-in-depth.
+- **Config-mode env-var reset now also covers
+  `--generate-account-key-if-missing` and `--account-key-algorithm`.**
+  Previously, once a config file was loaded, `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING`
+  and `ACME_ACCOUNT_KEY_ALGORITHM` could still silently apply instead of
+  being reset to their defaults like every other non-secret env var in
+  config mode.
+  **Upgrade note (config-mode users only):**
+  - If you relied on `ACME_GENERATE_ACCOUNT_KEY_IF_MISSING=1` *together
+    with* `--config`/`ACME_CONFIG`, it no longer bootstraps the account
+    key; set `generate_account_key_if_missing = true` in the config file
+    (or drop `--config` for that invocation) instead.
+  - A config value of `account_key_algorithm` (or
+    `generate_account_key_if_missing`) of `false`/omitted is now
+    authoritative even when an env var says otherwise - previously only
+    an explicit `true` in the config file applied.
+  - An invalid `account_key_algorithm` in the config file is now a hard
+    error even when `--account-key-algorithm` is also passed on the CLI
+    (previously silently ignored in that combination).
+- **CI/release reproducibility.** The floating `rust:alpine` container tag
+  (release + CI musl legs) is pinned to `rust:1.98-alpine3.23`, matching
+  `Containerfile`'s existing pin. `dtolnay/rust-toolchain@master` and every
+  `actions/*`/`softprops/*` step across all workflows are pinned to commit
+  SHAs instead of mutable tags/branches. Release artifacts now ship
+  `SHA256SUMS` alongside the tarballs. Adversarial review rejected the
+  originally filed report here too (Docker Hub and GitHub's own runner
+  images are already-trusted infrastructure) - this is reproducibility
+  hardening for the release pipeline, not a vulnerability fix.
+
 ## [2.4.2] - 2026-09-20
 
 ### Security
@@ -286,7 +329,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...HEAD
+[2.4.3]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...2.4.3
 [2.4.2]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...2.4.2
 [2.4.1]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...2.4.1
 [2.4.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...2.4.0
