@@ -144,26 +144,26 @@ fn run_one(action: &CleanupAction, unsafe_hooks: bool) {
             txt_name,
             txt_value,
         } => {
-            // W8: every hook spawn must re-run check_hook_path immediately
-            // before exec (see handlers::hooks::revalidate_hook /
-            // run_with_timeout). This synchronous SIGINT-drain path is the
-            // fourth such site — do not add a fifth spawn without the guard.
-            if let Err(e) = crate::handlers::hooks::revalidate_hook(hook, unsafe_hooks) {
-                tracing::warn!(
-                    "DNS cleanup hook {} skipped for {}: {e}. The record {} was NOT removed \
-                     and must be deleted manually at your DNS provider.",
-                    hook.display(),
-                    domain.as_str(),
-                    txt_name.as_str(),
-                );
-                return;
-            }
-            let mut cmd = std::process::Command::new(hook);
+            // W9: every hook spawn is built via a constructor in
+            // handlers::hooks that revalidates and scrubs before returning a
+            // Command — raw Command::new(hook) cannot be written here.
+            let mut cmd = match crate::handlers::hooks::new_sync_hook_command(hook, unsafe_hooks) {
+                Ok(cmd) => cmd,
+                Err(e) => {
+                    tracing::warn!(
+                        "DNS cleanup hook {} skipped for {}: {e}. The record {} was NOT removed \
+                         and must be deleted manually at your DNS provider.",
+                        hook.display(),
+                        domain.as_str(),
+                        txt_name.as_str(),
+                    );
+                    return;
+                }
+            };
             cmd.env("ACME_DOMAIN", domain.as_str())
                 .env("ACME_TXT_NAME", txt_name.as_str())
                 .env("ACME_TXT_VALUE", txt_value)
                 .env("ACME_ACTION", "cleanup");
-            crate::handlers::hooks::scrub_secret_env(&mut cmd);
             run_hook_bounded(&mut cmd, defaults::hooks::HOOK_TIMEOUT);
         }
         CleanupAction::ServerTask(handle) => {

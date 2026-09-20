@@ -47,9 +47,8 @@ fn scrub_async(cmd: &mut tokio::process::Command) {
     cmd.kill_on_drop(true);
 }
 
-/// Strip ACME secret env vars from `cmd` in place. Used by [`crate::cleanup`]
-/// SIGINT path which executes hooks synchronously via [`std::process::Command`].
-pub(crate) fn scrub_secret_env(cmd: &mut std::process::Command) {
+/// Strip ACME secret env vars from `cmd` in place.
+fn scrub_secret_env(cmd: &mut std::process::Command) {
     for var in ACME_SECRET_ENV_VARS {
         cmd.env_remove(var);
     }
@@ -61,11 +60,7 @@ pub(crate) fn scrub_secret_env(cmd: &mut std::process::Command) {
 /// window where an unprivileged user swaps the hook script between preflight
 /// and spawn. The residual stat→exec race (documented in `hook_check.rs`) is
 /// unclosable without fexecve, which would require unsafe — forbidden.
-///
-/// `pub(crate)`: also called from [`crate::cleanup::run_one`], the
-/// synchronous SIGINT-drain spawn site, which cannot see this module's
-/// private items otherwise.
-pub(crate) fn revalidate_hook(script: &Path, unsafe_hooks: bool) -> Result<()> {
+fn revalidate_hook(script: &Path, unsafe_hooks: bool) -> Result<()> {
     match check_hook_path(script)? {
         HookCheck::Ok => Ok(()),
         HookCheck::Violations(vs) => {
@@ -90,16 +85,52 @@ pub(crate) fn revalidate_hook(script: &Path, unsafe_hooks: bool) -> Result<()> {
     }
 }
 
+// W9: `new_async_hook_command` and `new_sync_hook_command` below are the
+// only two places `{tokio::process, std::process}::Command::new` may appear
+// for a hook script. `revalidate_hook`/`scrub_secret_env`/`scrub_async` are
+// private to this module specifically so nothing outside it can call
+// revalidation and construction as two separable steps — which is exactly
+// how the fourth spawn site (the sync cleanup-drain path, fixed under W8)
+// came to skip revalidation in the first place. A future fifth call site
+// gets a Command from one of these two constructors or it doesn't compile.
+
+/// Build a validated, scrubbed `tokio::process::Command` for an async hook
+/// spawn. Fails before any process is created if `script` does not pass
+/// [`revalidate_hook`].
+fn new_async_hook_command(script: &Path, unsafe_hooks: bool) -> Result<tokio::process::Command> {
+    revalidate_hook(script, unsafe_hooks)?;
+    let mut cmd = tokio::process::Command::new(script);
+    scrub_async(&mut cmd);
+    Ok(cmd)
+}
+
+/// Build a validated, scrubbed `std::process::Command` for the synchronous
+/// SIGINT/error-recovery cleanup-drain spawn ([`crate::cleanup::run_one`]),
+/// which cannot use `tokio::process` because it runs outside the tokio
+/// runtime after Ctrl-C. Fails before any process is created if `script`
+/// does not pass [`revalidate_hook`].
+pub(crate) fn new_sync_hook_command(
+    script: &Path,
+    unsafe_hooks: bool,
+) -> Result<std::process::Command> {
+    revalidate_hook(script, unsafe_hooks)?;
+    let mut cmd = std::process::Command::new(script);
+    scrub_secret_env(&mut cmd);
+    Ok(cmd)
+}
+
 // NOT cancel-safe: drop between spawn and exit-status leaves an orphaned
 // child process. Callers must run to completion or kill the child.
 async fn run_with_timeout(
-    mut cmd: tokio::process::Command,
     script: &Path,
+    env_vars: &[(&str, &str)],
     label: &str,
     unsafe_hooks: bool,
 ) -> Result<std::process::ExitStatus> {
-    revalidate_hook(script, unsafe_hooks)?;
-    scrub_async(&mut cmd);
+    let mut cmd = new_async_hook_command(script, unsafe_hooks)?;
+    for &(key, val) in env_vars {
+        cmd.env(key, val);
+    }
     tokio::time::timeout(HOOK_TIMEOUT, cmd.status())
         .await
         .with_context(|| {
@@ -119,11 +150,7 @@ pub(crate) async fn run_hook(
     env_vars: &[(&str, &str)],
     unsafe_hooks: bool,
 ) -> Result<()> {
-    let mut cmd = tokio::process::Command::new(script);
-    for &(key, val) in env_vars {
-        cmd.env(key, val);
-    }
-    let status = run_with_timeout(cmd, script, "hook", unsafe_hooks).await?;
+    let status = run_with_timeout(script, env_vars, "hook", unsafe_hooks).await?;
     if !status.success() {
         anyhow::bail!("hook {} exited with {status}", script.display());
     }
@@ -145,12 +172,18 @@ pub(crate) async fn run_dns_hook_create(
     txt_value: &str,
     unsafe_hooks: bool,
 ) -> Result<()> {
-    let mut cmd = tokio::process::Command::new(hook);
-    cmd.env("ACME_DOMAIN", domain.as_str())
-        .env("ACME_TXT_NAME", txt_name.as_str())
-        .env("ACME_TXT_VALUE", txt_value)
-        .env("ACME_ACTION", "create");
-    let status = run_with_timeout(cmd, hook, "DNS hook", unsafe_hooks).await?;
+    let status = run_with_timeout(
+        hook,
+        &[
+            ("ACME_DOMAIN", domain.as_str()),
+            ("ACME_TXT_NAME", txt_name.as_str()),
+            ("ACME_TXT_VALUE", txt_value),
+            ("ACME_ACTION", "create"),
+        ],
+        "DNS hook",
+        unsafe_hooks,
+    )
+    .await?;
     if !status.success() {
         anyhow::bail!("DNS hook (create) exited with {status}");
     }
@@ -171,16 +204,17 @@ pub(crate) async fn run_dns_hook_cleanup_logged(
     txt_value: &str,
     unsafe_hooks: bool,
 ) {
-    if let Err(e) = revalidate_hook(hook, unsafe_hooks) {
-        tracing::warn!("DNS hook (cleanup) skipped: {e}");
-        return;
-    }
-    let mut cmd = tokio::process::Command::new(hook);
+    let mut cmd = match new_async_hook_command(hook, unsafe_hooks) {
+        Ok(cmd) => cmd,
+        Err(e) => {
+            tracing::warn!("DNS hook (cleanup) skipped: {e}");
+            return;
+        }
+    };
     cmd.env("ACME_DOMAIN", domain.as_str())
         .env("ACME_TXT_NAME", txt_name.as_str())
         .env("ACME_TXT_VALUE", txt_value)
         .env("ACME_ACTION", "cleanup");
-    scrub_async(&mut cmd);
     match tokio::time::timeout(HOOK_TIMEOUT, cmd.status()).await {
         Ok(Ok(s)) if !s.success() => tracing::warn!("DNS hook (cleanup) exited with {s}"),
         Ok(Err(e)) => tracing::warn!("DNS hook (cleanup) failed: {e}"),
@@ -203,15 +237,13 @@ pub(crate) async fn run_dns_hook_cleanup_silent(
     txt_value: &str,
     unsafe_hooks: bool,
 ) {
-    if revalidate_hook(hook, unsafe_hooks).is_err() {
+    let Ok(mut cmd) = new_async_hook_command(hook, unsafe_hooks) else {
         return;
-    }
-    let mut cmd = tokio::process::Command::new(hook);
+    };
     cmd.env("ACME_DOMAIN", domain.as_str())
         .env("ACME_TXT_NAME", txt_name.as_str())
         .env("ACME_TXT_VALUE", txt_value)
         .env("ACME_ACTION", "cleanup");
-    scrub_async(&mut cmd);
     let _ = tokio::time::timeout(HOOK_TIMEOUT, cmd.status()).await;
 }
 
