@@ -10,6 +10,27 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-09-20
+
+### Fixed
+
+- **The standalone HTTP-01 challenge server could answer a valid CA
+  validation probe with `404`.** It performed a single `read()` and
+  treated whatever arrived in it as the complete request, so when TCP
+  split the request line across segments the path match saw only a
+  prefix and failed. The server now reads until the request line is
+  complete (bounded by the same 5s deadline and 4096-byte buffer as
+  before), so a fragmented or slowly-delivered probe is served
+  correctly. Fails closed either way — the key authorization was never
+  served to a partial request — so this is a reliability fix, not a
+  security fix: the symptom was a silent, hard-to-diagnose failed
+  issuance or renewal.
+- **The HTTP-01 server could have its own response discarded when the
+  peer was still sending.** Closing a socket with unread bytes in the
+  receive buffer makes the kernel send `RST` instead of closing
+  cleanly, which can throw away an already-written response before the
+  peer reads it. A bounded drain now runs before close.
+
 ## [2.5.1] - 2026-09-20
 
 ### Fixed
@@ -378,7 +399,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.1...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.2...HEAD
+[2.5.2]: https://github.com/andrico21/acme-client-rs/compare/2.5.1...2.5.2
 [2.5.1]: https://github.com/andrico21/acme-client-rs/compare/2.5.0...2.5.1
 [2.5.0]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...2.5.0
 [2.4.3]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...2.4.3
