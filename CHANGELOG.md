@@ -10,6 +10,8 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-09-20
+
 ### Security
 
 - **Cleanup-drain DNS hook spawn now re-validates ownership/permissions
@@ -284,7 +286,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...HEAD
+[2.4.2]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...2.4.2
 [2.4.1]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...2.4.1
 [2.4.0]: https://github.com/andrico21/acme-client-rs/compare/2.3.4...2.4.0
 [2.3.4]: https://github.com/andrico21/acme-client-rs/compare/2.3.3...2.3.4
