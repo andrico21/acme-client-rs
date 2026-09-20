@@ -55,13 +55,17 @@ pub(crate) fn scrub_secret_env(cmd: &mut std::process::Command) {
     }
 }
 
-// W8: re-run the full hook_check::check_hook_path validation at the spawn
-// chokepoint, honoring --unsafe-hooks downgrade-to-warning semantics exactly
-// as preflight does. Closes the meaningful validation→execution TOCTOU
-// window where an unprivileged user swaps the hook script between preflight
-// and spawn. The residual stat→exec race (documented in hook_check.rs) is
-// unclosable without fexecve, which would require unsafe — forbidden.
-fn revalidate_hook(script: &Path, unsafe_hooks: bool) -> Result<()> {
+/// W8: re-run the full `hook_check::check_hook_path` validation at the spawn
+/// chokepoint, honoring --unsafe-hooks downgrade-to-warning semantics exactly
+/// as preflight does. Closes the meaningful validation→execution TOCTOU
+/// window where an unprivileged user swaps the hook script between preflight
+/// and spawn. The residual stat→exec race (documented in `hook_check.rs`) is
+/// unclosable without fexecve, which would require unsafe — forbidden.
+///
+/// `pub(crate)`: also called from [`crate::cleanup::run_one`], the
+/// synchronous SIGINT-drain spawn site, which cannot see this module's
+/// private items otherwise.
+pub(crate) fn revalidate_hook(script: &Path, unsafe_hooks: bool) -> Result<()> {
     match check_hook_path(script)? {
         HookCheck::Ok => Ok(()),
         HookCheck::Violations(vs) => {

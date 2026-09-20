@@ -226,7 +226,7 @@ mod tests {
         // A later SIGINT must not re-fire an action for a resource already
         // released: re-create the file and prove the drain leaves it alone.
         std::fs::write(&token_file, "unrelated")?;
-        registry.run_all_sync();
+        registry.run_all_sync(false);
         assert!(
             token_file.exists(),
             "completed action must be de-registered, but the drain removed the file"

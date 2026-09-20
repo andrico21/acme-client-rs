@@ -10,6 +10,25 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+### Security
+
+- **Cleanup-drain DNS hook spawn now re-validates ownership/permissions
+  immediately before exec, closing the last unguarded hook spawn site.**
+  `cleanup.rs`'s `CleanupAction::DnsRecord` arm — reached only from the
+  SIGINT drain and the top-level error-recovery path — previously spawned
+  the configured `--dns-hook` script without re-running the ownership/
+  permission check that every other hook spawn site already performs. An
+  attacker who could win a race to substitute an attacker-owned hook script
+  between registration and drain (a window bounded by `--challenge-timeout`,
+  default 300s, plus `--dns-wait`) could get that script executed, commonly
+  as the operator (often root). `CleanupRegistry::run_all_sync` now takes
+  the same `--unsafe-hooks` policy the rest of the codebase already threads
+  through, and revalidates the hook path immediately before spawning; on
+  violation, the cleanup is skipped with a warning naming the hook and the
+  DNS record that must be removed manually, rather than executing an
+  untrusted script as a privileged user. No behavior change for hooks that
+  keep their registered ownership/permissions throughout a run.
+
 ## [2.4.1] - 2026-09-18
 
 ### Security

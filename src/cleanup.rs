@@ -117,18 +117,23 @@ impl CleanupRegistry {
     /// Synchronously execute every registered action. Errors are swallowed —
     /// cleanup is best-effort by design (the original record may already be
     /// gone, the hook may exit non-zero, etc.).
-    pub(crate) fn run_all_sync(&self) {
+    ///
+    /// `unsafe_hooks` mirrors the CLI/config flag of the same name and is
+    /// threaded through rather than stored on [`CleanupAction`]: it is
+    /// process-global policy, not per-record state, and the drain runs
+    /// outside the tokio runtime after Ctrl-C.
+    pub(crate) fn run_all_sync(&self, unsafe_hooks: bool) {
         let actions = {
             let mut guard = self.lock_recover();
             std::mem::take(&mut guard.actions)
         };
         for (_, action) in actions {
-            run_one(&action);
+            run_one(&action, unsafe_hooks);
         }
     }
 }
 
-fn run_one(action: &CleanupAction) {
+fn run_one(action: &CleanupAction, unsafe_hooks: bool) {
     match action {
         CleanupAction::HttpChallengeFile(path) => {
             challenge::http01::cleanup_challenge_file(path);
@@ -139,6 +144,20 @@ fn run_one(action: &CleanupAction) {
             txt_name,
             txt_value,
         } => {
+            // W8: every hook spawn must re-run check_hook_path immediately
+            // before exec (see handlers::hooks::revalidate_hook /
+            // run_with_timeout). This synchronous SIGINT-drain path is the
+            // fourth such site — do not add a fifth spawn without the guard.
+            if let Err(e) = crate::handlers::hooks::revalidate_hook(hook, unsafe_hooks) {
+                tracing::warn!(
+                    "DNS cleanup hook {} skipped for {}: {e}. The record {} was NOT removed \
+                     and must be deleted manually at your DNS provider.",
+                    hook.display(),
+                    domain.as_str(),
+                    txt_name.as_str(),
+                );
+                return;
+            }
             let mut cmd = std::process::Command::new(hook);
             cmd.env("ACME_DOMAIN", domain.as_str())
                 .env("ACME_TXT_NAME", txt_name.as_str())
@@ -205,7 +224,7 @@ mod tests {
 
         let reg = CleanupRegistry::new();
         let _handle = reg.register(CleanupAction::HttpChallengeFile(path.clone()));
-        reg.run_all_sync();
+        reg.run_all_sync(false);
         assert!(!path.exists(), "challenge file should be cleaned");
         Ok(())
     }
@@ -234,13 +253,82 @@ mod tests {
             txt_name: DnsName::parse_record_name("_acme-challenge.example.com")?,
             txt_value: "abc123".into(),
         });
-        reg.run_all_sync();
+        reg.run_all_sync(false);
 
         let contents = std::fs::read_to_string(&log)?;
         assert_eq!(
             contents.trim(),
             "cleanup:example.com:_acme-challenge.example.com"
         );
+        Ok(())
+    }
+
+    // W1: hook passes preflight/registration-time validation (0o755), then an
+    // attacker chmod's it world-writable before the SIGINT/error-path drain
+    // runs run_one. Revalidation at the spawn chokepoint (hooks.rs:W8) must
+    // catch this and refuse to execute in default mode, leaving the DNS
+    // record in place rather than running an attacker-substitutable script.
+    #[cfg(unix)]
+    #[test]
+    fn run_one_refuses_hook_made_world_writable_after_registration() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir()?;
+        let log = tmp.path().join("hook.log");
+        let hook = tmp.path().join("hook.sh");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\necho ran >> {}\n", log.display()),
+        )?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+
+        let reg = CleanupRegistry::new();
+        let _handle = reg.register(CleanupAction::DnsRecord {
+            hook: hook.clone(),
+            domain: DnsName::parse("example.com")?,
+            txt_name: DnsName::parse_record_name("_acme-challenge.example.com")?,
+            txt_value: "abc123".into(),
+        });
+
+        // Registered while safe; attacker swaps permissions before the drain.
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o777))?;
+        reg.run_all_sync(false);
+
+        assert!(
+            !log.exists(),
+            "world-writable hook must be refused, not executed"
+        );
+        Ok(())
+    }
+
+    // W1 --unsafe-hooks downgrade: same swap, but unsafe_hooks=true must warn
+    // and still execute the hook, preserving the documented opt-out.
+    #[cfg(unix)]
+    #[test]
+    fn run_one_runs_world_writable_hook_under_unsafe_hooks() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir()?;
+        let log = tmp.path().join("hook.log");
+        let hook = tmp.path().join("hook.sh");
+        std::fs::write(
+            &hook,
+            format!("#!/bin/sh\necho ran >> {}\n", log.display()),
+        )?;
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))?;
+
+        let reg = CleanupRegistry::new();
+        let _handle = reg.register(CleanupAction::DnsRecord {
+            hook: hook.clone(),
+            domain: DnsName::parse("example.com")?,
+            txt_name: DnsName::parse_record_name("_acme-challenge.example.com")?,
+            txt_value: "abc123".into(),
+        });
+
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o777))?;
+        reg.run_all_sync(true);
+
+        assert!(log.exists(), "hook must still run under --unsafe-hooks");
         Ok(())
     }
 
@@ -251,9 +339,9 @@ mod tests {
         let path = tmp.path().join("token");
         std::fs::write(&path, "x")?;
         let _handle = reg.register(CleanupAction::HttpChallengeFile(path));
-        reg.run_all_sync();
+        reg.run_all_sync(false);
         // Second drain should be a no-op even though file no longer exists.
-        reg.run_all_sync();
+        reg.run_all_sync(false);
         Ok(())
     }
 
@@ -269,7 +357,7 @@ mod tests {
         let completed_handle = reg.register(CleanupAction::HttpChallengeFile(completed.clone()));
         let _pending_handle = reg.register(CleanupAction::HttpChallengeFile(pending.clone()));
         completed_handle.complete();
-        reg.run_all_sync();
+        reg.run_all_sync(false);
 
         assert!(
             completed.exists(),
@@ -294,7 +382,7 @@ mod tests {
         assert!(reg.inner.is_poisoned(), "mutex should be poisoned");
 
         let _handle = reg.register(CleanupAction::HttpChallengeFile(path.clone()));
-        reg.run_all_sync();
+        reg.run_all_sync(false);
         assert!(!path.exists(), "poisoned registry must still drain");
         Ok(())
     }

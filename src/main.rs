@@ -94,6 +94,13 @@ async fn main() {
 
     output::set_silent(cli.silent);
 
+    // Captured before `run` consumes `cli`, and after `apply_config` has
+    // merged `[global] unsafe_hooks` — capturing earlier would read the
+    // pre-merge value, so a config file setting `unsafe_hooks = true` would
+    // silently NOT apply to the cleanup-drain revalidation below. `bool` is
+    // `Copy`, so the `async move` SIGINT closure below captures its own copy.
+    let unsafe_hooks = cli.unsafe_hooks;
+
     let cleanup_registry = cleanup::CleanupRegistry::new();
     let sigint_registry = cleanup_registry.clone();
     tokio::spawn(async move {
@@ -108,7 +115,7 @@ async fn main() {
             } else {
                 error!("Interrupted — nothing to clean up, exiting.");
             }
-            sigint_registry.run_all_sync();
+            sigint_registry.run_all_sync(unsafe_hooks);
             std::process::exit(130);
         }
     });
@@ -137,7 +144,9 @@ async fn main() {
             // Drained on the blocking pool — it shells out to cleanup hooks and
             // would otherwise stall a runtime worker for the hook timeout.
             let drain = cleanup_registry.clone();
-            if let Err(join_err) = tokio::task::spawn_blocking(move || drain.run_all_sync()).await {
+            if let Err(join_err) =
+                tokio::task::spawn_blocking(move || drain.run_all_sync(unsafe_hooks)).await
+            {
                 error!("challenge cleanup did not run to completion: {join_err}");
             }
             std::process::exit(1);
