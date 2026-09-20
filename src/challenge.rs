@@ -178,6 +178,51 @@ pub(crate) mod http01 {
     )
     .as_bytes();
 
+    /// Read from `stream` until the request line is complete (terminated by
+    /// CRLF), the peer closes, or `buf` is full — whichever comes first.
+    /// Returns how many bytes were accumulated into `buf`.
+    ///
+    /// A single `read` is not sufficient. TCP may deliver the request line
+    /// split across segments, and treating the first segment as the whole
+    /// request answers a partial `GET /.well-kno` with a 404, failing an
+    /// otherwise-valid CA validation probe.
+    ///
+    /// Carries **no timeout of its own** — by design. The caller wraps this
+    /// entire call in one deadline; a per-read deadline here would let a peer
+    /// dribble a byte just inside each window and hold the connection, and
+    /// its accept-loop semaphore permit, indefinitely.
+    ///
+    /// Stops at the request line rather than end-of-headers: the request
+    /// line is the only thing matched, and waiting for the blank line would
+    /// stall on a peer that sends a bare request line and nothing further.
+    async fn read_request_line(
+        stream: &mut tokio::net::TcpStream,
+        buf: &mut [u8],
+    ) -> std::io::Result<usize> {
+        let mut filled = 0usize;
+        while filled < buf.len() {
+            let Some(dst) = buf.get_mut(filled..) else {
+                break;
+            };
+            let n = stream.read(dst).await?;
+            if n == 0 {
+                break;
+            }
+            // Rescan from one byte before the new data so a CRLF split
+            // across two reads is still found, without re-scanning the
+            // whole buffer on every iteration.
+            let scan_from = filled.saturating_sub(1);
+            filled = filled.saturating_add(n);
+            let Some(window) = buf.get(scan_from..filled) else {
+                break;
+            };
+            if window.windows(2).any(|pair| pair == b"\r\n") {
+                break;
+            }
+        }
+        Ok(filled)
+    }
+
     /// Serve a single accepted TCP connection: read one request, reply with
     /// the key-authorization body when the path matches, else 404. Errors
     /// are logged at debug level and swallowed — one malformed probe MUST
@@ -195,10 +240,16 @@ pub(crate) mod http01 {
     ) {
         use tokio::time::{Duration, timeout};
         let mut buf = vec![0u8; 4096];
-        // Slowloris guard: cap how long a single peer can hold the
-        // pre-request read open. CA validation probes complete in well under
-        // a second; legitimate traffic doesn't need more.
-        let n = match timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
+        // Slowloris guard: one deadline for the ENTIRE request-line read,
+        // never per-read (see read_request_line). CA validation probes
+        // complete in well under a second; legitimate traffic doesn't need
+        // more.
+        let n = match timeout(
+            Duration::from_secs(5),
+            read_request_line(&mut stream, &mut buf),
+        )
+        .await
+        {
             Ok(Ok(n)) => n,
             Ok(Err(e)) => {
                 tracing::debug!("HTTP-01: read from {addr} failed: {e}");
@@ -255,6 +306,28 @@ pub(crate) mod http01 {
             Err(_) => {
                 tracing::debug!("HTTP-01: write to {addr} timed out");
             }
+        }
+        // Lingering close. `shutdown` above only sent FIN on our write half;
+        // the response may still be unacknowledged and the peer may still be
+        // sending (headers after the request line, or a slow client that has
+        // not finished writing). Dropping the socket with unread bytes in the
+        // receive buffer makes the kernel send RST instead of a clean close,
+        // which can discard the response we just wrote before the peer ever
+        // reads it. Draining to EOF first avoids that. Bounded well below the
+        // read/write deadlines: this is politeness, not a path worth holding a
+        // semaphore permit for.
+        let drain = timeout(Duration::from_secs(1), async {
+            let mut sink = [0u8; 1024];
+            loop {
+                match stream.read(&mut sink).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
+            }
+        })
+        .await;
+        if drain.is_err() {
+            tracing::debug!("HTTP-01: drain of {addr} timed out; closing anyway");
         }
     }
 
@@ -518,6 +591,8 @@ pub(crate) mod tlsalpn01 {
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use std::time::Duration;
+
     #[test]
     fn dns01_record_name_strips_wildcard_prefix() -> anyhow::Result<()> {
         let wildcard = crate::types::DnsName::parse("*.example.com")?;
@@ -711,6 +786,273 @@ mod tests {
         assert!(
             !resp.contains("token.thumbprint"),
             "key auth leaked on 404: {resp}"
+        );
+        Ok(())
+    }
+
+    // ── W0 / issue #54: request-line framing ────────────────────────────
+    //
+    // `http01_roundtrip` above writes the whole request in one `write_all`,
+    // so on loopback it always lands in a single TCP segment and can never
+    // exercise a split read. These tests drive the request as distinct
+    // `write` calls, which is the only way to reach the framing path.
+
+    /// Drive `serve_one_connection` over loopback, writing `chunks` as
+    /// separate `write` calls so they arrive as distinct reads.
+    ///
+    /// Write errors propagate deliberately: answering (and shutting down)
+    /// before the peer finished sending is the exact defect these tests
+    /// guard, and it surfaces to the client as `BrokenPipe`.
+    async fn http01_chunked_roundtrip(chunks: &[&str], gap: Duration) -> anyhow::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::http01::serve_one_connection(
+                stream,
+                peer,
+                "token.thumbprint",
+                "/.well-known/acme-challenge/token",
+            )
+            .await;
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await?;
+        for chunk in chunks {
+            client.write_all(chunk.as_bytes()).await?;
+            client.flush().await?;
+            if !gap.is_zero() {
+                tokio::time::sleep(gap).await;
+            }
+        }
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).await?;
+        server.await?;
+        Ok(resp)
+    }
+
+    const VALID_REQUEST: &str = "GET /.well-known/acme-challenge/token HTTP/1.1\r\n\r\n";
+
+    // A request line split across two TCP segments must still be served.
+    // Before the framing fix this answered 404 — a single `read()` saw only
+    // `GET /.well-kno` and treated that prefix as the complete request,
+    // failing an otherwise-valid CA validation probe.
+    #[tokio::test]
+    async fn w0_serves_request_line_split_across_segments() -> anyhow::Result<()> {
+        let resp = http01_chunked_roundtrip(
+            &["GET /.well-kno", "wn/acme-challenge/token HTTP/1.1\r\n\r\n"],
+            Duration::from_millis(50),
+        )
+        .await?;
+        assert!(
+            resp.starts_with("HTTP/1.1 200 OK"),
+            "split request line must still be served, got: {resp}"
+        );
+        assert!(resp.ends_with("token.thumbprint"), "got: {resp}");
+        Ok(())
+    }
+
+    // The degenerate case of the above: one byte per segment. Before the fix
+    // the server answered 404 after the very first byte and called
+    // shutdown(), so the client's remaining writes hit a closed socket and
+    // failed with BrokenPipe.
+    #[tokio::test]
+    async fn w0_serves_byte_at_a_time_request() -> anyhow::Result<()> {
+        let chunks: Vec<String> = VALID_REQUEST.chars().map(|c| c.to_string()).collect();
+        let refs: Vec<&str> = chunks.iter().map(String::as_str).collect();
+        let resp = http01_chunked_roundtrip(&refs, Duration::from_millis(1)).await?;
+        assert!(
+            resp.starts_with("HTTP/1.1 200 OK"),
+            "byte-at-a-time request must still be served, got: {resp}"
+        );
+        assert!(resp.ends_with("token.thumbprint"), "got: {resp}");
+        Ok(())
+    }
+
+    // Non-regression: headers arriving in a later segment were always fine
+    // (the request line was already complete in segment one), and must stay
+    // fine — the fix must not start waiting for end-of-headers.
+    #[tokio::test]
+    async fn w0_still_serves_when_headers_arrive_late() -> anyhow::Result<()> {
+        let resp = http01_chunked_roundtrip(
+            &[
+                "GET /.well-known/acme-challenge/token HTTP/1.1\r\n",
+                "Host: example.com\r\n\r\n",
+            ],
+            Duration::from_millis(50),
+        )
+        .await?;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.ends_with("token.thumbprint"), "got: {resp}");
+        Ok(())
+    }
+
+    // Only the request line is matched, so a request terminated by a single
+    // CRLF with no trailing blank line must be answered promptly rather than
+    // stalling until the read deadline. This pins the stop-at-CRLF choice:
+    // waiting for end-of-headers (CRLFCRLF) would hang here for 5s.
+    #[tokio::test]
+    async fn w0_serves_bare_request_line_without_trailing_blank_line() -> anyhow::Result<()> {
+        let started = std::time::Instant::now();
+        let resp = http01_chunked_roundtrip(
+            &["GET /.well-known/acme-challenge/token HTTP/1.1\r\n"],
+            Duration::ZERO,
+        )
+        .await?;
+        let elapsed = started.elapsed();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "bare request line must not stall waiting for end-of-headers, took {elapsed:?}"
+        );
+        Ok(())
+    }
+
+    // An oversized request line must stay bounded by the fixed read buffer
+    // and fail closed, never allocating without limit and never serving the
+    // key authorization.
+    #[tokio::test]
+    async fn w0_rejects_oversized_request_line() -> anyhow::Result<()> {
+        let huge = "A".repeat(100_000);
+        let resp =
+            http01_chunked_roundtrip(&[&format!("GET /{huge} HTTP/1.1\r\n\r\n")], Duration::ZERO)
+                .await?;
+        assert!(resp.starts_with("HTTP/1.1 404 Not Found"), "got: {resp}");
+        assert!(
+            !resp.contains("token.thumbprint"),
+            "key auth leaked to an oversized request: {resp}"
+        );
+        Ok(())
+    }
+
+    // A peer that connects and immediately closes must be answered at once,
+    // not held until the read deadline.
+    #[tokio::test]
+    async fn w0_handles_immediate_eof_without_stalling() -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::http01::serve_one_connection(
+                stream,
+                peer,
+                "token.thumbprint",
+                "/.well-known/acme-challenge/token",
+            )
+            .await;
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await?;
+        client.shutdown().await?;
+        let started = std::time::Instant::now();
+        let mut resp = String::new();
+        client.read_to_string(&mut resp).await?;
+        let elapsed = started.elapsed();
+        server.await?;
+        assert!(
+            !resp.contains("token.thumbprint"),
+            "key auth leaked to a peer that sent nothing: {resp}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(4),
+            "immediate EOF must not wait for the read deadline, took {elapsed:?}"
+        );
+        Ok(())
+    }
+
+    // THE TRAP GUARD. Reading in a loop is only safe because one deadline
+    // wraps the whole loop. The peer here dribbles a byte every 2s without
+    // ever terminating the request line. Under the correct whole-loop
+    // deadline the server closes at ~5s. Were the deadline moved inside the
+    // loop (per-read), every dribbled byte would reset a fresh 5s window and
+    // the connection — plus its semaphore permit — would be held forever,
+    // which is precisely the slowloris this bound exists to prevent.
+    // Deliberately real-time: virtual time (`start_paused`) needs tokio's
+    // `test-util` feature and is unreliable mixed with real socket I/O.
+    #[tokio::test]
+    async fn w0_slowloris_is_bounded_by_the_read_deadline() -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("accept");
+            super::http01::serve_one_connection(
+                stream,
+                peer,
+                "token.thumbprint",
+                "/.well-known/acme-challenge/token",
+            )
+            .await;
+        });
+        let mut client = tokio::net::TcpStream::connect(addr).await?;
+        client.write_all(b"GET /.well-kno").await?;
+        client.flush().await?;
+
+        let (mut rx, mut tx) = client.into_split();
+        let dribbler = tokio::spawn(async move {
+            // Interval deliberately under the 5s deadline so a per-read
+            // timeout would keep resetting and never fire.
+            for _ in 0..10u8 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                if tx.write_all(b"w").await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        let mut resp = String::new();
+        let started = std::time::Instant::now();
+        let read =
+            tokio::time::timeout(Duration::from_secs(20), rx.read_to_string(&mut resp)).await;
+        let elapsed = started.elapsed();
+        dribbler.abort();
+
+        assert!(
+            read.is_ok(),
+            "server held a dribbling connection past 20s — the read deadline \
+             is not bounding the whole loop (moved inside it?)"
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "stalled connection released only after {elapsed:?}; the deadline \
+             should bound the entire request-line read"
+        );
+        assert!(
+            !resp.contains("token.thumbprint"),
+            "key auth served to an incomplete request: {resp}"
+        );
+        server.await?;
+        Ok(())
+    }
+
+    // Semaphore permits must be released after every connection, or the
+    // listener wedges once the cap is reached. Drives far more sequential
+    // connections than the 256-permit cap through the real accept loop.
+    #[tokio::test]
+    async fn w0_releases_permits_across_more_connections_than_the_cap() -> anyhow::Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let accept_loop = tokio::spawn(super::http01::run_accept_loop(
+            listener,
+            "token.thumbprint".to_owned(),
+            "/.well-known/acme-challenge/token".to_owned(),
+        ));
+
+        let mut served = 0u32;
+        for _ in 0..300 {
+            let mut client = tokio::net::TcpStream::connect(addr).await?;
+            client.write_all(VALID_REQUEST.as_bytes()).await?;
+            let mut resp = String::new();
+            client.read_to_string(&mut resp).await?;
+            if resp.contains("token.thumbprint") {
+                served = served.saturating_add(1);
+            }
+        }
+        accept_loop.abort();
+        assert_eq!(
+            served, 300,
+            "permits leaked: only {served}/300 connections past the 256 cap were served"
         );
         Ok(())
     }
