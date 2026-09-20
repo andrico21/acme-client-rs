@@ -10,6 +10,41 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-09-20
+
+### Security
+
+- **Hook-path validation now checks ancestor-directory ownership, and
+  walks both the configured (lexical) and symlink-resolved ancestor
+  chains.** This closes the residual W1 (2.4.2) left open: an attacker
+  who owned any ancestor directory of a configured hook script — not
+  only one with insecure permission bits — could still substitute the
+  script, whether directly or via a symlink/hardlink to some other,
+  already-trusted executable, since swap capability always requires
+  control of the entry's own lexical parent directory.
+  `revalidate_hook` (2.4.2) already refuses any *attacker-owned*
+  substituted content; this closes the substitution primitive itself,
+  matching the design intent from the original review. The remaining
+  residual is the unavoidable `stat`(2)→`execve`(2) race — the kernel
+  re-resolves the path a second time at spawn, and closing that window
+  needs exec-by-fd (`fexecve`/`execveat`), which cannot be expressed
+  without `unsafe`, forbidden crate-wide. Revalidating immediately
+  before every spawn (2.4.2) narrows this from the flow's full duration
+  to microseconds, the strongest mitigation available in safe Rust.
+
+### Changed
+
+- **BREAKING:** every directory above a hook script, up to `/`, must
+  now be owned by the effective user or root, in addition to the
+  existing not-group/world-writable check. A hook that lives under a
+  directory owned by a different account than the one running
+  `acme-client-rs` — even one with otherwise-correct permission bits —
+  now hard-fails by default. Standard single-user deployment layouts
+  are unaffected. Override with `--unsafe-hooks` /
+  `ACME_UNSAFE_HOOKS=1` / `[global] unsafe_hooks=true` if you cannot
+  immediately re-home or `chown` the hook's directory chain — but note
+  that flag does not add any protection of its own.
+
 ## [2.4.3] - 2026-09-20
 
 ### Changed
@@ -329,7 +364,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.0...HEAD
+[2.5.0]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...2.5.0
 [2.4.3]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...2.4.3
 [2.4.2]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...2.4.2
 [2.4.1]: https://github.com/andrico21/acme-client-rs/compare/2.4.0...2.4.1
