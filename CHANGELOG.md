@@ -10,6 +10,20 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-09-20
+
+### Fixed
+
+- **Windows build was broken in 2.5.0.** The new ancestor-ownership
+  types added for the hook-path check referenced the Unix-only `nix`
+  crate without a `#[cfg(unix)]` gate, so the Windows (MSVC) build
+  failed outright; the release pipeline's "Create Release" step never
+  ran, so no 2.5.0 GitHub Release was published. No functional change
+  on any platform where 2.5.0 actually built.
+- `cargo vet` was missing an exemption entry for the `temp-env`
+  dev-dependency (added in 2.4.3 for the config-mode env-reset test),
+  failing the CI supply-chain audit job.
+
 ## [2.5.0] - 2026-09-20
 
 ### Security
@@ -364,7 +378,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.0...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.1...HEAD
+[2.5.1]: https://github.com/andrico21/acme-client-rs/compare/2.5.0...2.5.1
 [2.5.0]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...2.5.0
 [2.4.3]: https://github.com/andrico21/acme-client-rs/compare/2.4.2...2.4.3
 [2.4.2]: https://github.com/andrico21/acme-client-rs/compare/2.4.1...2.4.2
