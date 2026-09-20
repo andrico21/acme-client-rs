@@ -1298,6 +1298,23 @@ PEBBLE_VA_ALWAYS_VALID=1 pebble -config ./test/config/pebble-config.json
 
 Global options can be placed before or after the subcommand.
 
+> **Hook security note:** `--unsafe-hooks` only downgrades *this tool's own*
+> violations to warnings — it does not add protection. The validation above
+> does not yet check that every directory *above* a hook script is owned by
+> the effective uid or root (only that those directories are not group/world-writable).
+> Until that lands, an attacker who owns an ancestor directory of a hook path
+> can still substitute the script between runs even in strict (non-`--unsafe-hooks`)
+> mode; `--unsafe-hooks` does **not** mitigate this. Operators should ensure
+> every directory in a hook's path — not just the script file itself — is
+> owned by the user running `acme-client-rs` or by root.
+>
+> **Unix-only:** hook ownership/permission validation (`--unsafe-hooks` and
+> the default strict checks alike) is not implemented on Windows; on the
+> `acme-client-rs-windows-x86_64-msvc.zip` artifact these checks are a no-op
+> (a one-time stderr advisory is emitted instead). Ensure hook scripts and
+> their containing directories are only writable by the account running the
+> binary.
+
 ### Subcommands
 
 | Command | Description |

@@ -29,6 +29,20 @@ are documented only in git history and GitHub releases.
   untrusted script as a privileged user. No behavior change for hooks that
   keep their registered ownership/permissions throughout a run.
 
+### Documentation
+
+- Noted a residual gap in the hook-path validation: directories *above* a
+  hook script are checked for group/world write access but not (yet)
+  cross-checked against the effective uid or root — an attacker who owns
+  an ancestor directory can still substitute the hook. `--unsafe-hooks`
+  does not mitigate this; operators should ensure every directory in a
+  hook's path is owned by the user running `acme-client-rs` or by root.
+  Tracked for a stricter (breaking) fix in a future minor release.
+- Documented that hook ownership/permission validation — including the
+  above revalidation — is a no-op on Windows; the shipped
+  `acme-client-rs-windows-x86_64-msvc.zip` build only ever emits a
+  one-time stderr advisory.
+
 ## [2.4.1] - 2026-09-18
 
 ### Security
