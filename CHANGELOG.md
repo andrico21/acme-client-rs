@@ -10,6 +10,30 @@ are documented only in git history and GitHub releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Refreshed dependencies via `cargo update`: 56 packages move, including five
+  direct pins — `clap` 4.6.6 → 4.6.7, `hickory-resolver` 0.26.1 → 0.26.3,
+  `rcgen` 0.14.9 → 0.14.10, `reqwest` 0.13.4 → 0.13.5, `toml` 1.1.4 → 1.1.6.
+  TLS- and HTTP-relevant moves: `aws-lc-rs` 1.18.0 → 1.18.1, `aws-lc-sys`
+  0.44.0 → 0.45.0, `hyper` 1.11.0 → 1.11.1, `hyper-rustls` 0.27.9 → 0.27.10,
+  `quinn-proto` 0.11.17 → 0.11.18, `rustls-platform-verifier` 0.7.0 → 0.7.1,
+  `tokio-rustls` 0.26.4 → 0.26.5. `base64` 0.22.1 and `pem` 3.0.6 leave the
+  graph — every consumer is now on 0.23.1 and 4.0.0 — `synstructure` 0.14.0
+  arrives with the `syn` 3 derive chain behind `yoke`/`zerofrom`, and
+  `tinyvec_macros` is dropped. No source changes; the new versions are covered
+  by the refreshed `cargo vet` exemption set (334 entries).
+- SemVer-incompatible upgrades to `ecdsa` 0.17, `ed25519-dalek` 3.0, `hmac`
+  0.13, `p256`/`p384`/`p521` 0.14, `rand_core` 0.10 and `sha2` 0.11 remain
+  deferred: `rsa` 0.9.10 still requires `digest` 0.10 / `sha2` 0.10, and the
+  JWS code feeds one `Sha256` type into both the `rsa` and `ecdsa` signing
+  paths, so a partial bump forks the graph into two incompatible `digest`
+  versions and fails to build. `crypto-common` 0.1.7 is held back for its own
+  reason: it pins `generic-array` to `=0.14.7`, so taking it drags the graph
+  backwards from 0.14.9. Both clear only once `rsa` 0.10 ships stable — as of
+  2026-09-25 the newest `rsa` release is `0.10.0-rc.18`, and pre-releases are
+  excluded.
+
 ## [2.5.2] - 2026-09-20
 
 ### Fixed
