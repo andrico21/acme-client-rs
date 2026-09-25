@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Tags are bare semver (e.g. `2.2.2`, no `v` prefix). Releases prior to 2.2.0
 are documented only in git history and GitHub releases.
 
-## [Unreleased]
+## [2.5.3] - 2026-09-25
 
 ### Changed
 
@@ -423,7 +423,8 @@ disk was never modified.
   (`webpki-root-certs`), removing the OpenSSL runtime dependency. CI
   license allowlist updated to include CDLA-Permissive-2.0.
 
-[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.2...HEAD
+[Unreleased]: https://github.com/andrico21/acme-client-rs/compare/2.5.3...HEAD
+[2.5.3]: https://github.com/andrico21/acme-client-rs/compare/2.5.2...2.5.3
 [2.5.2]: https://github.com/andrico21/acme-client-rs/compare/2.5.1...2.5.2
 [2.5.1]: https://github.com/andrico21/acme-client-rs/compare/2.5.0...2.5.1
 [2.5.0]: https://github.com/andrico21/acme-client-rs/compare/2.4.3...2.5.0
